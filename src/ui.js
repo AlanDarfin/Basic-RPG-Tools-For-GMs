@@ -3,6 +3,7 @@
 const { Modal, FuzzySuggestModal, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, copy, uid, validateCalendar } = require('./calendar');
 const { DEFAULT_COLOR } = require('./imports');
+const { MAX_SUNS, emptySky } = require('./sky');
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -123,17 +124,18 @@ class RPGModal extends Modal {
 }
 
 class CalendarEditor extends RPGModal {
-  constructor(plugin, cal, isNew = false) {
+  constructor(plugin, cal, isNew = false, start = 'geral') {
     super(plugin.app, isNew ? 'Criar calendário' : 'Editar calendário');
     this.plugin = plugin;
     this.draft = copy(cal);
     this.isNew = isNew;
-    this.tab = 'geral';
+    this.tab = start;
+    this.draft.sky ||= emptySky(new CalendarEngine(cal).yearStart(2));
   }
   onOpen() {
     const root = this.frame();
     const bar = el(root, 'div', 'brpg-toolbar');
-    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['estacoes', 'Estações'], ['eras', 'Eras']],
+    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['eras', 'Eras']],
       this.tab, (v) => { this.tab = v; this.section(); }, 'Seção do editor');
     this.form = el(root, 'div', 'brpg-form');
     this.section();
@@ -222,6 +224,35 @@ class CalendarEditor extends RPGModal {
         c.moons.push({ id: uid('lua'), name: 'Nova lua', period: 28, offset: 0, granularity: 8, rounding: 'round', hidden: false });
         this.section();
       }, { icon: 'plus' });
+    } else if (this.tab === 'sois') {
+      const root = this.group('Sóis e observação', 'O sol de referência passa no ponto mais alto ao meio-dia e precisa nascer todos os dias.');
+      const sky = c.sky;
+      const general = el(root, 'div', 'brpg-form-row');
+      inlineNumber(general, 'Latitude do observador (°)', sky.latitude, (v) => { sky.latitude = v; }, -89, 89, 'any');
+      inlineNumber(general, 'Período da órbita de raio 1 (dias)', sky.unitPeriod, (v) => { sky.unitPeriod = v; }, 1, MAX_YEAR, 'any');
+      if (sky.suns.length) fieldSelect(root, 'Sol de referência', sky.suns.map((x) => [x.id, x.name]), sky.referenceId,
+        (v) => { sky.referenceId = v; this.section(); });
+      else info(root, 'Nenhum sol. Adicione um para começar.');
+      sky.suns.forEach((sun, i) => {
+        const card = el(root, 'div', 'brpg-edit-card brpg-sun-edit');
+        const row = el(card, 'div', 'brpg-form-row');
+        input(row, 'Nome', sun.name, (v) => { sun.name = v; }, { maxLength: 60 });
+        input(row, 'Cor', sun.color, (v) => { sun.color = v; }, { type: 'color' });
+        const orbit = el(card, 'div', 'brpg-form-row');
+        inlineNumber(orbit, 'Semieixo relativo', sun.orbit, (v) => { sun.orbit = v; }, .04, 12, 'any');
+        inlineNumber(orbit, 'Inclinação (°)', sun.tilt, (v) => { sun.tilt = v; }, -89, 89, 'any');
+        inlineNumber(orbit, 'Fase inicial (°)', sun.phase, (v) => { sun.phase = v; }, -360, 360, 'any');
+        inlineNumber(orbit, 'Tamanho relativo', sun.size, (v) => { sun.size = v; }, .05, 4, 'any');
+        if (sun.id === sky.referenceId) info(card, 'Referência. Escolha outro sol antes de remover este.');
+        else button(card, 'Remover sol', () => { sky.suns.splice(i, 1); this.section(); }, { icon: 'trash-2' });
+        if (sky.suns.length === 1 && sun.id === sky.referenceId) {
+          button(card, 'Remover único sol', () => { sky.suns = []; sky.referenceId = null; this.section(); }, { icon: 'trash-2' });
+        }
+      });
+      button(root, 'Adicionar sol', () => {
+        const sun = { id: uid('sol'), name: `Sol ${sky.suns.length + 1}`, orbit: 1, tilt: 0, phase: 0, size: 1, color: '#f4ac63' };
+        sky.suns.push(sun); sky.referenceId ||= sun.id; this.section();
+      }, { icon: 'plus', disabled: sky.suns.length >= MAX_SUNS });
     } else if (this.tab === 'estacoes') {
       const root = this.group('Estações', 'Estações por data se repetem no ano. As de ciclo correm independentemente do calendário civil.');
       fieldSelect(root, 'Tipo', [['date', 'Começam em uma data'], ['periodic', 'Ciclo contínuo por duração']], c.seasonMode, (v) => {

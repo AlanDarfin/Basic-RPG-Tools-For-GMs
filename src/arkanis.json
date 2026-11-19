@@ -1,7 +1,7 @@
 {
   "id": "arkanis-preset",
   "name": "Arkanis",
-  "description": "26 meses, semanas de 12 dias, três luas e o relógio de Arkanis.",
+  "description": "26 meses, semanas de 12 dias, três sóis, três luas e o relógio de Arkanis.",
   "week": [
     "Synlurge",
     "Derlurge",
@@ -412,5 +412,39 @@
         "day": 4
       }
     }
-  ]
+  ],
+  "sky": {
+    "latitude": 48,
+    "unitPeriod": 1008,
+    "referenceId": "reart",
+    "suns": [
+      {
+        "id": "innart",
+        "name": "Innart",
+        "orbit": 0.36,
+        "tilt": 62,
+        "phase": 245,
+        "size": 0.42,
+        "color": "#f4ce87"
+      },
+      {
+        "id": "dinart",
+        "name": "Dinart",
+        "orbit": 0.65,
+        "tilt": 55,
+        "phase": 105,
+        "size": 0.72,
+        "color": "#f4a963"
+      },
+      {
+        "id": "reart",
+        "name": "Reart",
+        "orbit": 1,
+        "tilt": 19,
+        "phase": 0,
+        "size": 1,
+        "color": "#f08163"
+      }
+    ]
+  }
 }

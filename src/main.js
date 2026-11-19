@@ -3,6 +3,7 @@ const { Plugin, PluginSettingTab, Notice, TFile, normalizePath } = require('obsi
 const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = require('./calendar');
 const { decodeImport, encodeExport } = require('./imports');
 const { VIEW, CalendarView } = require('./view');
+const { ensureSky } = require('./sky');
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const arkanis = require('./arkanis.json');
 
@@ -12,31 +13,38 @@ class Settings extends PluginSettingTab {
     const root = this.containerEl, p = this.plugin;
     root.replaceChildren();
     const area = el(root, 'div', 'brpg brpg-settings');
-    el(area, 'h2', 'brpg-heading', 'Basic RPG');
-    info(area, 'Calendários e eventos deste cofre. O plugin não precisa do Basic, do Calendarium ou de uma conta.');
+    el(area, 'p', 'brpg-eyebrow', 'FERRAMENTAS DE CAMPANHA');
+    el(area, 'h2', 'brpg-heading', 'Calendários');
     const c = p.active();
-    const current = el(area, 'section', 'brpg-section');
+    const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
     select(current, p.state.calendars.map((x) => [x.id, x.name]), c.id, (v) => p.attempt(async () => {
       await p.setActive(v); this.display();
     }), 'Calendário ativo');
-    info(current, c.description || 'Sem descrição.');
+    const facts = el(current, 'div', 'brpg-metadata');
+    el(facts, 'span', 'brpg-chip', `${c.months.length} meses`);
+    el(facts, 'span', 'brpg-chip', `Semana de ${c.week.length} dias`);
+    el(facts, 'span', 'brpg-chip', `${c.sky.suns.length} sóis · ${c.moons.length} luas`);
     const row = el(current, 'div', 'brpg-toolbar');
-    button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days' });
-    button(row, 'Editar', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
-    button(row, 'Duplicar', () => p.attempt(async () => {
+    button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days', className: 'brpg-button mod-cta' });
+    button(row, 'Editar calendário', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
+    button(row, 'Configurar sóis', () => new CalendarEditor(p, c, false, 'sois').open(), { icon: 'sun' });
+    const advanced = el(current, 'details', 'brpg-disclosure');
+    el(advanced, 'summary', '', 'Gerenciar calendário');
+    const manage = el(advanced, 'div', 'brpg-toolbar');
+    button(manage, 'Duplicar', () => p.attempt(async () => {
       const draft = copy(c);
       draft.id = uid('cal'); draft.name = (draft.name.slice(0, 88) + ' (cópia)');
       await p.putCalendar(draft, true); this.display();
     }), { icon: 'copy' });
-    button(row, 'Remover calendário', () => new Confirm(p.app, `Remover o calendário “${c.name}” e seus eventos do Basic RPG?`,
+    button(manage, 'Remover calendário', () => new Confirm(p.app, `Remover o calendário “${c.name}” e seus eventos do Basic RPG?`,
       async () => { await p.removeCalendar(c.id); this.display(); }).open(),
       { icon: 'trash-2', disabled: p.state.calendars.length === 1 });
-    const importBox = el(area, 'section', 'brpg-section');
-    el(importBox, 'h3', '', 'Criar e importar');
+    const importBox = el(area, 'section', 'brpg-section brpg-settings-data');
+    el(importBox, 'h3', '', 'Biblioteca e backup');
     const buttons = el(importBox, 'div', 'brpg-toolbar');
-    button(buttons, 'Calendário em branco', () => p.newCalendar(), { icon: 'plus' });
-    button(buttons, 'Adicionar preset Arkanis', () => p.attempt(async () => {
+    button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
+    button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
       const preset = copy(arkanis); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
     }), { icon: 'sparkles' });
@@ -66,13 +74,11 @@ class Settings extends PluginSettingTab {
       }
     });
     info(importBox, 'Aceita um backup do Basic RPG ou um JSON do Fantasy Calendar. Regras não compatíveis são sinalizadas na importação.');
-    const exportBox = el(area, 'section', 'brpg-section');
-    el(exportBox, 'h3', '', 'Backup');
-    button(exportBox, 'Salvar JSON no cofre', () => p.attempt(async () => {
+    button(buttons, 'Salvar JSON no cofre', () => p.attempt(async () => {
       const path = await p.exportCalendar(c);
       new Notice(`Backup salvo em ${path}`);
     }), { icon: 'download' });
-    info(exportBox, 'Exporta o calendário ativo, incluindo os eventos. Não substitui arquivos já existentes.');
+
   }
 }
 
@@ -87,7 +93,9 @@ class BasicRPG extends Plugin {
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
-        saved.calendars.forEach(validateCalendar);
+        saved.calendars.forEach((c) => {
+          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); validateCalendar(c);
+        });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;
       }
@@ -101,6 +109,9 @@ class BasicRPG extends Plugin {
     this.addRibbonIcon('calendar-days', 'Basic RPG · Calendário', () => this.attempt(() => this.open(false)));
     this.addSettingTab(new Settings(this));
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
+    this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
+    }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
       const cal = this.active(); new EventEditor(this, cal, cal.current).open();
@@ -193,6 +204,7 @@ class BasicRPG extends Plugin {
     }
     if (main) this.mainCalendarLeaf = leaf;
     await workspace.revealLeaf(leaf);
+    return leaf.view;
   }
   async openNote(path) {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));

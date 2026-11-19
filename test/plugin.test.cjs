@@ -80,7 +80,7 @@ async function type(root, label, value) { const x = labelInput(root, label); x.v
 test('ciclo de vida abre calendário, navega sem mudar data, avança e grava', async () => {
   const { p, leaves } = mock();
   await p.onload();
-  assert.equal(p.commands.length, 6);
+  assert.equal(p.commands.length, 7);
   await p.open(false);
   const view = leaves[0].view, root = view.contentEl;
   assert.match(root.textContent, /1 de Arkanis, ano 1 · 00:00/);
@@ -155,4 +155,35 @@ test('exporta backup próprio sem sobrescrever outro arquivo', async () => {
   assert.equal(b, 'Basic-RPG-Arkanis-2.json');
   assert.equal(JSON.parse(m.files.get(a).body).calendar.events.length, 8);
   assert.equal(JSON.parse(m.files.get(b).body).format, 'basic-rpg/calendar');
+});
+
+test('céu distingue hora simulada da data do mundo e permite editar um sol', async () => {
+  const m=mock();
+  await m.p.onload(); await m.p.open(false);
+  const root=m.leaves[0].view.contentEl;
+  await pickButton(root, 'Céu').click();
+  assert.match(root.querySelector('.brpg-sky').textContent, /Innart.*Dinart.*Reart/);
+  await pickButton(root, 'Hora do mundo').click();
+  assert.equal(m.leaves[0].view.skyMinute,0);
+  const time=root.all((x)=>x.attributes['aria-label']==='Hora simulada (HH:MM)')[0];
+  time.value='16:63'; await time.emit('change');
+  assert.equal(m.leaves[0].view.skyMinute,16*64+63);
+  assert.equal(m.p.active().current.hour,0);
+  await pickButton(root, 'Configurar sóis').click();
+  const form=m.modal().contentEl;
+  await type(form, 'Latitude do observador (°)', '43');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.p.active().sky.latitude,43);
+  assert.equal(m.p.active().events.length,8);
+});
+test('a versão anterior atualiza Arkanis e mantém data e eventos já salvos', async () => {
+  const c=plain(require('../src/arkanis.json'));
+  delete c.sky;
+  c.current.day=13;
+  c.events[0].title='Evento preservado';
+  const {p}=mock({version:1,activeId:c.id,calendars:[c]});
+  await p.onload();
+  assert.equal(p.active().sky.suns.length,3);
+  assert.equal(p.active().current.day,13);
+  assert.equal(p.active().events[0].title,'Evento preservado');
 });

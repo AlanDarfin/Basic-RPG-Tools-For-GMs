@@ -1,5 +1,6 @@
 'use strict';
-const { assert, copy, validateCalendar } = require('./calendar');
+const { assert, copy, validateCalendar, CalendarEngine } = require('./calendar');
+const { ensureSky } = require('./sky');
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -78,6 +79,8 @@ function importFantasy(raw) {
     events,
   };
   if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
+  validateCalendar(cal);
+  ensureSky(cal, new CalendarEngine(cal).yearStart(2));
   return { calendar: validateCalendar(cal), warnings };
 }
 
@@ -85,7 +88,9 @@ function decodeImport(raw) {
   assert(raw && typeof raw === 'object', 'O arquivo JSON não é um objeto válido.');
   if (raw.format === NATIVE_FORMAT) {
     assert(raw.version === FORMAT_VERSION, 'Versão do backup não suportada.');
-    return { calendar: validateCalendar(copy(raw.calendar)), warnings: [] };
+    const calendar = validateCalendar(copy(raw.calendar));
+    ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
+    return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');

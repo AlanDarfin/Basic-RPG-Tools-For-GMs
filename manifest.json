@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.7.2",
-  "description": "Calendários de fantasia, eventos de campanha e cronologias para RPG.",
+  "description": "Calendários de fantasia, céu, eventos de campanha e cronologias para RPG.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false

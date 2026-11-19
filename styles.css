@@ -1,96 +1,190 @@
 .brpg {
-  --brpg-surface: var(--background-secondary);
-  --brpg-accent: var(--interactive-accent);
-  --brpg-border: var(--background-modifier-border);
-  --brpg-radius: 10px;
-  --brpg-muted: var(--text-muted);
-  container-type: inline-size;
-  container-name: brpg;
-  color: var(--text-normal);
+  --brpg-surface: var(--background-secondary, #292831);
+  --brpg-plain: var(--background-primary, #22212a);
+  --brpg-accent: var(--interactive-accent, #8466c4);
+  --brpg-border: var(--background-modifier-border, #454451);
+  --brpg-ink: var(--text-normal, #efedf6);
+  --brpg-muted: var(--text-muted, #bbb8ca);
+  --brpg-active: color-mix(in srgb, var(--brpg-accent) 13%, var(--brpg-surface));
+  --brpg-faint: color-mix(in srgb, var(--brpg-surface) 88%, var(--brpg-ink));
+  --brpg-radius: 9px;
+  container: brpg / inline-size;
+  color: var(--brpg-ink);
 }
 .brpg * { box-sizing: border-box; }
-.brpg-view { padding: 14px; overflow: auto; }
-.brpg-heading, .brpg-section-title, .brpg h3, .brpg h4 { overflow-wrap: anywhere; }
-.brpg .brpg-heading { font-size: 1.45em; line-height: 1.15; margin: 4px 0 8px; }
-.brpg .brpg-section-title { margin: 0; font-size: 1.06em; }
-.brpg .brpg-eyebrow { color: var(--brpg-muted); font-size: 0.65em; font-weight: 750; letter-spacing: .16em; }
-.brpg-header { padding: 12px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface); }
-.brpg-world-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 9px; }
-.brpg-world-label { font-size: 0.76em; color: var(--brpg-muted); }
-.brpg-world-date { font-weight: 640; }
-.brpg-toolbar, .brpg-tabs, .brpg-metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.brpg-toolbar > * { min-width: 0; max-width: 100%; }
-.brpg-toolbar select { flex: 1 1 6.4rem; width: auto; }
-.brpg-toolbar select:first-child { max-width: 100%; }
-.brpg-toolbar .brpg-input { min-height: 32px; }
-.brpg-toolbar .brpg-year { width: 4.7rem; flex: 0 1 4.7rem; }
-.brpg-toolbar button { flex: 0 1 auto; }
-.brpg .brpg-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 32px; min-height: 32px; height: auto; padding: 4px 8px; white-space: normal; }
+.brpg-view { padding: 10px 12px 16px; overflow: auto; }
+.brpg .brpg-heading, .brpg .brpg-section-title, .brpg h3, .brpg h4 { overflow-wrap: anywhere; }
+.brpg .brpg-heading { font-size: 1.4em; line-height: 1.12; margin: 2px 0; }
+.brpg .brpg-section-title { margin: 0; font-size: 1.04em; }
+.brpg .brpg-eyebrow { margin: 0; color: var(--brpg-muted); font-size: .67em; font-weight: 750; letter-spacing: .12em; }
+
+.brpg-header { padding: 9px 10px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface); }
+.brpg-header-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.brpg-identity { min-width: 0; flex: 1; }
+.brpg-identity .brpg-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brpg-world-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; align-items: center; }
+.brpg-world-readout { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.brpg-world-label { font-size: .71em; color: var(--brpg-muted); }
+.brpg-world-date { font-weight: 640; font-size: .89em; overflow-wrap: anywhere; }
+.brpg-toolbar, .brpg-tabs, .brpg-metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.brpg-toolbar > *, .brpg-navigation > * { min-width: 0; max-width: 100%; }
+.brpg-toolbar select { flex: 1 1 6rem; }
+.brpg .brpg-input, .brpg .brpg-button, .brpg .brpg-day {
+  min-width: 0; height: auto; border-radius: 7px; box-shadow: none;
+  border: 1px solid var(--brpg-border); color: var(--brpg-ink);
+}
+.brpg .brpg-input {
+  min-height: 34px; max-width: 100%; padding-block: 4px; font-size: .91em;
+  background-color: var(--brpg-surface);
+}
+.brpg .brpg-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 34px; padding: 4px 8px; white-space: normal; font-size: .89em;
+  background: var(--brpg-surface);
+}
+.brpg .brpg-button:not(:disabled):hover { background: var(--brpg-faint, var(--background-modifier-hover)); }
+.brpg .brpg-button.mod-cta {
+  background: var(--brpg-active, var(--brpg-surface));
+  border-color: var(--brpg-accent);
+  color: var(--brpg-ink); font-weight: 650;
+}
 .brpg .brpg-button[disabled] { opacity: .48; }
 .brpg .brpg-icon, .brpg .brpg-icon svg { width: 15px; height: 15px; flex: none; display: block; }
-.brpg-tabs { margin: 12px 0 7px; }
-.brpg-tabs button { flex: 1 1 6rem; box-shadow: none; border: 1px solid var(--brpg-border); }
-.brpg-tabs button[aria-pressed="true"] {
-  border-color: var(--brpg-accent);
-  background: var(--background-modifier-hover);
-  background: color-mix(in srgb, var(--brpg-accent) 16%, var(--background-primary));
+.brpg .brpg-button:has(> .brpg-icon:only-child) { width: 34px; padding-inline: 5px; }
+.brpg-tabs { margin: 8px 0 6px; flex-wrap: nowrap; }
+.brpg-tabs .brpg-button { flex: 1 1 0; min-height: 37px; }
+.brpg-tabs .brpg-button span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.brpg-tabs button[aria-pressed="true"] { border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface)); font-weight: 650; }
+.brpg-navigation { display: grid; gap: 4px; align-items: center; margin: 6px 0; }
+.brpg-nav-month { grid-template-columns: auto minmax(0, 1fr) minmax(2rem, 3.3rem) auto auto; }
+.brpg-nav-day { grid-template-columns: auto minmax(1.8rem, 2.35rem) minmax(0, 1fr) minmax(2rem, 3.3rem) auto auto; }
+.brpg-nav-year { grid-template-columns: auto minmax(2rem, 4rem) auto auto; justify-content: start; }
+.brpg-navigation .brpg-input { width: 100%; }
+.brpg-navigation input { text-align: center; padding-inline: 2px; appearance: textfield; }
+.brpg-navigation input::-webkit-inner-spin-button { appearance: none; }
+.brpg-calendar-tools { display: flex; flex-wrap: wrap; gap: 5px; align-items: flex-start; justify-content: space-between; margin: 6px 0 9px; }
+.brpg-disclosure { position: relative; min-width: 0; }
+.brpg-disclosure > .brpg-toolbar { margin-top: 5px; }
+.brpg .brpg-summary {
+  list-style: none; display: flex; align-items: center; gap: 5px; min-height: 34px;
+  padding: 4px 7px; font-size: .86em; font-weight: 600; color: var(--brpg-ink);
+  border: 1px solid var(--brpg-border); border-radius: 7px; cursor: pointer;
 }
-.brpg-navigation { margin: 7px 0; }
-.brpg-filters { margin-bottom: 13px; }
-.brpg-filters .mod-cta { margin-inline-start: auto; }
-.brpg-month > .brpg-section-title, .brpg-timeline > .brpg-section-title { margin-bottom: 8px; }
-.brpg-grid { display: grid; grid-template-columns: repeat(var(--brpg-week), minmax(0, 1fr)); gap: 4px; }
-.brpg-weekday { text-align: center; font-size: .68em; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--brpg-muted); padding: 3px 0; }
+.brpg .brpg-summary::-webkit-details-marker { display: none; }
+.brpg .brpg-summary::after { content: '▾'; margin-inline-start: auto; color: var(--brpg-muted); }
+.brpg-disclosure[open] > .brpg-summary::after { content: '▴'; }
+.brpg-world-menu { flex: none; width: max-content; max-width: 60%; z-index: 2; }
+.brpg-world-menu[open] > .brpg-toolbar, .brpg-view-filters[open] > .brpg-toolbar {
+  position: absolute; top: 100%; z-index: 3; width: min(250px, 79cqi);
+  padding: 8px; background: var(--brpg-surface); border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius);
+  box-shadow: 0 5px 14px var(--background-modifier-box-shadow, #0004);
+}
+.brpg-world-menu[open] > .brpg-toolbar { inset-inline-end: 0; }
+.brpg-view-filters[open] > .brpg-toolbar { inset-inline-start: 0; }
+.brpg-calendar-content { display: flex; flex-direction: column; gap: 9px; }
+.brpg-month, .brpg-selected { min-width: 0; }
+.brpg-selected {
+  order: -1; padding: 8px; background: var(--brpg-surface); border: 1px solid var(--brpg-border);
+  border-inline-start: 3px solid var(--brpg-accent); border-radius: var(--brpg-radius);
+}
+.brpg-day-heading { flex: 1; min-width: 5rem; }
+.brpg-selected .brpg-metadata { margin: 5px 0; }
+.brpg-day-events .brpg-summary { min-height: 30px; border: 0; padding-inline: 2px; overflow-wrap: anywhere; }
+.brpg-day-events .brpg-summary > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brpg-month > .brpg-section-title, .brpg-timeline > .brpg-section-title { margin-bottom: 6px; }
+.brpg-grid { display: grid; grid-template-columns: repeat(var(--brpg-week), minmax(0, 1fr)); gap: 3px; }
+.brpg-weekday { text-align: center; font-size: .69em; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--brpg-muted); padding: 2px 0; }
 .brpg .brpg-day {
-  min-width: 0; min-height: 41px; height: auto; padding: 3px; margin: 0;
-  display: flex; gap: 3px; flex-direction: column; align-items: center; justify-content: center;
-  border: 1px solid var(--brpg-border); box-shadow: none; background: var(--background-primary);
+  min-width: 0; min-height: 37px; padding: 2px; margin: 0;
+  display: flex; gap: 2px; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--brpg-surface); white-space: normal;
 }
-.brpg .brpg-day:hover { background: var(--background-modifier-hover); }
-.brpg .brpg-day.is-selected { border: 1px solid var(--brpg-accent); background: var(--background-modifier-hover); }
-.brpg .brpg-day.is-today .brpg-day-number { color: var(--text-accent); font-weight: 850; }
-.brpg .brpg-day:focus-visible, .brpg .brpg-button:focus-visible, .brpg .brpg-input:focus-visible { outline-offset: 1px; outline: 2px solid var(--brpg-accent); }
-.brpg-day-number { font-variant-numeric: tabular-nums; }
-.brpg-day-marks { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; font-size: .72em; min-width: 0; }
-.brpg-dot { width: .55rem; height: .55rem; border-radius: 100%; background: var(--brpg-event-color, var(--brpg-accent)); flex: none; }
+.brpg .brpg-day:hover { background: var(--brpg-faint, var(--background-modifier-hover)); }
+.brpg .brpg-day.is-selected { border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface)); }
+.brpg .brpg-day.is-today .brpg-day-number { color: var(--text-accent, var(--brpg-accent)); font-weight: 850; }
+.brpg .brpg-day:focus-visible, .brpg .brpg-button:focus-visible, .brpg .brpg-input:focus-visible, .brpg .brpg-summary:focus-visible { outline-offset: 1px; outline: 2px solid var(--brpg-accent); }
+.brpg-day-number { font-variant-numeric: tabular-nums; font-size: .93em; line-height: 1.1; }
+.brpg-grid-extra { font-size: .65em; color: var(--text-accent, var(--brpg-accent)); }
+.brpg-day-marks { display: flex; align-items: center; justify-content: end; gap: 2px; font-size: .65em; min-width: 0; flex-wrap: nowrap; }
+.brpg-dot { width: 6px; height: 6px; border-radius: 100%; background: var(--brpg-event-color, var(--brpg-accent)); flex: none; }
 .brpg-day-name, .brpg-day-event { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.brpg-day-name { font-size: .78em; }
-.brpg-day-event { font-size: .8em; color: var(--brpg-muted); }
+.brpg-day-name { font-size: .88em; }
+.brpg-day-event { font-size: .77em; color: var(--brpg-muted); }
 .brpg-outside { grid-column: 1 / -1; border-style: dashed !important; }
-.brpg-month-list { display: flex; flex-direction: column; gap: 4px; }
+.brpg-month-list { display: flex; flex-direction: column; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); overflow: hidden; }
 .brpg-layout-auto .brpg-month-list { display: none; }
 .brpg .brpg-list-day {
-  display: grid; grid-template-columns: 2.2rem minmax(4rem, .8fr) minmax(0, 1.2fr) auto;
-  align-items: center; text-align: start; padding-inline: 7px;
+  display: grid; grid-template-columns: 1.9rem minmax(0, 1fr) auto; width: 100%; min-height: 37px; gap: 6px;
+  align-items: center; text-align: start; padding: 4px 7px;
+  border: 0; border-radius: 0; border-bottom: 1px solid var(--brpg-border);
 }
-.brpg-list-day .brpg-day-marks { grid-column: 4; }
-.brpg-layout-grid .brpg-grid { overflow: auto; }
-.brpg-selected, .brpg-timeline { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--brpg-border); }
-.brpg-selected .brpg-section-title { flex: 1 1 10rem; }
-.brpg-metadata { margin: 7px 0 10px; }
-.brpg-chip { font-size: .75em; padding: 3px 6px; border-radius: 7px; background: var(--brpg-surface); color: var(--brpg-muted); overflow-wrap: anywhere; }
-.brpg-event { margin: 6px 0; padding: 8px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface); }
+.brpg .brpg-list-day:last-child { border-bottom: 0; }
+.brpg .brpg-list-day.is-selected { box-shadow: inset 3px 0 var(--brpg-accent); border-bottom-color: var(--brpg-border); }
+.brpg-list-info { display: flex; min-width: 0; gap: 5px 9px; align-items: baseline; }
+.brpg-list-day .brpg-day-marks { grid-column: 3; }
+.brpg-chip {
+  font-size: .77em; padding: 2px 5px; border-radius: 5px; color: var(--brpg-muted);
+  border: 1px solid var(--brpg-border); overflow-wrap: anywhere;
+}
+.brpg-event { margin: 5px 0; padding: 7px; border: 1px solid var(--brpg-border); border-radius: 7px; background: var(--brpg-plain); }
 .brpg-event-heading { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .brpg-event-heading h4 { margin: 0; }
-.brpg .brpg-hint { font-size: .86em; margin: 4px 0 8px; color: var(--brpg-muted); overflow-wrap: anywhere; }
-.brpg-event-description { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.brpg-modal-shell { width: min(740px, calc(100vw - 30px)); }
-.brpg-modal { max-height: 78vh; overflow: auto; padding-inline: 1px; }
-.brpg-modal > .brpg-toolbar { margin-bottom: 8px; }
-.brpg-section { margin: 9px 0; border-radius: var(--brpg-radius); padding: 9px; border: 1px solid var(--brpg-border); }
-.brpg-section h3 { margin: 0 0 7px; font-size: 1em; }
-.brpg-edit-card { margin: 0 0 7px; padding: 7px; border-radius: 7px; background: var(--brpg-surface); border: 1px solid var(--brpg-border); }
-.brpg-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr)); gap: 5px 8px; }
-.brpg-field { display: grid; gap: 3px; margin-bottom: 7px; min-width: 0; }
+.brpg .brpg-hint { font-size: .84em; margin: 3px 0 6px; color: var(--brpg-muted); overflow-wrap: anywhere; }
+.brpg-event-description { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.brpg-timeline { margin-top: 8px; }
+
+.brpg-sky { display: grid; gap: 8px; }
+.brpg-sky-header { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 6px; }
+.brpg-sky-controls { padding: 8px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface); }
+.brpg-sky-time > .brpg-toolbar { justify-content: space-between; }
+.brpg .brpg-time-input { width: 4.3rem; text-align: center; font-variant-numeric: tabular-nums; }
+.brpg-time-range { width: 100%; margin: 9px 0 0; accent-color: var(--brpg-accent); }
+.brpg-sky-axis { display: flex; justify-content: space-between; color: var(--brpg-muted); font-size: .74em; margin-bottom: 7px; font-variant-numeric: tabular-nums; }
+.brpg-sky-summary { display: grid; gap: 5px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9em), 1fr)); }
+.brpg-sky-fact { padding: 6px; border: 1px solid var(--brpg-border); border-radius: 7px; display: grid; align-content: start; gap: 2px; overflow-wrap: anywhere; }
+.brpg-sky-fact .brpg-label { color: var(--brpg-muted); font-size: .75em; }
+.brpg-sky-fact strong { font-size: .87em; }
+.brpg-solar-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 6px; }
+.brpg-solar-card { min-width: 0; padding: 8px; background: var(--brpg-surface); border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); }
+.brpg-solar-card.is-visible { border-inline-start: 3px solid var(--brpg-sun-color); }
+.brpg-sun-heading { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.brpg-sun-name { flex: 1; min-width: 0; }
+.brpg-sun-name h4 { margin: 0; font-size: 1em; }
+.brpg-sun-name .brpg-hint { margin: 1px 0 0; font-size: .77em; }
+.brpg-sun-icon { display: inline-grid; place-items: center; flex: none; width: 1.7rem; height: 1.7rem; color: var(--brpg-sun-color); }
+.brpg-sun-icon svg { width: calc(var(--brpg-sun-size) * 16px); height: calc(var(--brpg-sun-size) * 16px); }
+.brpg-sun-track { position: relative; height: 9px; margin: 8px 0 5px; border-radius: 9px; background: var(--brpg-plain); border: 1px solid var(--brpg-border); }
+.brpg-sun-window { position: absolute; left: var(--brpg-from); width: var(--brpg-duration); height: 100%; background: var(--brpg-sun-color); border-radius: 4px; opacity: .8; }
+.brpg-sun-marker { position: absolute; left: var(--brpg-now); height: 13px; width: 2px; top: -3px; background: var(--brpg-ink); box-shadow: 0 0 0 1px var(--brpg-plain); transform: translateX(-50%); }
+.brpg-sun-marks { display: flex; flex-wrap: wrap; gap: 3px 9px; font-size: .75em; color: var(--brpg-muted); margin-top: 6px; }
+.brpg-sky-moons .brpg-metadata { margin-top: 4px; }
+
+.brpg-modal-shell { width: min(740px, calc(100vw - 22px)); }
+.brpg-modal { max-height: min(77vh, 77dvh); overflow: auto; padding-inline: 1px; }
+.brpg-modal > .brpg-toolbar { margin: 7px 0; }
+.brpg-section { margin: 7px 0; border-radius: var(--brpg-radius); padding: 8px; border: 1px solid var(--brpg-border); }
+.brpg-section h3 { margin: 0 0 6px; font-size: 1em; }
+.brpg-edit-card { margin: 0 0 6px; padding: 7px; border-radius: 7px; background: var(--brpg-surface); border: 1px solid var(--brpg-border); }
+.brpg-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr)); gap: 4px 7px; }
+.brpg-field { display: grid; gap: 3px; margin-bottom: 6px; min-width: 0; }
 .brpg-label { font-size: .83em; font-weight: 600; overflow-wrap: anywhere; }
 .brpg .brpg-field input, .brpg .brpg-field textarea, .brpg .brpg-field select { max-width: 100%; width: 100%; min-width: 0; }
 .brpg .brpg-field input[type="color"] { width: 2.75rem; }
-.brpg .brpg-check { display: flex; gap: 7px; align-items: center; margin: 3px 0 7px; font-size: .86em; }
+.brpg .brpg-check { display: flex; gap: 7px; align-items: center; margin: 3px 0 6px; font-size: .86em; }
 .brpg .brpg-check input { flex-shrink: 0; }
-.brpg-detail { margin: 4px 0 7px; font-size: .91em; }
-.brpg-actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; margin-top: 12px; }
+.brpg-detail { margin: 3px 0 6px; font-size: .91em; }
+.brpg-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-top: 10px; }
 .brpg-error { flex: 1 1 100%; font-size: .85em; color: var(--text-error); margin: 0; overflow-wrap: anywhere; }
 .brpg-error:empty { display: none; }
+.brpg-settings-current > .brpg-input { width: 100%; }
+.brpg-settings-current .brpg-metadata { margin: 5px 0; }
+.brpg-settings-current > .brpg-disclosure { margin-top: 6px; }
+.brpg-settings-data .brpg-hint { margin-top: 7px; }
+
+@container brpg (min-width: 850px) {
+  .brpg-calendar-content { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); align-items: start; }
+  .brpg-selected { order: 0; position: sticky; top: 0; }
+}
 @container brpg (max-width: 620px) {
   .brpg-layout-auto.brpg-long-week .brpg-grid { display: none; }
   .brpg-layout-auto.brpg-long-week .brpg-month-list { display: flex; }
@@ -98,8 +192,16 @@
 @container brpg (max-width: 420px) {
   .brpg-layout-auto .brpg-grid { display: none; }
   .brpg-layout-auto .brpg-month-list { display: flex; }
-  .brpg .brpg-list-day { grid-template-columns: 1.65rem minmax(3.2rem, .9fr) minmax(0, 1fr) auto; }
-  .brpg-navigation .brpg-button, .brpg-filters .brpg-button { padding-inline: 6px; }
+  .brpg .brpg-button, .brpg .brpg-summary { padding-inline: 5px; }
+  .brpg .brpg-list-day { grid-template-columns: 1.35rem minmax(0, 1fr) auto; }
+  .brpg-list-info { flex-direction: column; align-items: start; gap: 1px; }
+  .brpg-long-week .brpg-grid { gap: 2px; }
+  .brpg-long-week .brpg-day { padding-inline: 1px; min-height: 32px; }
+  .brpg-long-week .brpg-day-number { font-size: clamp(9px, 3.2cqi, 13px); }
+  .brpg-long-week .brpg-dot { width: 4px; height: 4px; }
+  .brpg-long-week .brpg-day-marks { gap: 1px; }
 }
-.is-mobile .brpg-view, .brpg-view.is-mobile { padding-inline: 8px; }
-.is-mobile .brpg .brpg-button, .is-mobile .brpg .brpg-input { min-height: 40px; }
+.is-mobile .brpg-view, .brpg-view.is-mobile { padding-inline: 7px; }
+.is-mobile .brpg .brpg-button, .is-mobile .brpg .brpg-input, .is-mobile .brpg .brpg-summary { min-height: 38px; border-radius: 7px; }
+.is-mobile .brpg .brpg-day { border-radius: 6px; }
+.is-mobile .brpg .brpg-list-day { border-radius: 0; min-height: 38px; }

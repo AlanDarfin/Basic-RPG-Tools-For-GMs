@@ -8,6 +8,7 @@ const { Plugin, PluginSettingTab, Notice, TFile, normalizePath } = require('obsi
 const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = load("calendar.js");
 const { decodeImport, encodeExport } = load("imports.js");
 const { VIEW, CalendarView } = load("view.js");
+const { ensureSky } = load("sky.js");
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const arkanis = load("arkanis.json");
 
@@ -17,31 +18,38 @@ class Settings extends PluginSettingTab {
     const root = this.containerEl, p = this.plugin;
     root.replaceChildren();
     const area = el(root, 'div', 'brpg brpg-settings');
-    el(area, 'h2', 'brpg-heading', 'Basic RPG');
-    info(area, 'Calendários e eventos deste cofre. O plugin não precisa do Basic, do Calendarium ou de uma conta.');
+    el(area, 'p', 'brpg-eyebrow', 'FERRAMENTAS DE CAMPANHA');
+    el(area, 'h2', 'brpg-heading', 'Calendários');
     const c = p.active();
-    const current = el(area, 'section', 'brpg-section');
+    const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
     select(current, p.state.calendars.map((x) => [x.id, x.name]), c.id, (v) => p.attempt(async () => {
       await p.setActive(v); this.display();
     }), 'Calendário ativo');
-    info(current, c.description || 'Sem descrição.');
+    const facts = el(current, 'div', 'brpg-metadata');
+    el(facts, 'span', 'brpg-chip', `${c.months.length} meses`);
+    el(facts, 'span', 'brpg-chip', `Semana de ${c.week.length} dias`);
+    el(facts, 'span', 'brpg-chip', `${c.sky.suns.length} sóis · ${c.moons.length} luas`);
     const row = el(current, 'div', 'brpg-toolbar');
-    button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days' });
-    button(row, 'Editar', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
-    button(row, 'Duplicar', () => p.attempt(async () => {
+    button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days', className: 'brpg-button mod-cta' });
+    button(row, 'Editar calendário', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
+    button(row, 'Configurar sóis', () => new CalendarEditor(p, c, false, 'sois').open(), { icon: 'sun' });
+    const advanced = el(current, 'details', 'brpg-disclosure');
+    el(advanced, 'summary', '', 'Gerenciar calendário');
+    const manage = el(advanced, 'div', 'brpg-toolbar');
+    button(manage, 'Duplicar', () => p.attempt(async () => {
       const draft = copy(c);
       draft.id = uid('cal'); draft.name = (draft.name.slice(0, 88) + ' (cópia)');
       await p.putCalendar(draft, true); this.display();
     }), { icon: 'copy' });
-    button(row, 'Remover calendário', () => new Confirm(p.app, `Remover o calendário “${c.name}” e seus eventos do Basic RPG?`,
+    button(manage, 'Remover calendário', () => new Confirm(p.app, `Remover o calendário “${c.name}” e seus eventos do Basic RPG?`,
       async () => { await p.removeCalendar(c.id); this.display(); }).open(),
       { icon: 'trash-2', disabled: p.state.calendars.length === 1 });
-    const importBox = el(area, 'section', 'brpg-section');
-    el(importBox, 'h3', '', 'Criar e importar');
+    const importBox = el(area, 'section', 'brpg-section brpg-settings-data');
+    el(importBox, 'h3', '', 'Biblioteca e backup');
     const buttons = el(importBox, 'div', 'brpg-toolbar');
-    button(buttons, 'Calendário em branco', () => p.newCalendar(), { icon: 'plus' });
-    button(buttons, 'Adicionar preset Arkanis', () => p.attempt(async () => {
+    button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
+    button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
       const preset = copy(arkanis); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
     }), { icon: 'sparkles' });
@@ -71,13 +79,11 @@ class Settings extends PluginSettingTab {
       }
     });
     info(importBox, 'Aceita um backup do Basic RPG ou um JSON do Fantasy Calendar. Regras não compatíveis são sinalizadas na importação.');
-    const exportBox = el(area, 'section', 'brpg-section');
-    el(exportBox, 'h3', '', 'Backup');
-    button(exportBox, 'Salvar JSON no cofre', () => p.attempt(async () => {
+    button(buttons, 'Salvar JSON no cofre', () => p.attempt(async () => {
       const path = await p.exportCalendar(c);
       new Notice(`Backup salvo em ${path}`);
     }), { icon: 'download' });
-    info(exportBox, 'Exporta o calendário ativo, incluindo os eventos. Não substitui arquivos já existentes.');
+
   }
 }
 
@@ -92,7 +98,9 @@ class BasicRPG extends Plugin {
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
-        saved.calendars.forEach(validateCalendar);
+        saved.calendars.forEach((c) => {
+          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); validateCalendar(c);
+        });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;
       }
@@ -106,6 +114,9 @@ class BasicRPG extends Plugin {
     this.addRibbonIcon('calendar-days', 'Basic RPG · Calendário', () => this.attempt(() => this.open(false)));
     this.addSettingTab(new Settings(this));
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
+    this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
+    }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
       const cal = this.active(); new EventEditor(this, cal, cal.current).open();
@@ -198,6 +209,7 @@ class BasicRPG extends Plugin {
     }
     if (main) this.mainCalendarLeaf = leaf;
     await workspace.revealLeaf(leaf);
+    return leaf.view;
   }
   async openNote(path) {
     const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
@@ -218,6 +230,8 @@ module.exports = BasicRPG;
     },
     "calendar.js": function (module, exports, load, require) {
 'use strict';
+
+const { emptySky, validateSky } = load("sky.js");
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -258,7 +272,7 @@ function newCalendar(name = 'Meu mundo') {
     id: uid('cal'), name, description: '', week: [...DAYS], firstWeekday: 0, weekOverflow: true,
     months, leapDays: [], moons: [], seasons: [], seasonMode: 'date', seasonOffset: 0, eras: [],
     clock: { hours: 24, minutes: 60 }, current: { year: 1, month: months[0].id, day: 1, hour: 0, minute: 0 },
-    events: [],
+    events: [], sky: emptySky(months.reduce((n, item) => n + item.length, 0)),
   };
 }
 function countEvery(y, every, offset) {
@@ -488,6 +502,7 @@ function validateCalendar(c) {
   });
   unique(c.moons.map((m) => m.id), 'IDs lunares');
   const e = new CalendarEngine(c);
+  if (c.sky !== undefined) validateSky(c.sky);
   assert(c.seasonMode === 'date' || c.seasonMode === 'periodic', 'Tipo de estação inválido.');
   number(c.seasonOffset, -MAX_YEAR, MAX_YEAR, 'Deslocamento das estações');
   const seasons = array(c.seasons, 50, 'Estações');
@@ -530,9 +545,111 @@ function clockText(d) { return [d.hour, d.minute].map((n) => String(n).padStart(
 module.exports = { CalendarEngine, MAX_YEAR, DAYS, assert, copy, uid, fold, newCalendar, validateCalendar, sameDate, clockText };
 
     },
+    "sky.js": function (module, exports, load, require) {
+'use strict';
+
+// Same circular-orbit model and constants as the Arkanis Discord project.
+const TAU = Math.PI * 2;
+const RAD = Math.PI / 180;
+const MAX_SUNS = 8;
+const mod = (n, t) => ((n % t) + t) % t;
+const clamp = (n) => Math.max(-1, Math.min(1, n));
+
+function defaultArkanisSky() {
+  return {
+    latitude: 48, unitPeriod: 1008, referenceId: 'reart',
+    suns: [
+      { id: 'innart', name: 'Innart', orbit: .36, tilt: 62, phase: 245, size: .42, color: '#f4ce87' },
+      { id: 'dinart', name: 'Dinart', orbit: .65, tilt: 55, phase: 105, size: .72, color: '#f4a963' },
+      { id: 'reart', name: 'Reart', orbit: 1, tilt: 19, phase: 0, size: 1, color: '#f08163' },
+    ],
+  };
+}
+function emptySky(year = 360) { return { latitude: 0, unitPeriod: year, referenceId: null, suns: [] }; }
+function looksLikeArkanis(c) {
+  return c.id === 'arkanis-preset' || (c.week?.length === 12 &&
+    c.months?.length === 26 && c.months[0]?.name === 'Arkanis' && c.months[18]?.name === 'Skaryel');
+}
+function ensureSky(c, year) {
+  if (c.sky === undefined) c.sky = looksLikeArkanis(c) ? defaultArkanisSky() : emptySky(year);
+  return c;
+}
+function bound(n, lo, hi, label) {
+  if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(`${label}: use um número de ${lo} a ${hi}.`);
+}
+function validateSky(sky) {
+  if (!sky || !Array.isArray(sky.suns) || sky.suns.length > MAX_SUNS) throw new Error('Configure de zero a oito sóis.');
+  bound(sky.latitude, -89, 89, 'Latitude');
+  bound(sky.unitPeriod, 1, 100000, 'Período de referência do sistema');
+  const ids = new Set(), names = new Set();
+  for (const sun of sky.suns) {
+    if (!sun || typeof sun.id !== 'string' || !sun.id.trim() || ids.has(sun.id)) throw new Error('Os sóis precisam de IDs diferentes.');
+    ids.add(sun.id);
+    if (typeof sun.name !== 'string' || !sun.name.trim() || sun.name.length > 60) throw new Error('Cada sol precisa de um nome de até 60 caracteres.');
+    const n = sun.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').trim().toLowerCase();
+    if (names.has(n)) throw new Error('Os sóis precisam de nomes diferentes.');
+    names.add(n);
+    if (typeof sun.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(sun.color)) throw new Error('Cor do sol inválida.');
+    bound(sun.orbit, .04, 12, 'Semieixo relativo');
+    bound(sun.tilt, -89, 89, 'Inclinação orbital');
+    bound(sun.phase, -360, 360, 'Fase inicial');
+    bound(sun.size, .05, 4, 'Tamanho relativo');
+  }
+  const reference = sky.suns.find((s) => s.id === sky.referenceId);
+  if (sky.suns.length) {
+    if (!reference) throw new Error('Escolha um sol de referência.');
+    if (Math.abs(sky.latitude) + Math.abs(reference.tilt) > 89) throw new Error('Latitude absoluta + inclinação absoluta do sol de referência não podem passar de 89°. Assim ele nasce todos os dias.');
+  } else if (sky.referenceId !== null) throw new Error('Sóis ausentes não podem servir de referência.');
+  return sky;
+}
+function period(sky, sun) { return sky.unitPeriod * sun.orbit ** 1.5; }
+function equatorial(sky, sun, epoch) {
+  const p = period(sky, sun);
+  const lon = TAU * (mod(epoch, p) / p) + sun.phase * RAD;
+  const tilt = sun.tilt * RAD;
+  return { ra: Math.atan2(Math.sin(lon) * Math.cos(tilt), Math.cos(lon)), dec: Math.asin(clamp(Math.sin(lon) * Math.sin(tilt))), period: p };
+}
+function solarPositions(sky, epoch, clock, now) {
+  if (!sky?.suns.length) return [];
+  const total = clock.hours * clock.minutes;
+  now = mod(now, total);
+  const lat = sky.latitude * RAD;
+  const reference = sky.suns.find((s) => s.id === sky.referenceId);
+  const referenceRA = equatorial(sky, reference, epoch).ra;
+  return sky.suns.map((sun) => {
+    const eq = equatorial(sky, sun, epoch);
+    const base = Math.sin(lat) * Math.sin(eq.dec), amplitude = Math.cos(lat) * Math.cos(eq.dec);
+    const transit = mod(total / 2 + (eq.ra - referenceRA) * total / TAU, total);
+    const angle = mod(TAU * (now - transit) / total + Math.PI, TAU) - Math.PI;
+    const altitude = Math.asin(clamp(base + amplitude * Math.cos(angle))) / RAD;
+    const horizon = base + amplitude <= 0 ? 'never' : base - amplitude >= 0 ? 'always' : 'normal';
+    const visibleNow = horizon === 'always' || (horizon === 'normal' && altitude >= 0);
+    let from = null, to = null, intervals = [];
+    if (horizon === 'always') intervals = [[0, total]];
+    if (horizon === 'normal') {
+      const half = Math.acos(clamp(-base / amplitude)) * total / TAU;
+      from = mod(transit - half, total); to = mod(transit + half, total);
+      intervals = from <= to ? [[from, to]] : [[0, to], [from, total]];
+    }
+    const label = horizon === 'never' ? 'Não nasce neste dia' : horizon === 'always' ? 'Acima do horizonte o dia todo' :
+      !visibleNow ? 'Abaixo do horizonte' : Math.abs(angle) < TAU / 40 ? 'No ponto mais alto' : angle < 0 ? 'Subindo' : 'Descendo';
+    return { ...sun, period: eq.period, altitude, transit, horizon, from, to, intervals, visibleToday: horizon !== 'never', visibleNow, label,
+      reference: sun.id === sky.referenceId };
+  });
+}
+function formatTime(value, clock, allowEnd = false) {
+  const rounded = Math.round(value), total = clock.hours * clock.minutes;
+  const minutes = allowEnd && rounded === total ? total : mod(rounded, total);
+  return [Math.floor(minutes / clock.minutes), minutes % clock.minutes].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
+module.exports = { MAX_SUNS, defaultArkanisSky, emptySky, ensureSky, validateSky, period, solarPositions, formatTime };
+
+    },
     "imports.js": function (module, exports, load, require) {
 'use strict';
-const { assert, copy, validateCalendar } = load("calendar.js");
+const { assert, copy, validateCalendar, CalendarEngine } = load("calendar.js");
+const { ensureSky } = load("sky.js");
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -611,6 +728,8 @@ function importFantasy(raw) {
     events,
   };
   if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
+  validateCalendar(cal);
+  ensureSky(cal, new CalendarEngine(cal).yearStart(2));
   return { calendar: validateCalendar(cal), warnings };
 }
 
@@ -618,7 +737,9 @@ function decodeImport(raw) {
   assert(raw && typeof raw === 'object', 'O arquivo JSON não é um objeto válido.');
   if (raw.format === NATIVE_FORMAT) {
     assert(raw.version === FORMAT_VERSION, 'Versão do backup não suportada.');
-    return { calendar: validateCalendar(copy(raw.calendar)), warnings: [] };
+    const calendar = validateCalendar(copy(raw.calendar));
+    ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
+    return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
@@ -629,11 +750,33 @@ module.exports = { decodeImport, encodeExport, importFantasy, parseInterval, DEF
     },
     "view.js": function (module, exports, load, require) {
 'use strict';
-const { ItemView } = require('obsidian');
+const { ItemView, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, sameDate, clockText } = load("calendar.js");
-const { el, button, select, info, replaceEl, inlineNumber, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
+const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
+const { solarPositions, formatTime } = load("sky.js");
 
 const VIEW = 'basic-rpg-calendar';
+const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
+function shortWeek(week) {
+  return week.map((name, i) => {
+    const opts = [];
+    for (let n = 2; n <= 5; n++) opts.push(name.slice(0, n));
+    return opts.find((abbr) => week.every((x, j) => j === i || x.slice(0, abbr.length).toLowerCase() !== abbr.toLowerCase())) || name.slice(0, 4);
+  });
+}
+function summary(root, label, icon) {
+  const line = el(root, 'summary', 'brpg-summary');
+  setIcon(el(line, 'span', 'brpg-icon'), icon);
+  el(line, 'span', '', label);
+  return line;
+}
+function validNumber(field, lo, hi, prior) {
+  const n = Number(field.value);
+  if (field.value !== '' && Number.isInteger(n) && n >= lo && n <= hi) return n;
+  field.value = prior;
+  return prior;
+}
+
 class CalendarView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -644,6 +787,8 @@ class CalendarView extends ItemView {
     this.category = '';
     this.showHidden = false;
     this.layout = 'auto';
+    this.detailOpen = false;
+    this.skyMinute = null;
   }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Basic RPG · Calendário'; }
@@ -655,6 +800,8 @@ class CalendarView extends ItemView {
       this.selected = { ...c.current };
       this.category = '';
       this.showHidden = false;
+      this.detailOpen = false;
+      this.skyMinute = null;
     } else {
       try { e.check(this.selected); } catch { this.selected = { ...c.current }; }
       if (this.savedToday && sameDate(this.selected, this.savedToday) && !sameDate(c.current, this.savedToday)) this.selected = { ...c.current };
@@ -674,79 +821,210 @@ class CalendarView extends ItemView {
     root.classList.add('brpg', 'brpg-view');
     replaceEl(root);
     const header = el(root, 'header', 'brpg-header');
-    const eyebrow = el(header, 'div', 'brpg-eyebrow', 'BASIC RPG');
-    eyebrow.setAttribute('aria-hidden', 'true');
-    el(header, 'h2', 'brpg-heading', c.name);
-    const world = el(header, 'div', 'brpg-world-status');
-    el(world, 'span', 'brpg-world-label', 'No mundo');
-    el(world, 'span', 'brpg-world-date', `${e.format(c.current)} · ${clockText(c.current)}`);
-    const actions = el(header, 'div', 'brpg-toolbar');
+    const headerTop = el(header, 'div', 'brpg-header-top');
+    const identity = el(headerTop, 'div', 'brpg-identity');
+    el(identity, 'div', 'brpg-eyebrow', 'BASIC RPG');
+    el(identity, 'h2', 'brpg-heading', c.name);
+    const options = el(headerTop, 'details', 'brpg-disclosure brpg-world-menu');
+    summary(options, 'Calendários', 'layers');
+    const actions = el(options, 'div', 'brpg-toolbar');
     select(actions, this.plugin.state.calendars.map((item) => [item.id, item.name]), c.id,
       (v) => this.plugin.attempt(() => this.plugin.setActive(v)), 'Calendário ativo');
     button(actions, 'Editar calendário', () => new CalendarEditor(this.plugin, c).open(), { icon: 'settings', iconOnly: true });
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
-    button(actions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: e.epoch(c.current) === 0 });
-    button(actions, 'Avançar um dia no mundo', this.run(() => this.plugin.advance(1)), { icon: 'skip-forward', iconOnly: true,
+    const world = el(header, 'div', 'brpg-world-status');
+    const readout = el(world, 'div', 'brpg-world-readout');
+    el(readout, 'span', 'brpg-world-label', 'Data do mundo');
+    el(readout, 'span', 'brpg-world-date', `${e.format(c.current)} · ${clockText(c.current)}`);
+    const worldActions = el(world, 'div', 'brpg-toolbar');
+    button(worldActions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: e.epoch(c.current) === 0 });
+    button(worldActions, 'Avançar um dia no mundo', this.run(() => this.plugin.advance(1)), { icon: 'skip-forward', iconOnly: true,
       disabled: e.epoch(c.current) + 1 === e.yearStart(MAX_YEAR + 1) });
 
     const tabs = el(root, 'nav', 'brpg-tabs');
     tabs.setAttribute('aria-label', 'Visualização');
-    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered']]) {
+    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun']]) {
       const b = button(tabs, title, () => { this.mode = key; this.render(); }, { icon });
       b.setAttribute('aria-pressed', String(this.mode === key));
     }
-    const nav = el(root, 'div', 'brpg-toolbar brpg-navigation');
+
+    const nav = el(root, 'div', 'brpg-navigation');
+    const monthMode = this.mode === 'month', skyMode = this.mode === 'sky';
+    nav.classList.add(skyMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
     const ordinal = (this.selected.year - 1) * c.months.length + e.monthIndex(this.selected.month);
-    const monthMode = this.mode === 'month';
+    const epoch = e.epoch(this.selected);
     const navigate = (dir) => () => {
-      if (monthMode) { this.choose(e.monthShift(this.selected, dir)); return; }
+      this.detailOpen = false;
+      if (monthMode) return this.choose(e.monthShift(this.selected, dir));
+      if (skyMode) return this.choose(e.shift(this.selected, dir));
       const year = this.selected.year + dir;
       this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     };
-    button(nav, monthMode ? 'Mês anterior' : 'Ano anterior', navigate(-1),
-      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : this.selected.year === 1 });
-    if (monthMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
-      (month) => this.choose({ year: this.selected.year, month, day: 1 }), 'Mês em exibição');
+    button(nav, monthMode ? 'Mês anterior' : skyMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
+      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : skyMode ? epoch === 0 : this.selected.year === 1 });
+    if (skyMode) {
+      const d = el(nav, 'input', 'brpg-input brpg-day-input');
+      d.type = 'number'; d.min = '1'; d.max = e.monthLength(this.selected.year, this.selected.month);
+      d.value = this.selected.day; d.setAttribute('aria-label', 'Dia em exibição');
+      d.addEventListener('change', () => this.choose({ ...this.selected, day: validNumber(d, 1, Number(d.max), this.selected.day) }));
+    }
+    if (monthMode || skyMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
+      (month) => { this.detailOpen = false; this.choose({ year: this.selected.year, month, day: 1 }); }, 'Mês em exibição');
     const y = el(nav, 'input', 'brpg-input brpg-year'); y.type = 'number'; y.min = '1'; y.max = String(MAX_YEAR);
     y.value = this.selected.year; y.setAttribute('aria-label', 'Ano em exibição');
     y.addEventListener('change', () => {
-      const year = Number(y.value);
-      if (Number.isInteger(year) && year >= 1 && year <= MAX_YEAR) {
-        this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
-      } else y.value = this.selected.year;
+      const year = validNumber(y, 1, MAX_YEAR, this.selected.year);
+      this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     });
-    button(nav, monthMode ? 'Próximo mês' : 'Próximo ano', navigate(1),
-      { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length : this.selected.year === MAX_YEAR });
-    button(nav, 'Hoje', () => this.choose({ ...c.current }), { icon: 'locate-fixed' });
-    if (monthMode) select(nav, [['auto', 'Automático'], ['grid', 'Grade'], ['list', 'Lista']], this.layout,
+    button(nav, monthMode ? 'Próximo mês' : skyMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
+      { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length :
+        skyMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
+    button(nav, 'Hoje', () => this.choose({ ...c.current }), { icon: 'locate-fixed', iconOnly: true });
+
+    if (skyMode) { this.renderSky(root, c, e); return; }
+    const tools = el(root, 'div', 'brpg-calendar-tools');
+    const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
+    let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
+    if (this.category || this.showHidden) filterLabel += ' · ativos';
+    summary(toolOptions, filterLabel, 'sliders-horizontal');
+    const filters = el(toolOptions, 'div', 'brpg-toolbar');
+    if (monthMode) select(filters, [['auto', 'Automático'], ['grid', 'Grade'], ['list', 'Lista']], this.layout,
       (value) => { this.layout = value; this.render(); }, 'Formato do mês');
-    const filters = el(root, 'div', 'brpg-toolbar brpg-filters');
     const cats = [...new Set(c.events.map((x) => x.category).filter(Boolean))].sort();
     if (!cats.includes(this.category)) this.category = '';
     if (cats.length) select(filters, [['', 'Todas as categorias'], ...cats.map((cat) => [cat, cat])], this.category,
       (v) => { this.category = v; this.render(); }, 'Categoria de evento');
-    const toggle = button(filters, this.showHidden ? 'Ocultar reservados' : 'Mostrar reservados', () => {
-      this.showHidden = !this.showHidden; this.render();
-    }, { icon: this.showHidden ? 'eye-off' : 'eye' });
-    toggle.setAttribute('aria-pressed', String(this.showHidden));
-    button(filters, 'Novo evento', () => new EventEditor(this.plugin, c, this.selected).open(), { icon: 'plus', className: 'brpg-button mod-cta' });
+    if (c.events.some((event) => event.hidden)) {
+      const toggle = button(filters, this.showHidden ? 'Ocultar reservados' : 'Mostrar reservados', () => {
+        this.showHidden = !this.showHidden; this.render();
+      }, { icon: this.showHidden ? 'eye-off' : 'eye' });
+      toggle.setAttribute('aria-pressed', String(this.showHidden));
+    }
+    button(tools, 'Novo evento', () => { this.detailOpen = true; new EventEditor(this.plugin, c, this.selected).open(); },
+      { icon: 'plus', className: 'brpg-button mod-cta' });
     if (this.mode === 'timeline') this.renderTimeline(root, c, e);
     else this.renderMonth(root, c, e);
   }
+
+  renderSky(root, c, e) {
+    const pane = el(root, 'section', 'brpg-sky');
+    const heading = el(pane, 'div', 'brpg-sky-header');
+    const title = el(heading, 'div');
+    el(title, 'h3', 'brpg-section-title', 'Céu do dia');
+    el(title, 'div', 'brpg-hint', e.format(this.selected));
+    button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings' });
+
+    const day = c.clock.hours * c.clock.minutes;
+    const middle = Math.floor(day / 2);
+    const controls = el(pane, 'div', 'brpg-sky-controls');
+    const sliderRow = el(controls, 'div', 'brpg-sky-time');
+    const row = el(sliderRow, 'div', 'brpg-toolbar');
+    el(row, 'span', 'brpg-label', 'Hora simulada');
+    const time = el(row, 'input', 'brpg-input brpg-time-input');
+    time.type = 'text'; time.inputMode = 'text'; time.maxLength = 5; time.setAttribute('aria-label', 'Hora simulada (HH:MM)');
+    const slider = el(sliderRow, 'input', 'brpg-time-range');
+    slider.type = 'range'; slider.min = '0'; slider.max = String(day - 1); slider.step = '1';
+    slider.setAttribute('aria-label', 'Percorrer as horas do dia');
+    slider.disabled = day === 1;
+    const axis = el(sliderRow, 'div', 'brpg-sky-axis');
+    el(axis, 'span', '', '00:00');
+    el(axis, 'span', '', formatTime(middle, c.clock));
+    el(axis, 'span', '', formatTime(day, c.clock, true));
+    const shortcuts = el(controls, 'div', 'brpg-toolbar');
+    button(shortcuts, 'Hora do mundo', () => update(c.current.hour * c.clock.minutes + c.current.minute), { icon: 'clock-3' });
+    button(shortcuts, 'Meio-dia', () => update(middle), { icon: 'sun' });
+    const summaryBox = el(pane, 'div', 'brpg-sky-summary');
+    summaryBox.setAttribute('aria-live', 'polite');
+    const cards = el(pane, 'div', 'brpg-solar-cards');
+    const at = e.epoch(this.selected);
+    const update = (minute) => {
+      this.skyMinute = Math.max(0, Math.min(day - 1, minute));
+      time.value = formatTime(this.skyMinute, c.clock);
+      slider.value = String(this.skyMinute);
+      slider.setAttribute('aria-valuetext', time.value);
+      replaceEl(summaryBox); replaceEl(cards);
+      const p = solarPositions(c.sky, at, c.clock, this.skyMinute);
+      if (!p.length) {
+        info(cards, 'Nenhum sol configurado neste calendário. Use Configurar sóis para adicionar um.');
+        return;
+      }
+      const today = p.filter((x) => x.visibleToday);
+      const now = p.filter((x) => x.visibleNow);
+      for (const [label, items] of [['Acima do horizonte agora', now], ['Visíveis em algum momento do dia', today]]) {
+        const line = el(summaryBox, 'div', 'brpg-sky-fact');
+        el(line, 'span', 'brpg-label', label);
+        el(line, 'strong', '', items.length ? items.map((x) => x.name).join(' · ') : 'Nenhum');
+      }
+      for (const sun of p) this.solarCard(cards, sun, c.clock, this.skyMinute, day);
+    };
+    slider.addEventListener('input', () => update(Number(slider.value)));
+    time.addEventListener('change', () => {
+      const value = /^(\d{1,2}):(\d{2})$/.exec(time.value.trim());
+      if (value && Number(value[1]) < c.clock.hours && Number(value[2]) < c.clock.minutes)
+        update(Number(value[1]) * c.clock.minutes + Number(value[2]));
+      else {
+        time.value = formatTime(this.skyMinute, c.clock);
+        this.plugin.attempt(() => { throw new Error(`Use HH:MM de 00:00 a ${formatTime(day - 1, c.clock)}.`); });
+      }
+    });
+    update(this.skyMinute ?? middle);
+    const moons = e.moons(this.selected);
+    if (moons.length) {
+      const group = el(pane, 'div', 'brpg-sky-moons');
+      el(group, 'h3', 'brpg-section-title', 'Luas');
+      const list = el(group, 'div', 'brpg-metadata');
+      moons.forEach((m) => el(list, 'span', 'brpg-chip', `${m.icon} ${m.name} · ${m.phase}`));
+    }
+  }
+
+  solarCard(root, sun, clock, minute, total) {
+    const card = el(root, 'article', 'brpg-solar-card' + (sun.visibleNow ? ' is-visible' : ''));
+    card.style.setProperty('--brpg-sun-color', sun.color);
+    const head = el(card, 'div', 'brpg-sun-heading');
+    const icon = el(head, 'span', 'brpg-sun-icon');
+    icon.style.setProperty('--brpg-sun-size', String(.8 + Math.min(sun.size, 2) * .45));
+    setIcon(icon, 'sun');
+    const title = el(head, 'div', 'brpg-sun-name');
+    el(title, 'h4', '', sun.name);
+    el(title, 'div', 'brpg-hint', sun.label);
+    if (sun.reference) el(head, 'span', 'brpg-chip', 'Referência');
+    const track = el(card, 'div', 'brpg-sun-track');
+    const windows = sun.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
+    track.setAttribute('role', 'img');
+    track.setAttribute('aria-label', windows.length ? `Intervalos visíveis: ${windows.join(' e ')}` : 'Sem nascer do sol neste dia');
+    for (const [start, end] of sun.intervals) {
+      const stripe = el(track, 'span', 'brpg-sun-window');
+      stripe.style.setProperty('--brpg-from', pct(start, total));
+      stripe.style.setProperty('--brpg-duration', pct(end - start, total));
+    }
+    el(track, 'span', 'brpg-sun-marker').style.setProperty('--brpg-now', pct(minute, total));
+    const marks = el(card, 'div', 'brpg-sun-marks');
+    const n = (num) => num.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+    if (sun.horizon === 'normal') {
+      el(marks, 'span', '', `Nascer ${formatTime(sun.from, clock)}`);
+      el(marks, 'span', '', `Pôr ${formatTime(sun.to, clock)}`);
+    }
+    el(marks, 'span', '', `Altura ${n(sun.altitude)}°`);
+    el(marks, 'span', '', `Ciclo de ${n(sun.period)} dias`);
+    el(marks, 'span', '', `Tamanho ×${n(sun.size)}`);
+  }
   renderMonth(root, c, e) {
     const { year, month } = this.selected, m = c.months[e.monthIndex(month)];
-    const body = el(root, 'section', 'brpg-month');
+    const content = el(root, 'div', 'brpg-calendar-content');
+    const body = el(content, 'section', 'brpg-month');
     el(body, 'h3', 'brpg-section-title', `${m.name} · ano ${e.yearLabel(year)}`);
     const busy = new Map();
     const len = e.monthLength(year, month);
     for (let day = 1; day <= len; day++) busy.set(day, this.filtered(e.eventsOn({ year, month, day })));
+    this.renderSelected(content, c, e, busy.get(this.selected.day) || []);
     const group = el(body, 'div', `brpg-layout brpg-layout-${this.layout}${c.week.length > 8 ? ' brpg-long-week' : ''}`);
     // Render one layout in explicit modes. CSS selects the responsive default in auto.
     if (this.layout !== 'list') {
       const grid = el(group, 'div', 'brpg-grid');
       grid.style.setProperty('--brpg-week', String(c.week.length));
-      if (!m.intercalary) for (const w of c.week) {
-        const header = el(grid, 'div', 'brpg-weekday', w.length > 5 ? w.slice(0, c.week.length > 8 ? 2 : 3) : w);
+      if (!m.intercalary) for (const [i, label] of shortWeek(c.week).entries()) {
+        const w = c.week[i];
+        const header = el(grid, 'div', 'brpg-weekday', label);
         header.setAttribute('title', w);
         header.setAttribute('aria-label', w);
       }
@@ -762,21 +1040,27 @@ class CalendarView extends ItemView {
       const list = el(group, 'div', 'brpg-month-list');
       for (let day = 1; day <= len; day++) this.renderDay(list, { year, month, day }, c, e, busy.get(day), 'brpg-list-day');
     }
-    this.renderSelected(root, c, e, busy.get(this.selected.day) || []);
   }
   renderDay(root, d, c, e, events, extra) {
     const meta = e.dayMeta(d);
     const state = (sameDate(d, c.current) ? ' is-today' : '') + (sameDate(d, this.selected) ? ' is-selected' : '');
     const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
-    const b = button(root, label, () => { this.choose(d); Array.from(this.contentEl.querySelectorAll('.brpg-layout button[aria-pressed="true"]')).find((node) => node.offsetParent)?.focus({ preventScroll: true }); },
-      { className: `brpg-day ${extra}${state}` , iconOnly: true });
+    const b = button(root, label, () => {
+      this.detailOpen = true;
+      this.choose(d);
+      const container = this.contentEl;
+      if (container.clientWidth && container.clientWidth < 800)
+        container.querySelector('.brpg-selected')?.scrollIntoView({ block: 'nearest' });
+      else Array.from(container.querySelectorAll('.brpg-layout button[aria-pressed="true"]')).find((node) => node.offsetParent)?.focus({ preventScroll: true });
+    }, { className: `brpg-day ${extra}${state}`, iconOnly: true });
     b.setAttribute('aria-pressed', String(sameDate(d, this.selected)));
     if (sameDate(d, c.current)) b.setAttribute('aria-current', 'date');
     el(b, 'strong', 'brpg-day-number', String(d.day));
     if (extra === 'brpg-list-day') {
-      el(b, 'span', 'brpg-day-name', meta.special?.name || meta.weekday || 'Fora da semana');
-      if (events.length) el(b, 'span', 'brpg-day-event', events[0].title);
-    } else if (meta.special) el(b, 'span', 'brpg-day-name', meta.special.name);
+      const info = el(b, 'span', 'brpg-list-info');
+      el(info, 'span', 'brpg-day-name', meta.special?.name || meta.weekday || 'Fora da semana');
+      if (events.length) el(info, 'span', 'brpg-day-event', events[0].title);
+    } else if (meta.special) el(b, 'span', 'brpg-grid-extra', '◆');
     if (events.length) {
       const marks = el(b, 'span', 'brpg-day-marks');
       marks.setAttribute('aria-hidden', 'true');
@@ -790,15 +1074,28 @@ class CalendarView extends ItemView {
     const meta = e.dayMeta(d), season = e.season(d), moons = e.moons(d);
     const section = el(root, 'section', 'brpg-selected');
     const head = el(section, 'div', 'brpg-toolbar');
-    el(head, 'h3', 'brpg-section-title', e.format(d));
+    const label = el(head, 'div', 'brpg-day-heading');
+    el(label, 'div', 'brpg-eyebrow', 'DIA EM FOCO');
+    el(label, 'h3', 'brpg-section-title', e.format(d));
+    button(head, 'Ver céu desta data', () => { this.mode = 'sky'; this.render(); }, { icon: 'sun', iconOnly: true });
     button(head, 'Definir como data do mundo', () => new WorldDateEditor(this.plugin, c, d).open(), { icon: 'clock-3', iconOnly: true });
     const bits = el(section, 'div', 'brpg-metadata');
     el(bits, 'span', 'brpg-chip', meta.weekday || 'Fora da semana');
     if (meta.special) el(bits, 'span', 'brpg-chip', meta.special.name);
     if (season) el(bits, 'span', 'brpg-chip', `${season.name} · dia ${season.dayOfSeason}`);
-    for (const moon of moons) el(bits, 'span', 'brpg-chip', `${moon.icon} ${moon.name} · ${moon.phase}`);
-    if (events.length) events.forEach((event) => this.eventCard(section, c, e, event, d));
-    else info(section, 'Nenhum evento para este dia.');
+    if (moons.length) {
+      const m = el(bits, 'span', 'brpg-chip', moons.map((moon) => moon.icon).join(' '));
+      m.title = moons.map((moon) => `${moon.name} · ${moon.phase}`).join(' | ');
+      m.setAttribute('aria-label', m.title);
+    }
+    if (events.length) {
+      const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
+      details.open = this.detailOpen;
+      const shortName = events[0].title.length > 50 ? events[0].title.slice(0, 49) + '…' : events[0].title;
+      summary(details, `${events.length} ${events.length === 1 ? 'evento' : 'eventos'} · ${shortName}`, 'list');
+      details.addEventListener('toggle', () => { this.detailOpen = details.open; });
+      events.forEach((event) => this.eventCard(details, c, e, event, d));
+    } else info(section, 'Nenhum evento para este dia.');
   }
   renderTimeline(root, c, e) {
     const year = this.selected.year;
@@ -842,6 +1139,7 @@ module.exports = { VIEW, CalendarView };
 const { Modal, FuzzySuggestModal, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, copy, uid, validateCalendar } = load("calendar.js");
 const { DEFAULT_COLOR } = load("imports.js");
+const { MAX_SUNS, emptySky } = load("sky.js");
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -962,17 +1260,18 @@ class RPGModal extends Modal {
 }
 
 class CalendarEditor extends RPGModal {
-  constructor(plugin, cal, isNew = false) {
+  constructor(plugin, cal, isNew = false, start = 'geral') {
     super(plugin.app, isNew ? 'Criar calendário' : 'Editar calendário');
     this.plugin = plugin;
     this.draft = copy(cal);
     this.isNew = isNew;
-    this.tab = 'geral';
+    this.tab = start;
+    this.draft.sky ||= emptySky(new CalendarEngine(cal).yearStart(2));
   }
   onOpen() {
     const root = this.frame();
     const bar = el(root, 'div', 'brpg-toolbar');
-    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['estacoes', 'Estações'], ['eras', 'Eras']],
+    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['eras', 'Eras']],
       this.tab, (v) => { this.tab = v; this.section(); }, 'Seção do editor');
     this.form = el(root, 'div', 'brpg-form');
     this.section();
@@ -1061,6 +1360,35 @@ class CalendarEditor extends RPGModal {
         c.moons.push({ id: uid('lua'), name: 'Nova lua', period: 28, offset: 0, granularity: 8, rounding: 'round', hidden: false });
         this.section();
       }, { icon: 'plus' });
+    } else if (this.tab === 'sois') {
+      const root = this.group('Sóis e observação', 'O sol de referência passa no ponto mais alto ao meio-dia e precisa nascer todos os dias.');
+      const sky = c.sky;
+      const general = el(root, 'div', 'brpg-form-row');
+      inlineNumber(general, 'Latitude do observador (°)', sky.latitude, (v) => { sky.latitude = v; }, -89, 89, 'any');
+      inlineNumber(general, 'Período da órbita de raio 1 (dias)', sky.unitPeriod, (v) => { sky.unitPeriod = v; }, 1, MAX_YEAR, 'any');
+      if (sky.suns.length) fieldSelect(root, 'Sol de referência', sky.suns.map((x) => [x.id, x.name]), sky.referenceId,
+        (v) => { sky.referenceId = v; this.section(); });
+      else info(root, 'Nenhum sol. Adicione um para começar.');
+      sky.suns.forEach((sun, i) => {
+        const card = el(root, 'div', 'brpg-edit-card brpg-sun-edit');
+        const row = el(card, 'div', 'brpg-form-row');
+        input(row, 'Nome', sun.name, (v) => { sun.name = v; }, { maxLength: 60 });
+        input(row, 'Cor', sun.color, (v) => { sun.color = v; }, { type: 'color' });
+        const orbit = el(card, 'div', 'brpg-form-row');
+        inlineNumber(orbit, 'Semieixo relativo', sun.orbit, (v) => { sun.orbit = v; }, .04, 12, 'any');
+        inlineNumber(orbit, 'Inclinação (°)', sun.tilt, (v) => { sun.tilt = v; }, -89, 89, 'any');
+        inlineNumber(orbit, 'Fase inicial (°)', sun.phase, (v) => { sun.phase = v; }, -360, 360, 'any');
+        inlineNumber(orbit, 'Tamanho relativo', sun.size, (v) => { sun.size = v; }, .05, 4, 'any');
+        if (sun.id === sky.referenceId) info(card, 'Referência. Escolha outro sol antes de remover este.');
+        else button(card, 'Remover sol', () => { sky.suns.splice(i, 1); this.section(); }, { icon: 'trash-2' });
+        if (sky.suns.length === 1 && sun.id === sky.referenceId) {
+          button(card, 'Remover único sol', () => { sky.suns = []; sky.referenceId = null; this.section(); }, { icon: 'trash-2' });
+        }
+      });
+      button(root, 'Adicionar sol', () => {
+        const sun = { id: uid('sol'), name: `Sol ${sky.suns.length + 1}`, orbit: 1, tilt: 0, phase: 0, size: 1, color: '#f4ac63' };
+        sky.suns.push(sun); sky.referenceId ||= sun.id; this.section();
+      }, { icon: 'plus', disabled: sky.suns.length >= MAX_SUNS });
     } else if (this.tab === 'estacoes') {
       const root = this.group('Estações', 'Estações por data se repetem no ano. As de ciclo correm independentemente do calendário civil.');
       fieldSelect(root, 'Tipo', [['date', 'Começam em uma data'], ['periodic', 'Ciclo contínuo por duração']], c.seasonMode, (v) => {
@@ -1182,7 +1510,7 @@ module.exports = { el, button, select, input, info, inlineNumber, replaceEl, Cal
 
     },
     "arkanis.json": function (module, exports, load, require) {
-module.exports = {"id":"arkanis-preset","name":"Arkanis","description":"26 meses, semanas de 12 dias, três luas e o relógio de Arkanis.","week":["Synlurge","Derlurge","Prelurge","Prolurge","Caplurge","Prylurge","Interlurge","Epylurge","Poslurge","Exlurge","Soblurge","Aplurge"],"firstWeekday":0,"weekOverflow":true,"months":[{"id":"mes-1","name":"Arkanis","length":36,"intercalary":false},{"id":"mes-2","name":"Barvesk","length":31,"intercalary":false},{"id":"mes-3","name":"Cyranark","length":31,"intercalary":false},{"id":"mes-4","name":"Darfryn","length":38,"intercalary":false},{"id":"mes-5","name":"Elyriz","length":43,"intercalary":false},{"id":"mes-6","name":"Faymort","length":39,"intercalary":false},{"id":"mes-7","name":"Gharvek","length":30,"intercalary":false},{"id":"mes-8","name":"Hysteria","length":36,"intercalary":false},{"id":"mes-9","name":"Inforty","length":37,"intercalary":false},{"id":"mes-10","name":"Jinxy","length":40,"intercalary":false},{"id":"mes-11","name":"Khaos","length":54,"intercalary":false},{"id":"mes-12","name":"Luary","length":39,"intercalary":false},{"id":"mes-13","name":"Myrian","length":46,"intercalary":false},{"id":"mes-14","name":"Northuz","length":33,"intercalary":false},{"id":"mes-15","name":"Orkan","length":30,"intercalary":false},{"id":"mes-16","name":"Pheraxy","length":45,"intercalary":false},{"id":"mes-17","name":"Quaryn","length":33,"intercalary":false},{"id":"mes-18","name":"Ravelyn","length":39,"intercalary":false},{"id":"mes-19","name":"Skaryel","length":42,"intercalary":false},{"id":"mes-20","name":"Termyna","length":30,"intercalary":false},{"id":"mes-21","name":"Umbrya","length":36,"intercalary":false},{"id":"mes-22","name":"Vektory","length":52,"intercalary":false},{"id":"mes-23","name":"Westeryuz","length":42,"intercalary":false},{"id":"mes-24","name":"Xiangyou","length":44,"intercalary":false},{"id":"mes-25","name":"Ydraven","length":33,"intercalary":false},{"id":"mes-26","name":"Zarknor","length":45,"intercalary":false}],"leapDays":[{"id":"extra-1","name":"Krusada Druor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-2","name":"Vryant Kor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-3","name":"Cynfur Alkov","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-4","name":"Khorq Dryart","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0}],"moons":[{"id":"lua-1","name":"Verika","period":48,"offset":12,"granularity":16,"rounding":"round","hidden":false},{"id":"lua-2","name":"Neurika","period":36,"offset":12,"granularity":8,"rounding":"round","hidden":false},{"id":"lua-3","name":"Menrika","period":24,"offset":12,"granularity":8,"rounding":"round","hidden":false}],"seasons":[{"id":"estacao-1","name":"Velanthir","color":"#852220","month":"mes-1","day":1,"duration":252},{"id":"estacao-2","name":"Solanarê","color":"#3f1601","month":"mes-1","day":1,"duration":252},{"id":"estacao-3","name":"Drosmy","color":"#ecad78","month":"mes-1","day":1,"duration":252},{"id":"estacao-4","name":"Kealyth","color":"#d75013","month":"mes-1","day":1,"duration":252}],"seasonMode":"periodic","seasonOffset":0,"eras":[],"clock":{"hours":32,"minutes":64},"current":{"year":1,"month":"mes-1","day":1,"hour":0,"minute":0},"events":[{"id":"evento-1","title":"Velanthir","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-1","start":null},{"id":"evento-2","title":"Solanarê","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-2","start":null},{"id":"evento-3","title":"Drosmy","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-3","start":null},{"id":"evento-4","title":"Kealyth","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-4","start":null},{"id":"evento-5","title":"Arkas, A Criação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":1}},{"id":"evento-6","title":"Bereal, O Contexto","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":2}},{"id":"evento-7","title":"Cyrius, A Ideia","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":3}},{"id":"evento-8","title":"Dognar, A Ação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":4}}]};
+module.exports = {"id":"arkanis-preset","name":"Arkanis","description":"26 meses, semanas de 12 dias, três sóis, três luas e o relógio de Arkanis.","week":["Synlurge","Derlurge","Prelurge","Prolurge","Caplurge","Prylurge","Interlurge","Epylurge","Poslurge","Exlurge","Soblurge","Aplurge"],"firstWeekday":0,"weekOverflow":true,"months":[{"id":"mes-1","name":"Arkanis","length":36,"intercalary":false},{"id":"mes-2","name":"Barvesk","length":31,"intercalary":false},{"id":"mes-3","name":"Cyranark","length":31,"intercalary":false},{"id":"mes-4","name":"Darfryn","length":38,"intercalary":false},{"id":"mes-5","name":"Elyriz","length":43,"intercalary":false},{"id":"mes-6","name":"Faymort","length":39,"intercalary":false},{"id":"mes-7","name":"Gharvek","length":30,"intercalary":false},{"id":"mes-8","name":"Hysteria","length":36,"intercalary":false},{"id":"mes-9","name":"Inforty","length":37,"intercalary":false},{"id":"mes-10","name":"Jinxy","length":40,"intercalary":false},{"id":"mes-11","name":"Khaos","length":54,"intercalary":false},{"id":"mes-12","name":"Luary","length":39,"intercalary":false},{"id":"mes-13","name":"Myrian","length":46,"intercalary":false},{"id":"mes-14","name":"Northuz","length":33,"intercalary":false},{"id":"mes-15","name":"Orkan","length":30,"intercalary":false},{"id":"mes-16","name":"Pheraxy","length":45,"intercalary":false},{"id":"mes-17","name":"Quaryn","length":33,"intercalary":false},{"id":"mes-18","name":"Ravelyn","length":39,"intercalary":false},{"id":"mes-19","name":"Skaryel","length":42,"intercalary":false},{"id":"mes-20","name":"Termyna","length":30,"intercalary":false},{"id":"mes-21","name":"Umbrya","length":36,"intercalary":false},{"id":"mes-22","name":"Vektory","length":52,"intercalary":false},{"id":"mes-23","name":"Westeryuz","length":42,"intercalary":false},{"id":"mes-24","name":"Xiangyou","length":44,"intercalary":false},{"id":"mes-25","name":"Ydraven","length":33,"intercalary":false},{"id":"mes-26","name":"Zarknor","length":45,"intercalary":false}],"leapDays":[{"id":"extra-1","name":"Krusada Druor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-2","name":"Vryant Kor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-3","name":"Cynfur Alkov","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-4","name":"Khorq Dryart","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0}],"moons":[{"id":"lua-1","name":"Verika","period":48,"offset":12,"granularity":16,"rounding":"round","hidden":false},{"id":"lua-2","name":"Neurika","period":36,"offset":12,"granularity":8,"rounding":"round","hidden":false},{"id":"lua-3","name":"Menrika","period":24,"offset":12,"granularity":8,"rounding":"round","hidden":false}],"seasons":[{"id":"estacao-1","name":"Velanthir","color":"#852220","month":"mes-1","day":1,"duration":252},{"id":"estacao-2","name":"Solanarê","color":"#3f1601","month":"mes-1","day":1,"duration":252},{"id":"estacao-3","name":"Drosmy","color":"#ecad78","month":"mes-1","day":1,"duration":252},{"id":"estacao-4","name":"Kealyth","color":"#d75013","month":"mes-1","day":1,"duration":252}],"seasonMode":"periodic","seasonOffset":0,"eras":[],"clock":{"hours":32,"minutes":64},"current":{"year":1,"month":"mes-1","day":1,"hour":0,"minute":0},"events":[{"id":"evento-1","title":"Velanthir","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-1","start":null},{"id":"evento-2","title":"Solanarê","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-2","start":null},{"id":"evento-3","title":"Drosmy","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-3","start":null},{"id":"evento-4","title":"Kealyth","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-4","start":null},{"id":"evento-5","title":"Arkas, A Criação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":1}},{"id":"evento-6","title":"Bereal, O Contexto","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":2}},{"id":"evento-7","title":"Cyrius, A Ideia","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":3}},{"id":"evento-8","title":"Dognar, A Ação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":4}}],"sky":{"latitude":48,"unitPeriod":1008,"referenceId":"reart","suns":[{"id":"innart","name":"Innart","orbit":0.36,"tilt":62,"phase":245,"size":0.42,"color":"#f4ce87"},{"id":"dinart","name":"Dinart","orbit":0.65,"tilt":55,"phase":105,"size":0.72,"color":"#f4a963"},{"id":"reart","name":"Reart","orbit":1,"tilt":19,"phase":0,"size":1,"color":"#f08163"}]}};
     }
   };
   const cache = Object.create(null);

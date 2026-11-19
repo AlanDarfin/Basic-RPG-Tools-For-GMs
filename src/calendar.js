@@ -1,5 +1,7 @@
 'use strict';
 
+const { emptySky, validateSky } = require('./sky');
+
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 const PHASES = ['Nova', 'Crescente', 'Quarto crescente', 'Gibosa crescente', 'Cheia', 'Gibosa minguante', 'Quarto minguante', 'Minguante'];
@@ -39,7 +41,7 @@ function newCalendar(name = 'Meu mundo') {
     id: uid('cal'), name, description: '', week: [...DAYS], firstWeekday: 0, weekOverflow: true,
     months, leapDays: [], moons: [], seasons: [], seasonMode: 'date', seasonOffset: 0, eras: [],
     clock: { hours: 24, minutes: 60 }, current: { year: 1, month: months[0].id, day: 1, hour: 0, minute: 0 },
-    events: [],
+    events: [], sky: emptySky(months.reduce((n, item) => n + item.length, 0)),
   };
 }
 function countEvery(y, every, offset) {
@@ -269,6 +271,7 @@ function validateCalendar(c) {
   });
   unique(c.moons.map((m) => m.id), 'IDs lunares');
   const e = new CalendarEngine(c);
+  if (c.sky !== undefined) validateSky(c.sky);
   assert(c.seasonMode === 'date' || c.seasonMode === 'periodic', 'Tipo de estação inválido.');
   number(c.seasonOffset, -MAX_YEAR, MAX_YEAR, 'Deslocamento das estações');
   const seasons = array(c.seasons, 50, 'Estações');
