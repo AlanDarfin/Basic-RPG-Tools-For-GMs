@@ -40,7 +40,7 @@ Use **Definir data e hora do mundo** para ajustar a data, alinhar a hora à posi
 
 ## Céu e sóis
 
-Abra **Céu** ou escolha o ícone solar em **Dia em foco**. Os discos dos sóis mostram cor, tamanho relativo e estado de visibilidade. As luas têm discos próprios com a fase e a porcentagem iluminada na hora observada. Em **Dia em foco**, os dois grupos aparecem juntos na hora do mundo ou ao meio-dia para outras datas. Toque em qualquer grupo para abrir o céu da data. Em **Horários e órbitas dos sóis**, a faixa de cada sol mostra quando ele fica acima do horizonte. A linha indica a hora em consulta.
+Abra **Céu** ou escolha o ícone solar em **Dia em foco**. Os discos dos sóis mostram cor, tamanho relativo e estado de visibilidade. As luas têm discos proporcionais ao tamanho aparente, com fase, porcentagem iluminada e brilho quando estão acima do horizonte. O diâmetro aparece no cartão. Em **Configurar luas**, o campo **Tamanho aparente (raio em °)** muda a exibição e o cálculo dos eclipses. Em **Dia em foco**, os dois grupos aparecem juntos na hora do mundo ou ao meio-dia para outras datas. Toque em qualquer grupo para abrir o céu da data. Em **Horários e órbitas dos sóis** e **Horários e órbitas das luas**, a faixa de cada astro mostra quando ele fica acima do horizonte. A linha indica a hora em consulta.
 
 No dia atual, **Hora do mundo** acompanha o relógio. Arraste a barra, use **−/+** para saltar uma hora, toque nos horários da escala ou digite `HH:MM`. Isso fixa uma prévia sem mexer no relógio da campanha. Use **Hora do mundo** pra voltar à observação ao vivo.
 
@@ -123,9 +123,9 @@ Em **Configurações → Basic RPG → Biblioteca e backup**, **Importar JSON** 
 
 ## Instalação manual
 
-1. Crie a pasta `.obsidian/plugins/basic-rpg/` no cofre.
+1. Baixe o ZIP da [release do Basic RPG](https://github.com/AlanDarfin/Basic-RPG-Tools-For-GMs/releases/latest) ou crie a pasta `.obsidian/plugins/basic-rpg/` no cofre para instalar os arquivos individuais.
 2. Copie os arquivos [`manifest.json`](manifest.json), [`main.js`](main.js) e [`styles.css`](styles.css) da raiz deste repositório para essa pasta.
-3. Reabra o cofre ou recarregue o aplicativo e ative **Basic RPG** em **Plugins da comunidade**.
+3. Em uma atualização, mantenha o arquivo `data.json`. Reabra o cofre ou recarregue o aplicativo e ative **Basic RPG** em **Plugins da comunidade**.
 
 Compatibilidade declarada a partir do Obsidian 1.7.2. O plugin não usa APIs de Node.js no aplicativo e foi projetado para desktop e Android. A instalação manual no Android requer que a pasta do plugin seja acessível pelo gerenciador de arquivos ou pela sincronização do seu cofre.
 

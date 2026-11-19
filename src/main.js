@@ -224,7 +224,7 @@ class BasicRPG extends Plugin {
       events: e.eventsOn(date).filter((x) => this.isPublicEvent(c, x)).map(({ title, category }) => ({ title, category })),
       suns: o.suns(t).map(({ name, visibleNow, rises, sets }) => ({ name, visibleNow, rises, sets })),
       moons: o.moons(e.moons(date, t / (c.clock.hours * c.clock.minutes)), t)
-        .map(({ name, visibleNow, rises, sets, phase, illumination }) => ({ name, visibleNow, rises, sets, phase, illumination })),
+        .map(({ name, visibleNow, rises, sets, phase, illumination, apparentRadius }) => ({ name, visibleNow, rises, sets, phase, illumination, apparentRadius })),
       weather: w ? { region: w.region, low: w.low, high: w.high, wind: w.wind, ...w.at(t / (c.clock.hours * c.clock.minutes)) } : null };
   }
   async openDate(id, date) {

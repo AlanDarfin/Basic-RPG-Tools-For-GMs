@@ -229,7 +229,7 @@ class BasicRPG extends Plugin {
       events: e.eventsOn(date).filter((x) => this.isPublicEvent(c, x)).map(({ title, category }) => ({ title, category })),
       suns: o.suns(t).map(({ name, visibleNow, rises, sets }) => ({ name, visibleNow, rises, sets })),
       moons: o.moons(e.moons(date, t / (c.clock.hours * c.clock.minutes)), t)
-        .map(({ name, visibleNow, rises, sets, phase, illumination }) => ({ name, visibleNow, rises, sets, phase, illumination })),
+        .map(({ name, visibleNow, rises, sets, phase, illumination, apparentRadius }) => ({ name, visibleNow, rises, sets, phase, illumination, apparentRadius })),
       weather: w ? { region: w.region, low: w.low, high: w.high, wind: w.wind, ...w.at(t / (c.clock.hours * c.clock.minutes)) } : null };
   }
   async openDate(id, date) {
@@ -1972,7 +1972,7 @@ const { formatTime } = load("sky.js");
 const { observatory, horizonLabel, observer } = load("observatory.js");
 const { eclipsesForDay, nextEclipse } = load("eclipse.js");
 const { mode: clockMode, readMinute } = load("world-clock.js");
-const { focusSky, skyOverview, gridIcon } = load("celestial-ui.js");
+const { focusSky, skyOverview, gridIcon, angularSize, moonLabel } = load("celestial-ui.js");
 const { weatherDay } = load("weather.js");
 const { renderWeather, weatherShortcut } = load("weather-view.js");
 const { renderSeasons } = load("season-view.js");
@@ -2255,14 +2255,19 @@ class CalendarView extends ItemView {
     const at = e.epoch(date);
     const local = observatory(c, at), moonsAt = (minute) => local.moons(e.moons(date, minute / day), minute);
     if (local.name) el(title, 'div', 'brpg-hint', 'Horizonte de ' + local.name);
-    const suns = local.suns(initial);
-    const paintBodies = skyOverview(overview, suns, moonsAt(initial), (body) => horizonLabel(body, c.clock));
+    const suns = local.suns(initial), moons = moonsAt(initial);
+    const paintBodies = skyOverview(overview, suns, moons, (body) => horizonLabel(body, c.clock));
     const change = el(controls, 'div', 'brpg-hint brpg-horizon-next');
     const updateEclipses = this.renderEclipses(pane, { ...c, sky: observer(c).sky }, e, at, day);
-    const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
-    summary(details, 'Horários e órbitas dos sóis', 'orbit');
-    const cards = el(details, 'div', 'brpg-solar-cards');
-    const paintOrbits = suns.map((sun) => this.solarCard(cards, sun, c.clock, day));
+    const tracks = (bodies, title, icon, moon) => {
+      if (!bodies.length) return [];
+      const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
+      summary(details, title, icon);
+      const cards = el(details, 'div', 'brpg-solar-cards');
+      return bodies.map((body) => this.horizonCard(cards, body, c.clock, day, moon));
+    };
+    const paintSolar = tracks(suns, 'Horários e órbitas dos sóis', 'orbit', false);
+    const paintLunar = tracks(moons, 'Horários e órbitas das luas', 'moon', true);
     const update = (minute, keepText = false) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
       const following = this.skyFollowing && sameDate(this.savedToday, date);
@@ -2286,7 +2291,8 @@ class CalendarView extends ItemView {
       change.textContent = (local.offset ? 'Hora local ' + formatTime(this.skyMinute + local.offset, c.clock) + ' · ' : '') + times;
       change.title = 'As viradas de horizonte usam a hora do mundo.';
 
-      paintOrbits.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
+      paintSolar.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
+      paintLunar.forEach((paint, i) => paint(currentMoons[i], this.skyMinute));
     };
     slider.addEventListener('input', () => go(Number(slider.value)));
     time.addEventListener('change', () => {
@@ -2299,7 +2305,6 @@ class CalendarView extends ItemView {
       }
     });
     this.paintSkyClock = (n) => update(n, time.ownerDocument.activeElement === time);
-    if (!c.sky.suns.length) details.hidden = true;
     update(initial);
   }
 
@@ -2367,22 +2372,22 @@ class CalendarView extends ItemView {
     };
   }
 
-  solarCard(root, sun, clock, total) {
-    const card = el(root, 'article', 'brpg-solar-card');
-    card.style.setProperty('--brpg-sun-color', sun.color);
+  horizonCard(root, body, clock, total, moon) {
+    const card = el(root, 'article', 'brpg-solar-card' + (moon ? ' brpg-lunar-card' : ''));
+    card.style.setProperty('--brpg-sun-color', moon ? 'var(--brpg-lunar-accent)' : body.color);
     const head = el(card, 'div', 'brpg-sun-heading');
     const icon = el(head, 'span', 'brpg-sun-icon');
-    icon.style.setProperty('--brpg-sun-size', String(.8 + Math.min(sun.size, 2) * .45));
-    setIcon(icon, 'sun');
+    icon.style.setProperty('--brpg-sun-size', String(moon ? 1 : .8 + Math.min(body.size, 2) * .45));
+    setIcon(icon, moon ? 'moon' : 'sun');
     const title = el(head, 'div', 'brpg-sun-name');
-    el(title, 'h4', '', sun.name);
+    el(title, 'h4', '', body.name);
     const state = el(title, 'div', 'brpg-hint');
-    if (sun.reference) el(head, 'span', 'brpg-chip', 'Referência');
+    if (body.reference) el(head, 'span', 'brpg-chip', 'Referência');
     const track = el(card, 'div', 'brpg-sun-track');
-    const windows = sun.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
+    const windows = body.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
     track.setAttribute('role', 'img');
-    track.setAttribute('aria-label', windows.length ? `Intervalos visíveis: ${windows.join(' e ')}` : 'Sem nascer do sol neste dia');
-    for (const [start, end] of sun.intervals) {
+    track.setAttribute('aria-label', windows.length ? `Intervalos visíveis: ${windows.join(' e ')}` : 'Fora do horizonte o dia todo');
+    for (const [start, end] of body.intervals) {
       const stripe = el(track, 'span', 'brpg-sun-window');
       stripe.style.setProperty('--brpg-from', pct(start, total));
       stripe.style.setProperty('--brpg-duration', pct(end - start, total));
@@ -2390,13 +2395,13 @@ class CalendarView extends ItemView {
     const marker = el(track, 'span', 'brpg-sun-marker');
     const marks = el(card, 'div', 'brpg-sun-marks');
     const n = (num) => num.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
-    el(marks, 'span', '', horizonLabel(sun, clock));
+    el(marks, 'span', '', horizonLabel(body, clock));
     const altitude = el(marks, 'span');
-    el(marks, 'span', '', `Ciclo de ${n(sun.period)} dias`);
-    el(marks, 'span', '', `Tamanho ×${n(sun.size)}`);
+    el(marks, 'span', '', `Ciclo de ${n(body.period)} dias`);
+    el(marks, 'span', '', moon ? 'Diâmetro aparente ' + angularSize(body) : `Tamanho ×${n(body.size)}`);
     return (current, minute) => {
       card.classList.toggle('is-visible', current.visibleNow);
-      state.textContent = current.label;
+      state.textContent = moon ? moonLabel(current) : current.label;
       altitude.textContent = `Altura ${n(current.altitude)}°`;
       marker.style.setProperty('--brpg-now', pct(minute, total));
     };
@@ -2942,7 +2947,7 @@ class CalendarEditor extends RPGModal {
         this.section();
       }, { icon: 'plus' });
     } else if (this.tab === 'luas') {
-      const root = this.group('Luas', 'Cada lua tem um ciclo independente. Use um deslocamento para alinhar sua lua nova a uma data.');
+      const root = this.group('Luas', 'Cada lua tem um ciclo independente. O tamanho aparente controla o disco exibido e a cobertura dos eclipses.');
       c.moons.forEach((m, i) => {
         const eclipse = m.eclipse ||= eclipseDefaults(m, i);
         const card = el(root, 'div', 'brpg-edit-card');
@@ -2950,13 +2955,13 @@ class CalendarEditor extends RPGModal {
         input(row, 'Nome', m.name, (v) => { m.name = v; }, { maxLength: 60 });
         inlineNumber(row, 'Ciclo em dias', m.period, (v) => { m.period = v; }, 1, MAX_YEAR, 'any');
         inlineNumber(row, 'Deslocamento', m.offset, (v) => { m.offset = v; }, -MAX_YEAR, MAX_YEAR, 'any');
+        inlineNumber(row, 'Tamanho aparente (raio em °)', eclipse.radius, (v) => { eclipse.radius = v; }, .02, 4, 'any');
         check(card, 'Ocultar no calendário', m.hidden, (v) => { m.hidden = v; });
         const orbit = el(card, 'details', 'brpg-disclosure brpg-eclipse-settings');
         el(orbit, 'summary', 'brpg-summary', 'Órbita e eclipses');
         const fields = el(orbit, 'div', 'brpg-form-row');
         inlineNumber(fields, 'Inclinação orbital (°)', eclipse.inclination, (v) => { eclipse.inclination = v; }, -89, 89, 'any');
         inlineNumber(fields, 'Nó ascendente (°)', eclipse.node, (v) => { eclipse.node = v; }, -360, 360, 'any');
-        inlineNumber(fields, 'Raio aparente (°)', eclipse.radius, (v) => { eclipse.radius = v; }, .02, 4, 'any');
         inlineNumber(fields, 'Raio da umbra (°)', eclipse.shadow, (v) => { eclipse.shadow = v; }, .02, 6, 'any');
         horizonFields(card, m, c.clock, this.redrawHorizon);
         button(card, 'Remover lua', () => { c.moons.splice(i, 1); this.section(); }, { icon: 'trash-2' });
@@ -3411,7 +3416,7 @@ function observatory(c, epoch) {
     const orbit = moonOrbit(moon, epoch, reference, ref, i);
     const altitude = (t) => localAltitude(position(orbit, t), ref.ra, sky.latitude, t);
     const window = applyHorizon(rules.get('moon:' + moon.id) || moon.riseSet, sampledHorizon(altitude, total), total);
-    moons.set(moon.id, { ...window, altitude });
+    moons.set(moon.id, { ...window, apparentRadius: orbit.radius, altitude });
   }
   return {
     name, offset,
@@ -3450,10 +3455,14 @@ function gridIcon(parent) {
 }
 function moonDisc(parent) {
   const svg = element(parent, 'svg', { viewBox: '0 0 36 36', class: 'brpg-moon-disc', 'aria-hidden': 'true', focusable: 'false' });
-  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-shadow' });
-  const lit = element(svg, 'path', { class: 'brpg-moon-lit' });
-  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-outline' });
+  const disk = element(svg, 'g', {});
+  element(disk, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-shadow' });
+  const lit = element(disk, 'path', { class: 'brpg-moon-lit' });
+  element(disk, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-outline' });
   return (moon) => {
+    const scale = Math.min(1.18, Math.max(.3, .82 * (moon.apparentRadius / .4) ** .8));
+    disk.setAttribute('transform', `translate(18 18) scale(${scale.toFixed(3)}) translate(-18 -18)`);
+    svg.setAttribute('data-visible', String(moon.visibleNow));
     const ratio = Math.min(1, Math.max(0, moon.illumination));
     if (ratio >= .9999) { lit.setAttribute('d', 'M 18 4 A 14 14 0 0 1 18 32 A 14 14 0 0 1 18 4 Z'); return; }
     if (ratio <= .0001) { lit.setAttribute('d', ''); return; }
@@ -3474,26 +3483,29 @@ function sunDisc(parent, sun) {
 }
 const lightPercent = (moon) => `${Math.round(moon.illumination * 100)}%`;
 const sunLabel = (sun) => sun.visibleNow ? 'No céu' : sun.visibleToday ? 'Abaixo do horizonte' : 'Não nasce';
+const moonLabel = (moon) => moon.visibleNow ? 'No céu' : moon.horizon === 'never' ? 'Não nasce' : 'Abaixo do horizonte';
+const angularSize = (moon) => (moon.apparentRadius * 2).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '°';
 function overviewGroup(parent, name, bodies, type, horizonLabel) {
   if (!bodies.length) return [];
   const group = el(parent, 'section', 'brpg-celestial-group');
   el(group, 'h3', 'brpg-section-title', name);
   const grid = el(group, 'div', 'brpg-celestial-grid');
   return bodies.map((body) => {
-    const tile = el(grid, 'article', 'brpg-celestial-tile');
+    const tile = el(grid, 'article', 'brpg-celestial-tile is-' + type);
     const paint = type === 'sun' ? sunDisc(tile, body) : moonDisc(tile);
     el(tile, 'strong', '', body.name);
     const label = el(tile, 'small', 'brpg-celestial-state');
     const light = type === 'moon' ? el(tile, 'small', 'brpg-celestial-illumination') : null;
     if (horizonLabel) el(tile, 'small', 'brpg-horizon-time', horizonLabel(body));
+    if (light) el(tile, 'small', 'brpg-celestial-size', 'Diâmetro ' + angularSize(body));
     return (next) => {
       paint(next);
-      label.textContent = type === 'sun' ? sunLabel(next) : next.phase;
-      if (light) light.textContent = lightPercent(next) + ' · ' + (next.visibleNow ? 'No céu' : 'Abaixo');
-      else {
-        tile.title = next.label;
-        tile.classList.toggle('is-above', next.visibleNow);
-      }
+      label.textContent = type === 'sun' ? sunLabel(next) : moonLabel(next);
+      tile.classList.toggle('is-above', next.visibleNow);
+      if (light) {
+        light.textContent = next.phase + ' · ' + lightPercent(next);
+        tile.title = moonLabel(next) + ' · ' + next.phase + ' · diâmetro aparente ' + angularSize(next);
+      } else tile.title = next.label;
     };
   });
 }
@@ -3521,7 +3533,7 @@ function focusSky(parent, suns, moons, open) {
       const paint = type === 'suns' ? sunDisc(holder, body) : moonDisc(holder);
       return (next) => {
         paint(next);
-        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada' + (next.visibleNow ? ', no céu' : ', abaixo do horizonte')}`;
+        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada, ' + moonLabel(next).toLocaleLowerCase('pt-BR') + ', diâmetro ' + angularSize(next)}`;
       };
     });
     return (next) => {
@@ -3538,7 +3550,7 @@ function focusSky(parent, suns, moons, open) {
   };
 }
 
-module.exports = { focusSky, skyOverview, gridIcon };
+module.exports = { focusSky, skyOverview, gridIcon, angularSize, moonLabel };
 
     },
     "weather-view.js": function (module, exports, load, require) {

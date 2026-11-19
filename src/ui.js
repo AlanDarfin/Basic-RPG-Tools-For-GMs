@@ -295,7 +295,7 @@ class CalendarEditor extends RPGModal {
         this.section();
       }, { icon: 'plus' });
     } else if (this.tab === 'luas') {
-      const root = this.group('Luas', 'Cada lua tem um ciclo independente. Use um deslocamento para alinhar sua lua nova a uma data.');
+      const root = this.group('Luas', 'Cada lua tem um ciclo independente. O tamanho aparente controla o disco exibido e a cobertura dos eclipses.');
       c.moons.forEach((m, i) => {
         const eclipse = m.eclipse ||= eclipseDefaults(m, i);
         const card = el(root, 'div', 'brpg-edit-card');
@@ -303,13 +303,13 @@ class CalendarEditor extends RPGModal {
         input(row, 'Nome', m.name, (v) => { m.name = v; }, { maxLength: 60 });
         inlineNumber(row, 'Ciclo em dias', m.period, (v) => { m.period = v; }, 1, MAX_YEAR, 'any');
         inlineNumber(row, 'Deslocamento', m.offset, (v) => { m.offset = v; }, -MAX_YEAR, MAX_YEAR, 'any');
+        inlineNumber(row, 'Tamanho aparente (raio em °)', eclipse.radius, (v) => { eclipse.radius = v; }, .02, 4, 'any');
         check(card, 'Ocultar no calendário', m.hidden, (v) => { m.hidden = v; });
         const orbit = el(card, 'details', 'brpg-disclosure brpg-eclipse-settings');
         el(orbit, 'summary', 'brpg-summary', 'Órbita e eclipses');
         const fields = el(orbit, 'div', 'brpg-form-row');
         inlineNumber(fields, 'Inclinação orbital (°)', eclipse.inclination, (v) => { eclipse.inclination = v; }, -89, 89, 'any');
         inlineNumber(fields, 'Nó ascendente (°)', eclipse.node, (v) => { eclipse.node = v; }, -360, 360, 'any');
-        inlineNumber(fields, 'Raio aparente (°)', eclipse.radius, (v) => { eclipse.radius = v; }, .02, 4, 'any');
         inlineNumber(fields, 'Raio da umbra (°)', eclipse.shadow, (v) => { eclipse.shadow = v; }, .02, 6, 'any');
         horizonFields(card, m, c.clock, this.redrawHorizon);
         button(card, 'Remover lua', () => { c.moons.splice(i, 1); this.section(); }, { icon: 'trash-2' });

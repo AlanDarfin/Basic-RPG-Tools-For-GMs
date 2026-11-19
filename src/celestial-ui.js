@@ -16,10 +16,14 @@ function gridIcon(parent) {
 }
 function moonDisc(parent) {
   const svg = element(parent, 'svg', { viewBox: '0 0 36 36', class: 'brpg-moon-disc', 'aria-hidden': 'true', focusable: 'false' });
-  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-shadow' });
-  const lit = element(svg, 'path', { class: 'brpg-moon-lit' });
-  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-outline' });
+  const disk = element(svg, 'g', {});
+  element(disk, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-shadow' });
+  const lit = element(disk, 'path', { class: 'brpg-moon-lit' });
+  element(disk, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-outline' });
   return (moon) => {
+    const scale = Math.min(1.18, Math.max(.3, .82 * (moon.apparentRadius / .4) ** .8));
+    disk.setAttribute('transform', `translate(18 18) scale(${scale.toFixed(3)}) translate(-18 -18)`);
+    svg.setAttribute('data-visible', String(moon.visibleNow));
     const ratio = Math.min(1, Math.max(0, moon.illumination));
     if (ratio >= .9999) { lit.setAttribute('d', 'M 18 4 A 14 14 0 0 1 18 32 A 14 14 0 0 1 18 4 Z'); return; }
     if (ratio <= .0001) { lit.setAttribute('d', ''); return; }
@@ -40,26 +44,29 @@ function sunDisc(parent, sun) {
 }
 const lightPercent = (moon) => `${Math.round(moon.illumination * 100)}%`;
 const sunLabel = (sun) => sun.visibleNow ? 'No céu' : sun.visibleToday ? 'Abaixo do horizonte' : 'Não nasce';
+const moonLabel = (moon) => moon.visibleNow ? 'No céu' : moon.horizon === 'never' ? 'Não nasce' : 'Abaixo do horizonte';
+const angularSize = (moon) => (moon.apparentRadius * 2).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '°';
 function overviewGroup(parent, name, bodies, type, horizonLabel) {
   if (!bodies.length) return [];
   const group = el(parent, 'section', 'brpg-celestial-group');
   el(group, 'h3', 'brpg-section-title', name);
   const grid = el(group, 'div', 'brpg-celestial-grid');
   return bodies.map((body) => {
-    const tile = el(grid, 'article', 'brpg-celestial-tile');
+    const tile = el(grid, 'article', 'brpg-celestial-tile is-' + type);
     const paint = type === 'sun' ? sunDisc(tile, body) : moonDisc(tile);
     el(tile, 'strong', '', body.name);
     const label = el(tile, 'small', 'brpg-celestial-state');
     const light = type === 'moon' ? el(tile, 'small', 'brpg-celestial-illumination') : null;
     if (horizonLabel) el(tile, 'small', 'brpg-horizon-time', horizonLabel(body));
+    if (light) el(tile, 'small', 'brpg-celestial-size', 'Diâmetro ' + angularSize(body));
     return (next) => {
       paint(next);
-      label.textContent = type === 'sun' ? sunLabel(next) : next.phase;
-      if (light) light.textContent = lightPercent(next) + ' · ' + (next.visibleNow ? 'No céu' : 'Abaixo');
-      else {
-        tile.title = next.label;
-        tile.classList.toggle('is-above', next.visibleNow);
-      }
+      label.textContent = type === 'sun' ? sunLabel(next) : moonLabel(next);
+      tile.classList.toggle('is-above', next.visibleNow);
+      if (light) {
+        light.textContent = next.phase + ' · ' + lightPercent(next);
+        tile.title = moonLabel(next) + ' · ' + next.phase + ' · diâmetro aparente ' + angularSize(next);
+      } else tile.title = next.label;
     };
   });
 }
@@ -87,7 +94,7 @@ function focusSky(parent, suns, moons, open) {
       const paint = type === 'suns' ? sunDisc(holder, body) : moonDisc(holder);
       return (next) => {
         paint(next);
-        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada' + (next.visibleNow ? ', no céu' : ', abaixo do horizonte')}`;
+        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada, ' + moonLabel(next).toLocaleLowerCase('pt-BR') + ', diâmetro ' + angularSize(next)}`;
       };
     });
     return (next) => {
@@ -104,4 +111,4 @@ function focusSky(parent, suns, moons, open) {
   };
 }
 
-module.exports = { focusSky, skyOverview, gridIcon };
+module.exports = { focusSky, skyOverview, gridIcon, angularSize, moonLabel };

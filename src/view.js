@@ -6,7 +6,7 @@ const { formatTime } = require('./sky');
 const { observatory, horizonLabel, observer } = require('./observatory');
 const { eclipsesForDay, nextEclipse } = require('./eclipse');
 const { mode: clockMode, readMinute } = require('./world-clock');
-const { focusSky, skyOverview, gridIcon } = require('./celestial-ui');
+const { focusSky, skyOverview, gridIcon, angularSize, moonLabel } = require('./celestial-ui');
 const { weatherDay } = require('./weather');
 const { renderWeather, weatherShortcut } = require('./weather-view');
 const { renderSeasons } = require('./season-view');
@@ -289,14 +289,19 @@ class CalendarView extends ItemView {
     const at = e.epoch(date);
     const local = observatory(c, at), moonsAt = (minute) => local.moons(e.moons(date, minute / day), minute);
     if (local.name) el(title, 'div', 'brpg-hint', 'Horizonte de ' + local.name);
-    const suns = local.suns(initial);
-    const paintBodies = skyOverview(overview, suns, moonsAt(initial), (body) => horizonLabel(body, c.clock));
+    const suns = local.suns(initial), moons = moonsAt(initial);
+    const paintBodies = skyOverview(overview, suns, moons, (body) => horizonLabel(body, c.clock));
     const change = el(controls, 'div', 'brpg-hint brpg-horizon-next');
     const updateEclipses = this.renderEclipses(pane, { ...c, sky: observer(c).sky }, e, at, day);
-    const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
-    summary(details, 'Horários e órbitas dos sóis', 'orbit');
-    const cards = el(details, 'div', 'brpg-solar-cards');
-    const paintOrbits = suns.map((sun) => this.solarCard(cards, sun, c.clock, day));
+    const tracks = (bodies, title, icon, moon) => {
+      if (!bodies.length) return [];
+      const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
+      summary(details, title, icon);
+      const cards = el(details, 'div', 'brpg-solar-cards');
+      return bodies.map((body) => this.horizonCard(cards, body, c.clock, day, moon));
+    };
+    const paintSolar = tracks(suns, 'Horários e órbitas dos sóis', 'orbit', false);
+    const paintLunar = tracks(moons, 'Horários e órbitas das luas', 'moon', true);
     const update = (minute, keepText = false) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
       const following = this.skyFollowing && sameDate(this.savedToday, date);
@@ -320,7 +325,8 @@ class CalendarView extends ItemView {
       change.textContent = (local.offset ? 'Hora local ' + formatTime(this.skyMinute + local.offset, c.clock) + ' · ' : '') + times;
       change.title = 'As viradas de horizonte usam a hora do mundo.';
 
-      paintOrbits.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
+      paintSolar.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
+      paintLunar.forEach((paint, i) => paint(currentMoons[i], this.skyMinute));
     };
     slider.addEventListener('input', () => go(Number(slider.value)));
     time.addEventListener('change', () => {
@@ -333,7 +339,6 @@ class CalendarView extends ItemView {
       }
     });
     this.paintSkyClock = (n) => update(n, time.ownerDocument.activeElement === time);
-    if (!c.sky.suns.length) details.hidden = true;
     update(initial);
   }
 
@@ -401,22 +406,22 @@ class CalendarView extends ItemView {
     };
   }
 
-  solarCard(root, sun, clock, total) {
-    const card = el(root, 'article', 'brpg-solar-card');
-    card.style.setProperty('--brpg-sun-color', sun.color);
+  horizonCard(root, body, clock, total, moon) {
+    const card = el(root, 'article', 'brpg-solar-card' + (moon ? ' brpg-lunar-card' : ''));
+    card.style.setProperty('--brpg-sun-color', moon ? 'var(--brpg-lunar-accent)' : body.color);
     const head = el(card, 'div', 'brpg-sun-heading');
     const icon = el(head, 'span', 'brpg-sun-icon');
-    icon.style.setProperty('--brpg-sun-size', String(.8 + Math.min(sun.size, 2) * .45));
-    setIcon(icon, 'sun');
+    icon.style.setProperty('--brpg-sun-size', String(moon ? 1 : .8 + Math.min(body.size, 2) * .45));
+    setIcon(icon, moon ? 'moon' : 'sun');
     const title = el(head, 'div', 'brpg-sun-name');
-    el(title, 'h4', '', sun.name);
+    el(title, 'h4', '', body.name);
     const state = el(title, 'div', 'brpg-hint');
-    if (sun.reference) el(head, 'span', 'brpg-chip', 'Referência');
+    if (body.reference) el(head, 'span', 'brpg-chip', 'Referência');
     const track = el(card, 'div', 'brpg-sun-track');
-    const windows = sun.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
+    const windows = body.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
     track.setAttribute('role', 'img');
-    track.setAttribute('aria-label', windows.length ? `Intervalos visíveis: ${windows.join(' e ')}` : 'Sem nascer do sol neste dia');
-    for (const [start, end] of sun.intervals) {
+    track.setAttribute('aria-label', windows.length ? `Intervalos visíveis: ${windows.join(' e ')}` : 'Fora do horizonte o dia todo');
+    for (const [start, end] of body.intervals) {
       const stripe = el(track, 'span', 'brpg-sun-window');
       stripe.style.setProperty('--brpg-from', pct(start, total));
       stripe.style.setProperty('--brpg-duration', pct(end - start, total));
@@ -424,13 +429,13 @@ class CalendarView extends ItemView {
     const marker = el(track, 'span', 'brpg-sun-marker');
     const marks = el(card, 'div', 'brpg-sun-marks');
     const n = (num) => num.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
-    el(marks, 'span', '', horizonLabel(sun, clock));
+    el(marks, 'span', '', horizonLabel(body, clock));
     const altitude = el(marks, 'span');
-    el(marks, 'span', '', `Ciclo de ${n(sun.period)} dias`);
-    el(marks, 'span', '', `Tamanho ×${n(sun.size)}`);
+    el(marks, 'span', '', `Ciclo de ${n(body.period)} dias`);
+    el(marks, 'span', '', moon ? 'Diâmetro aparente ' + angularSize(body) : `Tamanho ×${n(body.size)}`);
     return (current, minute) => {
       card.classList.toggle('is-visible', current.visibleNow);
-      state.textContent = current.label;
+      state.textContent = moon ? moonLabel(current) : current.label;
       altitude.textContent = `Altura ${n(current.altitude)}°`;
       marker.style.setProperty('--brpg-now', pct(minute, total));
     };

@@ -589,3 +589,45 @@ test('calendário vinculado segue a referência e mantém hora visível ao desvi
   await m.p.putCalendar(independent, false);
   assert.equal(m.p.worldNow(m.p.active()).day, 6);
 });
+
+test('luas em céu e dia em foco usam o tamanho aparente e acendem ao cruzar o horizonte', async () => {
+  const m = mock();
+  m.p.clockNow = () => 1800000000000;
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  const focus = root.querySelector('.brpg-focus-moons');
+  assert.match(focus.attributes['aria-label'], /Verika.*diâmetro 0,86°.*Neurika.*diâmetro 0,46°.*Menrika.*diâmetro 1,06°/);
+  await pickButton(root, 'Céu').click();
+  const time = root.all((node) => node.attributes['aria-label'] === 'Hora simulada (HH:MM)')[0];
+  time.value = '29:52'; await time.emit('change');
+  const tiles = root.all((node) => node.className.split(' ').includes('is-moon'));
+  const visible = (tile) => tile.className.split(' ').includes('is-above');
+  const svg = (tile) => tile.all((node) => node.attributes.class === 'brpg-moon-disc')[0];
+  const scale = (node) => Number(/scale\(([0-9.]+)\)/.exec(node.all((x) => x.tag === 'g')[0].attributes.transform)[1]);
+  assert.deepEqual(tiles.map(visible), [false, false, true]);
+  assert.match(tiles[2].textContent, /No céu.*1,06°/);
+  const sizes = tiles.map((tile) => scale(svg(tile)));
+  assert.ok(sizes[1] < sizes[0] && sizes[0] < sizes[2]);
+  assert.equal(svg(tiles[2]).attributes['data-visible'], 'true');
+  assert.equal(svg(tiles[1]).attributes['data-visible'], 'false');
+  assert.ok(root.all((node) => node.className.split(' ').includes('brpg-lunar-card')).length === 3);
+  assert.match(root.textContent, /Horários e órbitas das luas/);
+  time.value = '31:30'; await time.emit('change');
+  assert.equal(visible(tiles[1]), true);
+  assert.equal(svg(tiles[1]).attributes['data-visible'], 'true');
+  assert.equal(scale(svg(tiles[1])), sizes[1]);
+});
+
+test('editar o tamanho de uma lua atualiza seu disco e preserva o raio usado em eclipses', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Céu').click();
+  await pickButton(root, 'Configurar luas').click();
+  const form = m.modal().contentEl;
+  await type(form, 'Tamanho aparente (raio em °)', '0.6');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.p.saved.calendars[0].moons[0].eclipse.radius, .6);
+  assert.equal(m.p.api.day('Arkanis').moons[0].apparentRadius, .6);
+  assert.match(root.querySelector('.brpg-celestial-overview').textContent, /Verika.*Diâmetro 1,2°/);
+});

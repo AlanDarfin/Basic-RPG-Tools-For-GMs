@@ -8,6 +8,7 @@
   --brpg-active: color-mix(in srgb, var(--brpg-accent) 13%, var(--brpg-surface));
   --brpg-faint: color-mix(in srgb, var(--brpg-surface) 88%, var(--brpg-ink));
   --brpg-radius: 9px;
+  --brpg-lunar-accent: #a6a3eb;
   container: brpg / inline-size;
   color: var(--brpg-ink);
 }
@@ -315,7 +316,7 @@
   flex-direction: column; align-items: center; justify-content: start; gap: 1px;
   text-align: center; border: 1px solid var(--brpg-border); border-radius: 7px;
 }
-.brpg-celestial-tile.is-above { background: color-mix(in srgb, #d89655 17%, var(--brpg-surface)); }
+.brpg-celestial-tile.is-sun.is-above { background: color-mix(in srgb, #d89655 17%, var(--brpg-surface)); }
 .brpg-celestial-tile > strong { font-size: .82em; overflow-wrap: anywhere; }
 .brpg-celestial-tile > small { font-size: .70em; color: var(--brpg-muted); line-height: 1.17; overflow-wrap: anywhere; }
 .brpg-celestial-state { min-height: 2.15em; display: grid; align-content: start; }
@@ -330,7 +331,15 @@
   box-shadow: 0 0 10px color-mix(in srgb, var(--brpg-star-color) 60%, transparent),
     inset 0 0 5px #fff8;
 }
-.brpg-moon-disc { width: 32px; height: 32px; display: block; }
+.brpg-moon-disc { width: 32px; height: 32px; display: block; overflow: visible; }
+.brpg-celestial-tile.is-moon.is-above {
+  background: color-mix(in srgb, var(--brpg-lunar-accent) 17%, var(--brpg-surface));
+  border-color: color-mix(in srgb, var(--brpg-lunar-accent) 55%, var(--brpg-border));
+}
+.brpg-celestial-tile.is-moon.is-above > .brpg-celestial-state { color: var(--brpg-ink); }
+.brpg-moon-disc[data-visible="true"] { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--brpg-lunar-accent) 78%, transparent)); }
+.brpg-moon-disc[data-visible="true"] .brpg-moon-outline { stroke: var(--brpg-lunar-accent); }
+.brpg-celestial-size { font-variant-numeric: tabular-nums; }
 .brpg-moon-shadow { fill: color-mix(in srgb, var(--brpg-plain) 65%, #0e0f26); }
 .brpg-moon-lit { fill: #ded3f3; }
 .brpg-moon-outline { fill: none; stroke: color-mix(in srgb, var(--brpg-muted) 70%, #a897c3); stroke-width: 1.15; }

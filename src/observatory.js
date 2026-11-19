@@ -23,7 +23,7 @@ function observatory(c, epoch) {
     const orbit = moonOrbit(moon, epoch, reference, ref, i);
     const altitude = (t) => localAltitude(position(orbit, t), ref.ra, sky.latitude, t);
     const window = applyHorizon(rules.get('moon:' + moon.id) || moon.riseSet, sampledHorizon(altitude, total), total);
-    moons.set(moon.id, { ...window, altitude });
+    moons.set(moon.id, { ...window, apparentRadius: orbit.radius, altitude });
   }
   return {
     name, offset,
