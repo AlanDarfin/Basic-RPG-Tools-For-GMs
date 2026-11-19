@@ -4,6 +4,7 @@ module.exports = (function (require) {
   const modules = {
     "main.js": function (module, exports, load, require) {
 'use strict';
+const { ensureWeather } = load("weather.js");
 const { Plugin, PluginSettingTab, Notice, TFile, normalizePath } = require('obsidian');
 const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = load("calendar.js");
 const { decodeImport, encodeExport } = load("imports.js");
@@ -54,7 +55,7 @@ class Settings extends PluginSettingTab {
     const buttons = el(importBox, 'div', 'brpg-toolbar');
     button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
     button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
-      const preset = copy(arkanis); preset.id = uid('cal');
+      const preset = copy(arkanis); ensureWeather(preset); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
     }), { icon: 'sparkles' });
     const upload = el(importBox, 'input');
@@ -95,19 +96,21 @@ class BasicRPG extends Plugin {
   async onload() {
     this.pending = Promise.resolve();
     this.readOnly = false;
-    let saveClock = false;
+    let saveMigration = false;
     try {
       const saved = await this.loadData();
       if (saved == null) {
         const preset = copy(arkanis);
-        saveClock = ensureClock(preset, this.clockNow());
+        ensureWeather(preset);
+        saveMigration = ensureClock(preset, this.clockNow());
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
           validateCalendar(c);
           ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c);
-          if (ensureClock(c, this.clockNow())) saveClock = true;
+          const migratedClock = ensureClock(c, this.clockNow());
+          if (ensureWeather(c) || migratedClock) saveMigration = true;
           validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
@@ -115,13 +118,14 @@ class BasicRPG extends Plugin {
       }
     } catch {
       const fallback = copy(arkanis);
+      ensureWeather(fallback);
       this.state = { version: 1, activeId: fallback.id, calendars: [fallback] };
       this.readOnly = true;
       new Notice('Basic RPG: não foi possível ler os dados. Alterações bloqueadas para não sobrescrever o cofre.', 10000);
     }
-    if (saveClock && !this.readOnly) {
+    if (saveMigration && !this.readOnly) {
       try { await this.saveData(this.state); }
-      catch { new Notice('Basic RPG: não foi possível salvar a âncora do relógio. Ela não será preservada até uma gravação bem-sucedida.', 9000); }
+      catch { new Notice('Basic RPG: não foi possível salvar os dados iniciais do relógio ou do clima.', 9000); }
     }
     if (typeof window !== 'undefined') {
       this.registerInterval(window.setInterval(() => this.tickClock(), 5000));
@@ -134,6 +138,9 @@ class BasicRPG extends Plugin {
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
+    }) });
+    this.addCommand({ id: 'open-weather', name: 'Abrir clima da campanha', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'weather'; view.render(); }
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
@@ -205,6 +212,7 @@ class BasicRPG extends Plugin {
         assert(idx < 0, 'Já existe um calendário com este ID.');
         if (options.clockMode) anchor(draft, draft.current, options.clockMode, this.clockNow());
         else ensureClock(draft, this.clockNow());
+        ensureWeather(draft);
         validateCalendar(draft);
         s.calendars.push(draft); s.activeId = draft.id;
       } else {
@@ -273,11 +281,216 @@ class BasicRPG extends Plugin {
 module.exports = BasicRPG;
 
     },
+    "weather.js": function (module, exports, load, require) {
+'use strict';
+
+// Fictional weather. Units in the model are Celsius, km/h, percent and km.
+const MAX_REGIONS = 32, MAX_OFFSET = 100000;
+const PROFILE_FIELDS = [
+  ['low', 'Mínima média (°C)', -120, 120],
+  ['high', 'Máxima média (°C)', -120, 120],
+  ['rain', 'Chance de precipitação (%)', 0, 100],
+  ['intensity', 'Intensidade da precipitação (%)', 0, 100],
+  ['humidity', 'Umidade típica (%)', 0, 100],
+  ['wind', 'Vento típico (km/h)', 0, 200],
+  ['fog', 'Chance de neblina (%)', 0, 100],
+];
+const BIOMES = [
+  ['temperate', 'Temperado', [9, 21, 38, 40, 65, 17, 25]],
+  ['humid', 'Quente e úmido', [22, 32, 65, 70, 81, 13, 40]],
+  ['arid', 'Árido', [14, 35, 7, 30, 29, 23, 3]],
+  ['cold', 'Frio', [-14, 1, 40, 55, 72, 23, 30]],
+  ['coast', 'Costa úmida', [11, 21, 54, 55, 84, 21, 64]],
+];
+const profile = (values) => Object.fromEntries(PROFILE_FIELDS.map(([key], i) => [key, values[i]]));
+function biome(key = 'temperate') { return profile((BIOMES.find((x) => x[0] === key) || BIOMES[0])[2]); }
+function region(id, name, preset) { return { id, name, base: biome(preset), seasons: [] }; }
+function defaultWeather() {
+  return { enabled: false, seed: 'Basic RPG', offset: 0, freeze: 0, temperature: 'C', wind: 'kmh',
+    activeId: 'clima-geral', regions: [region('clima-geral', 'Região geral')] };
+}
+function isArkanis(c) {
+  return c.id === 'arkanis-preset' || (c.week?.length === 12 && c.months?.length === 26 &&
+    c.months[0]?.name === 'Arkanis' && c.months[18]?.name === 'Skaryel');
+}
+function arkanisWeather(c) {
+  const rows = [
+    ['solus', 'Solus', 'arid', [[18,31,16,44,46,16,14], [25,42,6,35,30,19,4], [20,34,25,55,54,20,18], [11,26,18,40,50,16,14]]],
+    ['centrus', 'Centrus', 'temperate', [[12,23,55,48,77,13,51], [19,32,34,70,63,17,18], [10,22,61,55,85,17,63], [2,13,42,45,80,12,57]]],
+    ['nortus', 'Nortus', 'cold', [[-5,8,49,40,76,24,34], [6,18,42,55,72,21,23], [-4,7,59,65,81,28,48], [-21,-8,52,72,76,32,38]]],
+  ];
+  return { ...defaultWeather(), enabled: true, seed: '1789259899', offset: 64, activeId: 'centrus',
+    regions: rows.map(([id, name, preset, values]) => ({ ...region(id, name, preset),
+      seasons: c.seasons.slice(0, 4).map((s, i) => ({ id: s.id, ...profile(values[i]) })) })) };
+}
+function ensureWeather(c) {
+  if (c.weather !== undefined || !isArkanis(c)) return false;
+  c.weather = arkanisWeather(c);
+  return true;
+}
+const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+function requireWeather(ok, message) { if (!ok) throw new Error(message); }
+function validateWeather(w, seasons) {
+  if (w === undefined) return;
+  const validText = (s, limit) => typeof s === 'string' && !!s.trim() && s.length <= limit;
+  requireWeather(isRecord(w) && typeof w.enabled === 'boolean' && validText(w.seed, 80), 'Clima: informe uma semente de até 80 caracteres.');
+  requireWeather(Number.isInteger(w.offset) && Math.abs(w.offset) <= MAX_OFFSET, 'Clima: o deslocamento precisa ser um inteiro entre −100000 e 100000 dias.');
+  requireWeather(Number.isFinite(w.freeze) && w.freeze >= -100 && w.freeze <= 100, 'Clima: o ponto de congelamento deve ficar entre −100 e 100 °C.');
+  requireWeather(['C', 'F'].includes(w.temperature) && ['kmh', 'mph'].includes(w.wind), 'Clima: unidades inválidas.');
+  requireWeather(Array.isArray(w.regions) && w.regions.length > 0 && w.regions.length <= MAX_REGIONS, 'Clima: configure de uma a 32 regiões.');
+  const ids = new Set(), names = new Set(), seasonIds = new Set(seasons.map((s) => s.id));
+  const validProfile = (p, name) => {
+    requireWeather(isRecord(p), `Clima de ${name}: perfil inválido.`);
+    for (const [key, label, lo, hi] of PROFILE_FIELDS) {
+      requireWeather(Number.isFinite(p[key]) && p[key] >= lo && p[key] <= hi, `Clima de ${name}: ${label} precisa ficar entre ${lo} e ${hi}.`);
+    }
+    requireWeather(p.low <= p.high, `Clima de ${name}: a mínima não pode ser maior que a máxima.`);
+  };
+  for (const r of w.regions) {
+    requireWeather(isRecord(r) && validText(r.id, 100) && validText(r.name, 60), 'Clima: cada região precisa de um nome de até 60 caracteres.');
+    const name = r.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').trim().toLowerCase();
+    requireWeather(!ids.has(r.id) && !names.has(name), 'Clima: as regiões precisam ter IDs e nomes diferentes.');
+    ids.add(r.id); names.add(name);
+    validProfile(r.base, r.name);
+    requireWeather(Array.isArray(r.seasons) && r.seasons.length <= seasonIds.size, 'Clima: perfis sazonais inválidos.');
+    const used = new Set();
+    for (const s of r.seasons) {
+      requireWeather(isRecord(s) && seasonIds.has(s.id) && !used.has(s.id), 'Clima: cada perfil sazonal deve apontar para uma estação diferente que exista.');
+      used.add(s.id);
+      validProfile(s, r.name + ' / ' + seasons.find((item) => item.id === s.id).name);
+    }
+  }
+  requireWeather(ids.has(w.activeId), 'Clima: selecione uma região que exista.');
+}
+const clamp = (n, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, n));
+const blend = (a, b, t) => a + (b - a) * t;
+const eased = (t) => t * t * (3 - 2 * t);
+const mod = (n, m) => ((n % m) + m) % m;
+function hash(s) {
+  let n = 2166136261;
+  for (let i = 0; i < s.length; i++) n = Math.imul(n ^ s.charCodeAt(i), 16777619);
+  return n;
+}
+function random(seed, at, channel) {
+  let x = seed ^ Math.imul(at, 0x9e3779b1) ^ Math.imul(channel, 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
+  x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+}
+function noise(seed, day, span, channel) {
+  const x = day / span, i = Math.floor(x);
+  return blend(random(seed, i, channel), random(seed, i + 1, channel), eased(x - i));
+}
+
+// Climate periods are distinct from event dates. Weather offsets can cross a year
+// boundary without shifting the season, events or astronomical clock.
+function climatePhase(c, e, day, maxYear) {
+  if (!c.seasons.length) return { from: null, to: null, mix: 0 };
+  let from, to, mix;
+  if (c.seasonMode === 'periodic') {
+    const span = c.seasons.reduce((n, s) => n + s.duration, 0);
+    let t = mod(day - c.seasonOffset, span);
+    for (let i = 0; i < c.seasons.length; i++) {
+      const s = c.seasons[i];
+      if (t < s.duration || i === c.seasons.length - 1) {
+        from = s; to = c.seasons[(i + 1) % c.seasons.length]; mix = t / s.duration; break;
+      }
+      t -= s.duration;
+    }
+  } else {
+    const limit = e.yearStart(maxYear + 1);
+    const year = e.fromEpoch(clamp(day, 0, limit - 1)).year;
+    const yearOf = (y) => y === 0 ? 1 : y === maxYear + 1 ? maxYear : y;
+    const points = [];
+    for (const y of [year - 1, year, year + 1]) {
+      const sourceYear = yearOf(y);
+      const origin = y === 0 ? -e.yearInfo(1).total : e.yearStart(y);
+      for (const s of c.seasons) points.push({ s, at: origin + e.yearInfo(sourceYear).months[e.monthIndex(s.month)].start + s.day - 1 });
+    }
+    points.sort((a, b) => a.at - b.at);
+    let i = points.findIndex((p) => p.at > day);
+    if (i < 0) i = points.length - 1;
+    const a = points[Math.max(0, i - 1)], b = points[i];
+    from = a.s; to = b.s; mix = a.at === b.at ? 0 : clamp((day - a.at) / (b.at - a.at));
+  }
+  return { from, to, mix: eased(mix) };
+}
+function seasonalProfile(c, engine, r, epoch, maxYear) {
+  // Extrapolate the calendar at its limits instead of pinning the whole offset
+  // to the very first or last day.
+  let shifted = epoch - c.weather.offset;
+  if (c.seasonMode === 'date' && c.seasons.length) {
+    const limit = engine.yearStart(maxYear + 1);
+    if (shifted < 0) shifted = mod(shifted, engine.yearInfo(1).total) - engine.yearInfo(1).total;
+    else if (shifted >= limit) shifted = limit + mod(shifted - limit, engine.yearInfo(maxYear).total);
+  }
+  const { from, to, mix } = climatePhase(c, engine, shifted, maxYear);
+  const a = r.seasons.find((s) => s.id === from?.id) || r.base;
+  const b = r.seasons.find((s) => s.id === to?.id) || r.base;
+  return { season: from?.name ?? '', ...Object.fromEntries(PROFILE_FIELDS.map(([key]) => [key, blend(a[key], b[key], mix)])) };
+}
+
+const CONDITIONS = {
+  clear: ['Céu limpo', 'sun'], partly: ['Parcialmente nublado', 'cloud-sun'], cloud: ['Nublado', 'cloud'],
+  mist: ['Neblina', 'cloud-fog'], fog: ['Nevoeiro denso', 'cloud-fog'], drizzle: ['Garoa', 'cloud-drizzle'],
+  rain: ['Chuva', 'cloud-rain'], downpour: ['Chuva forte', 'cloud-rain-wind'], storm: ['Tempestade', 'cloud-lightning'],
+  flurry: ['Neve fraca', 'cloud-snow'], snow: ['Neve', 'snowflake'], blizzard: ['Nevasca', 'cloud-snow'],
+  sleet: ['Chuva e neve', 'cloud-snow'], gale: ['Vento forte', 'wind'],
+};
+const DIRECTIONS = ['N', 'NE', 'L', 'SE', 'S', 'SO', 'O', 'NO'];
+function weatherDay(c, engine, date, maxYear, id = c.weather?.activeId) {
+  if (!c.weather?.enabled) return null;
+  const r = c.weather.regions.find((item) => item.id === id);
+  if (!r) return null;
+  const day = engine.epoch(date), p = seasonalProfile(c, engine, r, day, maxYear);
+  const seed = hash(JSON.stringify([c.weather.seed, r.id]));
+  const front = noise(seed, day, 5, 1), daily = random(seed, day, 2);
+  const chance = p.rain / 100;
+  // A slow-moving front clusters wet days without changing the mean chance.
+  const wet = p.intensity > 0 && daily < chance + (front - .5) * 1.4 * Math.min(chance, 1 - chance);
+  const severity = wet ? clamp(p.intensity / 100 * (.38 + random(seed, day, 3) * .98), .03, 1) : 0;
+  const spread = (noise(seed, day, 4, 4) - .5) * 8 + (random(seed, day, 5) - .5) * 3;
+  const low = Math.round(p.low + spread);
+  const high = Math.max(low, Math.round(p.high + spread - severity * Math.min(4, (p.high - p.low) / 4)));
+  const humidity = Math.round(clamp(p.humidity + (front - .5) * 23 + severity * 21, 0, 100));
+  const cloud = Math.round(clamp((wet ? 67 + severity * 32 : 15 + humidity * .6 + (front - .4) * 57), 0, 100));
+  const wind = p.wind === 0 ? 0 : Math.round(p.wind * (.28 + noise(seed, day, 4, 6) * .92 + severity * .68));
+  const gust = wind === 0 ? 0 : wind + Math.round(wind * (.16 + random(seed, day, 7) * .55 + severity * .38));
+  const direction = wind ? DIRECTIONS[Math.floor((noise(seed, day, 6, 8) * 7 + random(seed, day, 9)) % 8)] : '';
+  const fog = !wet && humidity >= 60 && wind < 34 && random(seed, day, 10) < p.fog / 100;
+  const denseFog = fog && humidity >= 83 && wind < 20;
+  const freeze = c.weather.freeze;
+  const dry = wind >= 53 ? 'gale' : cloud >= 69 ? 'cloud' : cloud >= 29 ? 'partly' : 'clear';
+  const wetCondition = (temp, mid = false) => {
+    if (temp <= freeze) return severity >= .71 && gust >= 48 ? 'blizzard' : severity < .24 ? 'flurry' : 'snow';
+    if (temp <= freeze + 2 && low <= freeze) return 'sleet';
+    if (severity >= .78 && (gust >= 49 || temp > freeze + 14) && mid) return 'storm';
+    return severity >= .64 ? 'downpour' : severity < .24 ? 'drizzle' : 'rain';
+  };
+  const at = (fraction) => {
+    const f = clamp(fraction);
+    const t = clamp((1 - Math.cos(2 * Math.PI * (f - .19))) / 2);
+    const temperature = Math.round(blend(low, high, t));
+    const fogNow = fog && (f < .31 || f >= .88);
+    const condition = wet ? wetCondition(temperature, f >= .3 && f <= .81) : fogNow ? (denseFog ? 'fog' : 'mist') : dry;
+    const visibility = fogNow ? (denseFog ? .3 : 1.8) : wet ? Math.round(blend(14, 1, severity)) : 20;
+    return { temperature, condition, visibility };
+  };
+  return { region: r.name, season: p.season, day, low, high, humidity, cloud, wind, gust, direction,
+    fog, wet, intensity: Math.round(severity * 100), chance: Math.round(p.rain),
+    condition: wet ? wetCondition(high, true) : fog ? denseFog ? 'fog' : 'mist' : dry, at };
+}
+
+module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, CONDITIONS, biome, region, defaultWeather,
+  arkanisWeather, ensureWeather, validateWeather, seasonalProfile, weatherDay };
+
+    },
     "calendar.js": function (module, exports, load, require) {
 'use strict';
 
 const { emptySky, validateSky } = load("sky.js");
 const { validateEclipseOrbit } = load("eclipse.js");
+const { validateWeather } = load("weather.js");
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -560,6 +773,7 @@ function validateCalendar(c) {
     else integer(s.day, 1, c.months[e.monthIndex(s.month)].length, 'Dia inicial da estação');
   });
   unique(seasons.map((s) => s.id), 'IDs das estações');
+  validateWeather(c.weather, seasons);
   if (c.seasonMode === 'date') unique(seasons.map((s) => `${s.month}/${s.day}`), 'Datas de estação');
   array(c.eras, 100, 'Eras').forEach((era) => { string(era.name, 60, 'Nome da era'); integer(era.start, 1, MAX_YEAR, 'Ano da era'); });
   unique(c.eras.map((x) => x.start), 'Anos de início das eras');
@@ -853,6 +1067,7 @@ module.exports = { eclipseDefaults, ensureEclipseOrbits, validateEclipseOrbit, s
 const { assert, copy, validateCalendar, CalendarEngine } = load("calendar.js");
 const { ensureSky } = load("sky.js");
 const { ensureEclipseOrbits } = load("eclipse.js");
+const { MAX_REGIONS, MAX_OFFSET, defaultWeather, region, ensureWeather } = load("weather.js");
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -873,6 +1088,57 @@ function parseInterval(value) {
   return { every: positives[0], except: negatives[0] || 0, also: positives[1] || 0 };
 }
 
+function importFantasyWeather(cal, seasonData, dynamic, warnings) {
+  const g = seasonData?.global_settings;
+  if (typeof g?.enable_weather !== 'boolean') { ensureWeather(cal); return; }
+  const settings = defaultWeather();
+  settings.enabled = g.enable_weather;
+  if (typeof g.seed === 'number' || typeof g.seed === 'string') settings.seed = String(g.seed).trim().slice(0, 80) || settings.seed;
+  if (Number.isInteger(Number(g.weather_offset)) && Math.abs(Number(g.weather_offset)) <= MAX_OFFSET) settings.offset = Number(g.weather_offset);
+  else if (g.weather_offset !== undefined) warnings.push('O deslocamento de clima não suportado foi mantido em zero.');
+  const imperialTemp = ['imperial', 'both_i'].includes(g.temp_sys);
+  if (imperialTemp) settings.temperature = 'F';
+  if (['imperial', 'both_i'].includes(g.wind_sys)) settings.wind = 'mph';
+  const locations = Array.isArray(seasonData.locations) ? seasonData.locations : [];
+  const seen = new Set();
+  const imported = [];
+  let skipped = 0, invalidProfile = false;
+  const numeric = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim())) ? Number(v) : NaN;
+  const pct = (v) => {
+    const n = numeric(v);
+    return n >= 0 && n <= 1 ? Math.round(n * 10000) / 100 : NaN;
+  };
+  const toC = (v) => imperialTemp ? Math.round((numeric(v) - 32) * 500 / 9) / 100 : numeric(v);
+  for (const [i, loc] of locations.slice(0, MAX_REGIONS).entries()) {
+    const name = text(loc?.name, 60) || ('Região ' + (i + 1));
+    const key = name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+    if (seen.has(key)) { skipped++; continue; }
+    seen.add(key);
+    const r = region('fc-regiao-' + (i + 1), name);
+    for (const [j, s] of cal.seasons.entries()) {
+      const data = loc?.seasons?.[j]?.weather;
+      if (!data) continue;
+      const low = toC(data.temp_low), high = toC(data.temp_high), rain = pct(data.precipitation), intensity = pct(data.precipitation_intensity);
+      if (!(low >= -120 && low <= high && high <= 120 && Number.isFinite(rain) && Number.isFinite(intensity))) { invalidProfile = true; continue; }
+      r.seasons.push({ ...r.base, id: s.id, low, high, rain, intensity,
+        humidity: 52 + Math.round(rain * .42), fog: 12 + Math.round(rain * .55) });
+    }
+    imported.push(r);
+  }
+  if (imported.length) {
+    settings.regions = imported;
+    const index = numeric(dynamic.location);
+    const requested = Number.isInteger(index) && index >= 0 && dynamic.custom_location === true ? 'fc-regiao-' + (index + 1) : '';
+    settings.activeId = imported.find((r) => r.id === requested)?.id || imported[0].id;
+  }
+  cal.weather = settings;
+  if (g.enable_weather) {
+    if (!imported.length || dynamic.custom_location === false) warnings.push('Presets de localização do Fantasy Calendar não são importados. Selecione ou configure uma região no Basic RPG.');
+    if (imported.length) warnings.push('Temperaturas, precipitação e regiões personalizadas importadas. A previsão usa o motor do Basic RPG, sem as curvas de ruído, horários do sol ou fusos das regiões do Fantasy Calendar.');
+  }
+  if (locations.length > MAX_REGIONS || skipped) warnings.push('Algumas regiões foram omitidas por exceder o limite ou repetir um nome.');
+  if (invalidProfile) warnings.push('Perfis sazonais de clima inválidos não foram importados. Essas estações usarão o perfil-base.');
+}
 function importFantasy(raw) {
   const s = raw.static_data, y = s?.year_data, d = raw.dynamic_data;
   assert(y && d && Array.isArray(y.timespans) && Array.isArray(y.global_week), 'Esse não parece um arquivo do Fantasy Calendar.');
@@ -930,7 +1196,7 @@ function importFantasy(raw) {
     current: { ...date([d.year, d.timespan, d.day]), hour: Number(d.hour || 0), minute: Number(d.minute || 0) },
     events,
   };
-  if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
+  importFantasyWeather(cal, s.seasons, d, warnings);
   validateCalendar(cal);
   ensureSky(cal, new CalendarEngine(cal).yearStart(2));
   ensureEclipseOrbits(cal);
@@ -944,12 +1210,17 @@ function decodeImport(raw) {
     const calendar = validateCalendar(copy(raw.calendar));
     ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
     ensureEclipseOrbits(calendar);
+    ensureWeather(calendar);
     return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
 }
-function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: ensureEclipseOrbits(copy(validateCalendar(calendar))) }; }
+function encodeExport(calendar) {
+  const snapshot = ensureEclipseOrbits(copy(validateCalendar(calendar)));
+  ensureWeather(snapshot);
+  return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: snapshot };
+}
 module.exports = { decodeImport, encodeExport, importFantasy, parseInterval, DEFAULT_COLOR };
 
     },
@@ -962,6 +1233,8 @@ const { solarPositions, formatTime } = load("sky.js");
 const { eclipsesForDay, nextEclipse } = load("eclipse.js");
 const { mode: clockMode, readMinute } = load("world-clock.js");
 const { moonDisc, sunDisc } = load("celestial-ui.js");
+const { weatherDay } = load("weather.js");
+const { renderWeather, weatherShortcut } = load("weather-view.js");
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -994,18 +1267,20 @@ class CalendarView extends ItemView {
     this.mode = 'month';
     this.category = '';
     this.showHidden = false;
+    this.timelineMonth = '';
     this.layout = 'auto';
     this.detailOpen = false;
     this.skyMinute = null;
     this.skyFollowing = true;
     this.paintSkyClock = null;
     this.paintFocusMoons = null;
+    this.paintWeatherClock = null;
   }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Basic RPG · Calendário'; }
   getIcon() { return 'calendar-days'; }
   async onOpen() { this.render(); }
-  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; replaceEl(this.contentEl); }
+  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; this.paintWeatherClock = null; replaceEl(this.contentEl); }
   clockTick() {
     const c = this.plugin.active();
     if (!c || !this.clockReadout || this.calId !== c.id) return;
@@ -1017,6 +1292,7 @@ class CalendarView extends ItemView {
     if (sameDate(next, this.selected)) {
       if (this.mode === 'sky' && this.skyFollowing) this.paintSkyClock?.(readMinute(c, next));
       if (this.mode === 'month') this.paintFocusMoons?.(next);
+      if (this.mode === 'weather') this.paintWeatherClock?.(readMinute(c, next));
     }
   }
   sync(c, e, world) {
@@ -1024,6 +1300,7 @@ class CalendarView extends ItemView {
       this.selected = { ...world };
       this.category = '';
       this.showHidden = false;
+      this.timelineMonth = '';
       this.detailOpen = false;
       this.skyMinute = null;
       this.skyFollowing = true;
@@ -1045,6 +1322,7 @@ class CalendarView extends ItemView {
     this.sync(c, e, worldNow);
     this.paintSkyClock = null;
     this.paintFocusMoons = null;
+    this.paintWeatherClock = null;
     const root = this.contentEl;
     root.classList.add('brpg', 'brpg-view');
     replaceEl(root);
@@ -1072,32 +1350,33 @@ class CalendarView extends ItemView {
 
     const tabs = el(root, 'nav', 'brpg-tabs');
     tabs.setAttribute('aria-label', 'Visualização');
-    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun']]) {
+    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun'], ['weather', 'Clima', 'cloud-sun']]) {
       const b = button(tabs, title, () => { this.mode = key; this.render(); }, { icon });
       b.setAttribute('aria-pressed', String(this.mode === key));
     }
 
     const nav = el(root, 'div', 'brpg-navigation');
-    const monthMode = this.mode === 'month', skyMode = this.mode === 'sky';
-    nav.classList.add(skyMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
+    const monthMode = this.mode === 'month', skyMode = this.mode === 'sky', weatherMode = this.mode === 'weather';
+    const dayMode = skyMode || weatherMode;
+    nav.classList.add(dayMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
     const ordinal = (this.selected.year - 1) * c.months.length + e.monthIndex(this.selected.month);
     const epoch = e.epoch(this.selected);
     const navigate = (dir) => () => {
       this.detailOpen = false;
       if (monthMode) return this.choose(e.monthShift(this.selected, dir));
-      if (skyMode) return this.choose(e.shift(this.selected, dir));
+      if (dayMode) return this.choose(e.shift(this.selected, dir));
       const year = this.selected.year + dir;
       this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     };
-    button(nav, monthMode ? 'Mês anterior' : skyMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
-      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : skyMode ? epoch === 0 : this.selected.year === 1 });
-    if (skyMode) {
+    button(nav, monthMode ? 'Mês anterior' : dayMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
+      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : dayMode ? epoch === 0 : this.selected.year === 1 });
+    if (dayMode) {
       const d = el(nav, 'input', 'brpg-input brpg-day-input');
       d.type = 'number'; d.min = '1'; d.max = e.monthLength(this.selected.year, this.selected.month);
       d.value = this.selected.day; d.setAttribute('aria-label', 'Dia em exibição');
       d.addEventListener('change', () => this.choose({ ...this.selected, day: validNumber(d, 1, Number(d.max), this.selected.day) }));
     }
-    if (monthMode || skyMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
+    if (monthMode || dayMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
       (month) => { this.detailOpen = false; this.choose({ year: this.selected.year, month, day: 1 }); }, 'Mês em exibição');
     const y = el(nav, 'input', 'brpg-input brpg-year'); y.type = 'number'; y.min = '1'; y.max = String(MAX_YEAR);
     y.value = this.selected.year; y.setAttribute('aria-label', 'Ano em exibição');
@@ -1105,23 +1384,27 @@ class CalendarView extends ItemView {
       const year = validNumber(y, 1, MAX_YEAR, this.selected.year);
       this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     });
-    button(nav, monthMode ? 'Próximo mês' : skyMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
+    button(nav, monthMode ? 'Próximo mês' : dayMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
       { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length :
-        skyMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
+        dayMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
     button(nav, 'Hoje', () => {
       this.skyFollowing = true;
       this.choose(this.plugin.worldNow(c, e));
     }, { icon: 'locate-fixed', iconOnly: true });
 
     if (skyMode) { this.renderSky(root, c, e); return; }
+    if (weatherMode) { this.paintWeatherClock = renderWeather(root, this, c, e); return; }
     const tools = el(root, 'div', 'brpg-calendar-tools');
     const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
     let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
-    if (this.category || this.showHidden) filterLabel += ' · ativos';
+    if (!c.months.some((m) => m.id === this.timelineMonth)) this.timelineMonth = '';
+    if (this.category || this.showHidden || (!monthMode && this.timelineMonth)) filterLabel += ' · ativos';
     summary(toolOptions, filterLabel, 'sliders-horizontal');
     const filters = el(toolOptions, 'div', 'brpg-toolbar');
     if (monthMode) select(filters, [['auto', 'Automático'], ['grid', 'Grade'], ['list', 'Lista']], this.layout,
       (value) => { this.layout = value; this.render(); }, 'Formato do mês');
+    else select(filters, [['', 'Todos os meses'], ...c.months.map((m) => [m.id, m.name])], this.timelineMonth,
+      (value) => { this.timelineMonth = value; this.render(); }, 'Mês na cronologia');
     const cats = [...new Set(c.events.map((x) => x.category).filter(Boolean))].sort();
     if (!cats.includes(this.category)) this.category = '';
     if (cats.length) select(filters, [['', 'Todas as categorias'], ...cats.map((cat) => [cat, cat])], this.category,
@@ -1132,7 +1415,14 @@ class CalendarView extends ItemView {
       }, { icon: this.showHidden ? 'eye-off' : 'eye' });
       toggle.setAttribute('aria-pressed', String(this.showHidden));
     }
-    button(tools, 'Novo evento', () => { this.detailOpen = true; new EventEditor(this.plugin, c, this.selected).open(); },
+    button(tools, 'Novo evento', () => {
+      this.detailOpen = true;
+      const date = !monthMode && this.timelineMonth && this.timelineMonth !== this.selected.month
+        ? { year: this.selected.year, month: this.timelineMonth, day: 1 } : this.selected;
+      const editor = new EventEditor(this.plugin, c, date);
+      if (this.category) editor.draft.category = this.category;
+      editor.open();
+    },
       { icon: 'plus', className: 'brpg-button mod-cta' });
     if (this.mode === 'timeline') this.renderTimeline(root, c, e);
     else this.renderMonth(root, c, e);
@@ -1145,6 +1435,8 @@ class CalendarView extends ItemView {
     el(title, 'h3', 'brpg-section-title', 'Céu do dia');
     el(title, 'div', 'brpg-hint', e.format(this.selected));
     button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
+    const weather = weatherDay(c, e, this.selected, MAX_YEAR);
+    if (weather) weatherShortcut(pane, c, weather, () => { this.mode = 'weather'; this.render(); }, true);
 
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
@@ -1439,6 +1731,8 @@ class CalendarView extends ItemView {
     };
     phases(this.savedToday);
     this.paintFocusMoons = phases;
+    const weather = weatherDay(c, e, d, MAX_YEAR);
+    if (weather) weatherShortcut(bits, c, weather, () => { this.mode = 'weather'; this.render(); });
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;
@@ -1453,27 +1747,65 @@ class CalendarView extends ItemView {
     const section = el(root, 'section', 'brpg-timeline');
     el(section, 'h3', 'brpg-section-title', `Cronologia · ano ${e.yearLabel(year)}`);
     const occurrences = this.filtered(c.events).map((event) => ({ event, d: e.firstOccurrenceInYear(event, year) }))
-      .filter((x) => x.d).sort((a, b) => e.epoch(a.d) - e.epoch(b.d) || a.event.title.localeCompare(b.event.title));
-    if (!occurrences.length) info(section, 'Nenhum evento no ano com o filtro atual.');
+      .filter(({ d }) => d && (!this.timelineMonth || d.month === this.timelineMonth))
+      .map((item) => ({ ...item, epoch: e.epoch(item.d) }))
+      .sort((a, b) => a.epoch - b.epoch || a.event.title.localeCompare(b.event.title, 'pt-BR'));
+    if (!occurrences.length) { info(section, 'Nenhum evento neste recorte.'); return; }
+    const count = occurrences.length;
+    const monthName = c.months.find((m) => m.id === this.timelineMonth)?.name;
+    el(section, 'p', 'brpg-hint', `${count} ${count === 1 ? 'evento' : 'eventos'} · ${monthName || 'Todos os meses'}`);
     const max = 200;
-    for (const { event, d } of occurrences.slice(0, max)) this.eventCard(section, c, e, event, d, true);
-    if (occurrences.length > max) info(section, `Mostrando os primeiros ${max}. Filtre por categoria para ver outro recorte.`);
+    let month, monthBody, previous, entry;
+    for (const { event, d, epoch } of occurrences.slice(0, max)) {
+      if (d.month !== month) {
+        month = d.month;
+        monthBody = el(section, 'section', 'brpg-timeline-month');
+        el(monthBody, 'h4', 'brpg-timeline-month-title', c.months[e.monthIndex(month)].name);
+      }
+      if (epoch !== previous) {
+        previous = epoch;
+        const today = sameDate(d, this.savedToday);
+        const row = el(monthBody, 'div', `brpg-timeline-day${today ? ' is-today' : ''}`);
+        const badge = button(row, `Abrir ${e.format(d)} no calendário`, () => {
+          this.mode = 'month'; this.detailOpen = true; this.choose(d);
+        }, { className: 'brpg-button brpg-timeline-date', iconOnly: true });
+        el(badge, 'strong', '', String(d.day));
+        if (today) { badge.setAttribute('aria-current', 'date'); el(badge, 'span', '', 'Hoje'); }
+        entry = el(row, 'div', 'brpg-timeline-entries');
+        const meta = e.dayMeta(d);
+        el(entry, 'span', 'brpg-timeline-weekday', meta.special?.name || meta.weekday || 'Fora da semana');
+      }
+      this.eventCard(entry, c, e, event, d, true);
+    }
+    if (count > max) info(section, `Mostrando os primeiros ${max}. Filtre por mês ou categoria para ver outro recorte.`);
   }
-  eventCard(root, c, e, event, d, showDate = false) {
-    const card = el(root, 'article', 'brpg-event');
-    const top = el(card, 'div', 'brpg-event-heading');
-    this.dot(top, event.color);
-    el(top, 'h4', '', event.title);
-    if (event.hidden) el(top, 'span', 'brpg-chip', 'Reservado');
+  eventCard(root, c, e, event, d, compact = false) {
+    const card = el(root, compact ? 'details' : 'article', compact ? 'brpg-timeline-event' : 'brpg-event');
     const details = [];
-    if (showDate) details.push(e.format(d));
     if (event.category) details.push(event.category);
     if (event.repeat === 'year') details.push('Anual');
     if (event.repeat === 'season') details.push('Início de estação');
     if (event.end && event.repeat === 'none') details.push(`Até ${e.format(event.end)}`);
-    if (details.length) el(card, 'p', 'brpg-hint', details.join(' · '));
-    if (event.description) el(card, 'p', 'brpg-event-description', event.description);
-    const actions = el(card, 'div', 'brpg-toolbar');
+    let body = card;
+    if (compact) {
+      const top = el(card, 'summary', 'brpg-timeline-summary');
+      this.dot(top, event.color);
+      const label = el(top, 'span', 'brpg-timeline-label');
+      el(label, 'strong', '', event.title);
+      if (event.hidden) details.unshift('Reservado');
+      if (details.length) el(label, 'small', '', details.join(' · '));
+      const arrow = el(top, 'span', 'brpg-icon brpg-timeline-chevron');
+      arrow.setAttribute('aria-hidden', 'true'); setIcon(arrow, 'chevron-down');
+      body = el(card, 'div', 'brpg-timeline-event-body');
+    } else {
+      const top = el(card, 'div', 'brpg-event-heading');
+      this.dot(top, event.color);
+      el(top, 'h4', '', event.title);
+      if (event.hidden) el(top, 'span', 'brpg-chip', 'Reservado');
+      if (details.length) el(card, 'p', 'brpg-hint', details.join(' · '));
+    }
+    if (event.description) el(body, 'p', 'brpg-event-description', event.description);
+    const actions = el(body, 'div', 'brpg-toolbar');
     if (event.note) button(actions, 'Abrir nota', this.run(() => this.plugin.openNote(event.note)), { icon: 'file-text' });
     button(actions, 'Editar evento', () => new EventEditor(this.plugin, c, d, event).open(), { icon: 'pencil', iconOnly: true });
     button(actions, 'Remover evento', () => new Confirm(this.app, `Remover “${event.title}” deste calendário?`,
@@ -1493,6 +1825,7 @@ const { DEFAULT_COLOR } = load("imports.js");
 const { MAX_SUNS, emptySky } = load("sky.js");
 const { eclipseDefaults } = load("eclipse.js");
 const { mode: clockMode, alignLocal } = load("world-clock.js");
+const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, biome, region, defaultWeather } = load("weather.js");
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -1627,7 +1960,7 @@ class CalendarEditor extends RPGModal {
   onOpen() {
     const root = this.frame();
     const bar = el(root, 'div', 'brpg-toolbar');
-    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['eras', 'Eras']],
+    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['clima', 'Clima'], ['eras', 'Eras']],
       this.tab, (v) => { this.tab = v; this.section(); }, 'Seção do editor');
     this.form = el(root, 'div', 'brpg-form');
     this.section();
@@ -1783,12 +2116,18 @@ class CalendarEditor extends RPGModal {
           fieldSelect(row, 'Mês', monthOptions(c), x.month, (v) => { x.month = v; });
           inlineNumber(row, 'Dia inicial', x.day, (v) => { x.day = v; }, 1, 240);
         }
-        button(card, 'Remover estação', () => { c.seasons.splice(i, 1); this.section(); }, { icon: 'trash-2' });
+        button(card, 'Remover estação', () => {
+          c.seasons.splice(i, 1);
+          for (const r of c.weather?.regions || []) r.seasons = r.seasons.filter((p) => p.id !== x.id);
+          this.section();
+        }, { icon: 'trash-2' });
       });
       button(root, 'Adicionar estação', () => {
         c.seasons.push({ id: uid('estacao'), name: 'Nova estação', month: c.months[0].id, day: 1, duration: 90, color: DEFAULT_COLOR });
         this.section();
       }, { icon: 'plus' });
+    } else if (this.tab === 'clima') {
+      this.weatherSection(c);
     } else {
       const root = this.group('Eras', 'As eras só mudam como o ano aparece. Datas e eventos mantêm a contagem absoluta.');
       c.eras.forEach((x, i) => {
@@ -1801,6 +2140,56 @@ class CalendarEditor extends RPGModal {
       });
       button(root, 'Adicionar era', () => { c.eras.push({ name: 'Nova era', start: 1, reset: true }); this.section(); }, { icon: 'plus' });
     }
+  }
+  weatherSection(c) {
+    const w = c.weather ||= defaultWeather();
+    const general = this.group('Simulação do clima', 'A mesma semente, data e região reproduzem o mesmo clima. Não usa internet.');
+    check(general, 'Ativar o clima neste calendário', w.enabled, (v) => { w.enabled = v; });
+    const setup = el(general, 'div', 'brpg-form-row');
+    input(setup, 'Semente do clima', w.seed, (v) => { w.seed = v.trim(); }, { maxLength: 80 });
+    inlineNumber(setup, 'Atraso do clima (dias)', w.offset, (v) => { w.offset = v; }, -MAX_OFFSET, MAX_OFFSET);
+    inlineNumber(setup, 'Ponto de congelamento (°C)', w.freeze, (v) => { w.freeze = v; }, -100, 100, 'any');
+    fieldSelect(setup, 'Exibir temperatura em', [['C', 'Celsius (°C)'], ['F', 'Fahrenheit (°F)']], w.temperature, (v) => { w.temperature = v; });
+    fieldSelect(setup, 'Exibir vento em', [['kmh', 'km/h'], ['mph', 'mph']], w.wind, (v) => { w.wind = v; });
+
+    const body = this.group('Regiões', 'A região ativa vale para a campanha. Edite o perfil-base e ajuste só as estações que precisarem de um clima próprio.');
+    const list = w.regions.map((r) => [r.id, r.name || 'Região sem nome']);
+    const r = w.regions.find((x) => x.id === this.weatherRegion) || w.regions.find((x) => x.id === w.activeId);
+    const selectors = el(body, 'div', 'brpg-form-row');
+    fieldSelect(selectors, 'Região ativa', list, w.activeId, (v) => { w.activeId = v; this.weatherRegion = v; this.section(); });
+    fieldSelect(selectors, 'Região para editar', list, r.id, (v) => { this.weatherRegion = v; this.section(); });
+    const card = el(body, 'div', 'brpg-edit-card');
+    const actions = el(card, 'div', 'brpg-toolbar');
+    button(actions, 'Nova região', () => {
+      const item = region(uid('regiao'), `Região ${w.regions.length + 1}`);
+      w.regions.push(item); this.weatherRegion = item.id; this.weatherProfile = null; this.section();
+    }, { icon: 'plus', disabled: w.regions.length >= MAX_REGIONS });
+    button(actions, 'Remover região', () => new Confirm(this.app, `Remover “${r.name}” e seus perfis climáticos?`, () => {
+      w.regions = w.regions.filter((x) => x.id !== r.id);
+      if (w.activeId === r.id) w.activeId = w.regions[0].id;
+      this.weatherRegion = null; this.weatherProfile = null;
+      this.section();
+    }).open(), { icon: 'trash-2', disabled: w.regions.length <= 1 });
+    input(card, 'Nome da região', r.name, (v) => { r.name = v.trim(); }, { maxLength: 60 });
+    const station = c.seasons.find((s) => s.id === this.weatherProfile);
+    if (c.seasons.length) fieldSelect(card, 'Perfil a editar', [['', 'Perfil-base'], ...c.seasons.map((s) => [s.id, s.name])], station?.id || '',
+      (v) => { this.weatherProfile = v; this.section(); });
+    else info(card, 'Sem estações, a região usa o perfil-base o ano inteiro.');
+    const override = r.seasons.find((s) => s.id === station?.id);
+    if (station) {
+      check(card, `Clima próprio em ${station.name}`, !!override, (v) => {
+        if (v) r.seasons.push({ ...r.base, id: station.id });
+        else r.seasons = r.seasons.filter((s) => s.id !== station.id);
+        this.section();
+      });
+      if (!override) { info(card, 'Esta estação usa o perfil-base.'); return; }
+    }
+    const target = override || r.base;
+    fieldSelect(card, 'Aplicar perfil inicial', [['', 'Escolher bioma…'], ...BIOMES.map(([key, name]) => [key, name])], '', (v) => {
+      if (v) { Object.assign(target, biome(v)); this.section(); }
+    });
+    const fields = el(card, 'div', 'brpg-form-row');
+    for (const [key, label, lo, hi] of PROFILE_FIELDS) inlineNumber(fields, label, target[key], (v) => { target[key] = v; }, lo, hi, 'any');
   }
 }
 
@@ -1969,6 +2358,149 @@ function sunDisc(parent, sun) {
   return node;
 }
 module.exports = { moonDisc, sunDisc };
+
+    },
+    "weather-view.js": function (module, exports, load, require) {
+'use strict';
+
+const { setIcon } = require('obsidian');
+const { MAX_YEAR, sameDate } = load("calendar.js");
+const { el, button, select, info, CalendarEditor } = load("ui.js");
+const { readMinute } = load("world-clock.js");
+const { formatTime } = load("sky.js");
+const { CONDITIONS, weatherDay } = load("weather.js");
+
+const localized = (n) => n.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+function temperature(c, n) {
+  const scale = c.weather.temperature;
+  return `${Math.round(scale === 'F' ? n * 1.8 + 32 : n)} °${scale}`;
+}
+function speed(c, n) {
+  return c.weather.wind === 'mph' ? `${Math.round(n / 1.609344)} mph` : `${n} km/h`;
+}
+function mark(parent, icon, classes = 'brpg-icon') {
+  const span = el(parent, 'span', classes);
+  span.setAttribute('aria-hidden', 'true');
+  setIcon(span, icon);
+  return span;
+}
+function conditionIcon(parent, day, classes) {
+  return mark(parent, CONDITIONS[day.condition][1], classes);
+}
+function range(c, day) { return `${temperature(c, day.low)} a ${temperature(c, day.high)}`; }
+function weatherShortcut(parent, c, day, open, showRegion = false) {
+  const [condition, icon] = CONDITIONS[day.condition];
+  return button(parent, `${condition} · ${range(c, day)}${showRegion ? ' · ' + day.region : ''}`, open,
+    { icon, className: 'brpg-button brpg-weather-shortcut' });
+}
+function fact(parent, icon, label, value, note) {
+  const tile = el(parent, 'div', 'brpg-weather-fact');
+  const heading = el(tile, 'div', 'brpg-weather-fact-label');
+  mark(heading, icon);
+  el(heading, 'span', '', label);
+  el(tile, 'strong', '', value);
+  if (note) el(tile, 'small', '', note);
+}
+
+function renderWeather(root, view, c, e) {
+  const d = view.selected, p = view.plugin;
+  const pane = el(root, 'section', 'brpg-weather');
+  const heading = el(pane, 'div', 'brpg-weather-heading');
+  const title = el(heading, 'div');
+  el(title, 'h3', 'brpg-section-title', 'Clima do dia');
+  el(title, 'p', 'brpg-hint', e.format(d));
+  const configure = () => new CalendarEditor(p, c, false, 'clima').open();
+  button(heading, 'Configurar clima', configure, { icon: 'settings', iconOnly: true });
+  const day = weatherDay(c, e, d, MAX_YEAR);
+  if (!day) {
+    const blank = el(pane, 'div', 'brpg-weather-empty');
+    mark(blank, 'cloud-sun');
+    info(blank, 'O clima está desativado neste calendário.');
+    button(blank, 'Abrir configurações de clima', configure, { icon: 'settings' });
+    return null;
+  }
+
+  const w = c.weather;
+  const selectors = el(pane, 'label', 'brpg-weather-region');
+  const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
+  mark(regionLabel, 'map-pin');
+  el(regionLabel, 'span', '', 'Região da campanha');
+  select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
+    (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
+
+  const isToday = sameDate(d, view.savedToday), total = c.clock.hours * c.clock.minutes;
+  const hero = el(pane, 'article', 'brpg-weather-hero');
+  const icon = el(hero, 'span', 'brpg-weather-symbol');
+  icon.setAttribute('aria-hidden', 'true');
+  const heroText = el(hero, 'div', 'brpg-weather-hero-text');
+  const headline = el(heroText, 'strong', 'brpg-weather-condition');
+  const hTime = el(heroText, 'small', 'brpg-weather-time');
+  const degrees = el(hero, 'div', 'brpg-weather-degrees');
+  const current = el(degrees, 'strong', 'brpg-weather-temperature');
+  el(degrees, 'span', '', range(c, day));
+  const paint = (n) => {
+    const now = day.at(n / total);
+    if (hero.dataset) hero.dataset.condition = now.condition;
+    setIcon(icon, CONDITIONS[now.condition][1]);
+    headline.textContent = CONDITIONS[now.condition][0];
+    current.textContent = temperature(c, now.temperature);
+    hTime.textContent = `${isToday ? 'Hora do mundo' : 'Prévia ao meio-dia'} · ${formatTime(n, c.clock)}`;
+    return now.visibility;
+  };
+
+  const facts = el(pane, 'div', 'brpg-weather-facts');
+  fact(facts, 'wind', 'Vento', day.wind ? `${speed(c, day.wind)} · ${day.direction}` : 'Calmaria',
+    day.gust ? `Rajadas de ${speed(c, day.gust)}` : '');
+  fact(facts, 'droplets', 'Umidade', `${day.humidity}%`, `Nuvens em ${day.cloud}% do céu`);
+  fact(facts, 'umbrella', 'Precipitação', day.wet ? 'Prevista no dia' : 'Dia seco',
+    `Chance de ${day.chance}%${day.wet ? ' · intensidade ' + day.intensity + '%' : ''}`);
+  const vis = el(facts, 'div', 'brpg-weather-fact');
+  const visLabel = el(vis, 'div', 'brpg-weather-fact-label');
+  mark(visLabel, 'eye'); el(visLabel, 'span', '', 'Visibilidade');
+  const value = el(vis, 'strong');
+  const hint = el(vis, 'small');
+  function update(n) {
+    const km = paint(n);
+    value.textContent = km >= 20 ? '20 km ou mais' : `${localized(km)} km`;
+    hint.textContent = day.fog ? 'Neblina prevista neste dia' : day.wet ? 'Reduzida pela precipitação' : 'Sem neblina prevista';
+  }
+  update(isToday ? readMinute(c, view.savedToday) : Math.floor(total / 2));
+
+  const hours = el(pane, 'section', 'brpg-weather-block');
+  el(hours, 'h4', '', 'Ao longo do dia');
+  const slices = el(hours, 'div', 'brpg-weather-slices');
+  for (const [name, t] of [['Madrugada', .13], ['Manhã', .29], ['Tarde', .67], ['Noite', .92]]) {
+    const minute = Math.floor(t * total);
+    const part = day.at(minute / total);
+    const tile = el(slices, 'div', 'brpg-weather-slice');
+    el(tile, 'strong', '', name);
+    el(tile, 'small', '', formatTime(minute, c.clock));
+    conditionIcon(tile, part, 'brpg-weather-mini-icon');
+    el(tile, 'span', '', temperature(c, part.temperature));
+    el(tile, 'small', 'brpg-weather-slice-state', CONDITIONS[part.condition][0]);
+  }
+
+  const end = Math.min(day.day + 5, e.yearStart(MAX_YEAR + 1) - 1);
+  if (end > day.day) {
+    const outlook = el(pane, 'section', 'brpg-weather-block');
+    el(outlook, 'h4', '', 'Próximos dias');
+    const rows = el(outlook, 'div', 'brpg-weather-outlook');
+    for (let epoch = day.day + 1; epoch <= end; epoch++) {
+      const date = e.fromEpoch(epoch), next = weatherDay(c, e, date, MAX_YEAR);
+      const m = c.months[e.monthIndex(date.month)];
+      const b = button(rows, `Ver clima de ${e.format(date)}`, () => view.choose(date), { className: 'brpg-button brpg-weather-next', iconOnly: true });
+      conditionIcon(b, next);
+      const left = el(b, 'span', 'brpg-weather-next-date');
+      el(left, 'strong', '', `${date.day} de ${m.name}`);
+      el(left, 'small', '', CONDITIONS[next.condition][0]);
+      el(b, 'span', 'brpg-weather-next-temp', range(c, next));
+    }
+  }
+  info(pane, `Simulação do mundo · ${day.season ? 'clima de ' + day.season : 'perfil-base da região'}`);
+  return isToday ? update : null;
+}
+
+module.exports = { renderWeather, weatherShortcut };
 
     },
     "arkanis.json": function (module, exports, load, require) {

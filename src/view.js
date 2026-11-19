@@ -6,6 +6,8 @@ const { solarPositions, formatTime } = require('./sky');
 const { eclipsesForDay, nextEclipse } = require('./eclipse');
 const { mode: clockMode, readMinute } = require('./world-clock');
 const { moonDisc, sunDisc } = require('./celestial-ui');
+const { weatherDay } = require('./weather');
+const { renderWeather, weatherShortcut } = require('./weather-view');
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -38,18 +40,20 @@ class CalendarView extends ItemView {
     this.mode = 'month';
     this.category = '';
     this.showHidden = false;
+    this.timelineMonth = '';
     this.layout = 'auto';
     this.detailOpen = false;
     this.skyMinute = null;
     this.skyFollowing = true;
     this.paintSkyClock = null;
     this.paintFocusMoons = null;
+    this.paintWeatherClock = null;
   }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Basic RPG · Calendário'; }
   getIcon() { return 'calendar-days'; }
   async onOpen() { this.render(); }
-  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; replaceEl(this.contentEl); }
+  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; this.paintWeatherClock = null; replaceEl(this.contentEl); }
   clockTick() {
     const c = this.plugin.active();
     if (!c || !this.clockReadout || this.calId !== c.id) return;
@@ -61,6 +65,7 @@ class CalendarView extends ItemView {
     if (sameDate(next, this.selected)) {
       if (this.mode === 'sky' && this.skyFollowing) this.paintSkyClock?.(readMinute(c, next));
       if (this.mode === 'month') this.paintFocusMoons?.(next);
+      if (this.mode === 'weather') this.paintWeatherClock?.(readMinute(c, next));
     }
   }
   sync(c, e, world) {
@@ -68,6 +73,7 @@ class CalendarView extends ItemView {
       this.selected = { ...world };
       this.category = '';
       this.showHidden = false;
+      this.timelineMonth = '';
       this.detailOpen = false;
       this.skyMinute = null;
       this.skyFollowing = true;
@@ -89,6 +95,7 @@ class CalendarView extends ItemView {
     this.sync(c, e, worldNow);
     this.paintSkyClock = null;
     this.paintFocusMoons = null;
+    this.paintWeatherClock = null;
     const root = this.contentEl;
     root.classList.add('brpg', 'brpg-view');
     replaceEl(root);
@@ -116,32 +123,33 @@ class CalendarView extends ItemView {
 
     const tabs = el(root, 'nav', 'brpg-tabs');
     tabs.setAttribute('aria-label', 'Visualização');
-    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun']]) {
+    for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun'], ['weather', 'Clima', 'cloud-sun']]) {
       const b = button(tabs, title, () => { this.mode = key; this.render(); }, { icon });
       b.setAttribute('aria-pressed', String(this.mode === key));
     }
 
     const nav = el(root, 'div', 'brpg-navigation');
-    const monthMode = this.mode === 'month', skyMode = this.mode === 'sky';
-    nav.classList.add(skyMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
+    const monthMode = this.mode === 'month', skyMode = this.mode === 'sky', weatherMode = this.mode === 'weather';
+    const dayMode = skyMode || weatherMode;
+    nav.classList.add(dayMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
     const ordinal = (this.selected.year - 1) * c.months.length + e.monthIndex(this.selected.month);
     const epoch = e.epoch(this.selected);
     const navigate = (dir) => () => {
       this.detailOpen = false;
       if (monthMode) return this.choose(e.monthShift(this.selected, dir));
-      if (skyMode) return this.choose(e.shift(this.selected, dir));
+      if (dayMode) return this.choose(e.shift(this.selected, dir));
       const year = this.selected.year + dir;
       this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     };
-    button(nav, monthMode ? 'Mês anterior' : skyMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
-      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : skyMode ? epoch === 0 : this.selected.year === 1 });
-    if (skyMode) {
+    button(nav, monthMode ? 'Mês anterior' : dayMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
+      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : dayMode ? epoch === 0 : this.selected.year === 1 });
+    if (dayMode) {
       const d = el(nav, 'input', 'brpg-input brpg-day-input');
       d.type = 'number'; d.min = '1'; d.max = e.monthLength(this.selected.year, this.selected.month);
       d.value = this.selected.day; d.setAttribute('aria-label', 'Dia em exibição');
       d.addEventListener('change', () => this.choose({ ...this.selected, day: validNumber(d, 1, Number(d.max), this.selected.day) }));
     }
-    if (monthMode || skyMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
+    if (monthMode || dayMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
       (month) => { this.detailOpen = false; this.choose({ year: this.selected.year, month, day: 1 }); }, 'Mês em exibição');
     const y = el(nav, 'input', 'brpg-input brpg-year'); y.type = 'number'; y.min = '1'; y.max = String(MAX_YEAR);
     y.value = this.selected.year; y.setAttribute('aria-label', 'Ano em exibição');
@@ -149,23 +157,27 @@ class CalendarView extends ItemView {
       const year = validNumber(y, 1, MAX_YEAR, this.selected.year);
       this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
     });
-    button(nav, monthMode ? 'Próximo mês' : skyMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
+    button(nav, monthMode ? 'Próximo mês' : dayMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
       { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length :
-        skyMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
+        dayMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
     button(nav, 'Hoje', () => {
       this.skyFollowing = true;
       this.choose(this.plugin.worldNow(c, e));
     }, { icon: 'locate-fixed', iconOnly: true });
 
     if (skyMode) { this.renderSky(root, c, e); return; }
+    if (weatherMode) { this.paintWeatherClock = renderWeather(root, this, c, e); return; }
     const tools = el(root, 'div', 'brpg-calendar-tools');
     const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
     let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
-    if (this.category || this.showHidden) filterLabel += ' · ativos';
+    if (!c.months.some((m) => m.id === this.timelineMonth)) this.timelineMonth = '';
+    if (this.category || this.showHidden || (!monthMode && this.timelineMonth)) filterLabel += ' · ativos';
     summary(toolOptions, filterLabel, 'sliders-horizontal');
     const filters = el(toolOptions, 'div', 'brpg-toolbar');
     if (monthMode) select(filters, [['auto', 'Automático'], ['grid', 'Grade'], ['list', 'Lista']], this.layout,
       (value) => { this.layout = value; this.render(); }, 'Formato do mês');
+    else select(filters, [['', 'Todos os meses'], ...c.months.map((m) => [m.id, m.name])], this.timelineMonth,
+      (value) => { this.timelineMonth = value; this.render(); }, 'Mês na cronologia');
     const cats = [...new Set(c.events.map((x) => x.category).filter(Boolean))].sort();
     if (!cats.includes(this.category)) this.category = '';
     if (cats.length) select(filters, [['', 'Todas as categorias'], ...cats.map((cat) => [cat, cat])], this.category,
@@ -176,7 +188,14 @@ class CalendarView extends ItemView {
       }, { icon: this.showHidden ? 'eye-off' : 'eye' });
       toggle.setAttribute('aria-pressed', String(this.showHidden));
     }
-    button(tools, 'Novo evento', () => { this.detailOpen = true; new EventEditor(this.plugin, c, this.selected).open(); },
+    button(tools, 'Novo evento', () => {
+      this.detailOpen = true;
+      const date = !monthMode && this.timelineMonth && this.timelineMonth !== this.selected.month
+        ? { year: this.selected.year, month: this.timelineMonth, day: 1 } : this.selected;
+      const editor = new EventEditor(this.plugin, c, date);
+      if (this.category) editor.draft.category = this.category;
+      editor.open();
+    },
       { icon: 'plus', className: 'brpg-button mod-cta' });
     if (this.mode === 'timeline') this.renderTimeline(root, c, e);
     else this.renderMonth(root, c, e);
@@ -189,6 +208,8 @@ class CalendarView extends ItemView {
     el(title, 'h3', 'brpg-section-title', 'Céu do dia');
     el(title, 'div', 'brpg-hint', e.format(this.selected));
     button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
+    const weather = weatherDay(c, e, this.selected, MAX_YEAR);
+    if (weather) weatherShortcut(pane, c, weather, () => { this.mode = 'weather'; this.render(); }, true);
 
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
@@ -483,6 +504,8 @@ class CalendarView extends ItemView {
     };
     phases(this.savedToday);
     this.paintFocusMoons = phases;
+    const weather = weatherDay(c, e, d, MAX_YEAR);
+    if (weather) weatherShortcut(bits, c, weather, () => { this.mode = 'weather'; this.render(); });
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;
@@ -497,27 +520,65 @@ class CalendarView extends ItemView {
     const section = el(root, 'section', 'brpg-timeline');
     el(section, 'h3', 'brpg-section-title', `Cronologia · ano ${e.yearLabel(year)}`);
     const occurrences = this.filtered(c.events).map((event) => ({ event, d: e.firstOccurrenceInYear(event, year) }))
-      .filter((x) => x.d).sort((a, b) => e.epoch(a.d) - e.epoch(b.d) || a.event.title.localeCompare(b.event.title));
-    if (!occurrences.length) info(section, 'Nenhum evento no ano com o filtro atual.');
+      .filter(({ d }) => d && (!this.timelineMonth || d.month === this.timelineMonth))
+      .map((item) => ({ ...item, epoch: e.epoch(item.d) }))
+      .sort((a, b) => a.epoch - b.epoch || a.event.title.localeCompare(b.event.title, 'pt-BR'));
+    if (!occurrences.length) { info(section, 'Nenhum evento neste recorte.'); return; }
+    const count = occurrences.length;
+    const monthName = c.months.find((m) => m.id === this.timelineMonth)?.name;
+    el(section, 'p', 'brpg-hint', `${count} ${count === 1 ? 'evento' : 'eventos'} · ${monthName || 'Todos os meses'}`);
     const max = 200;
-    for (const { event, d } of occurrences.slice(0, max)) this.eventCard(section, c, e, event, d, true);
-    if (occurrences.length > max) info(section, `Mostrando os primeiros ${max}. Filtre por categoria para ver outro recorte.`);
+    let month, monthBody, previous, entry;
+    for (const { event, d, epoch } of occurrences.slice(0, max)) {
+      if (d.month !== month) {
+        month = d.month;
+        monthBody = el(section, 'section', 'brpg-timeline-month');
+        el(monthBody, 'h4', 'brpg-timeline-month-title', c.months[e.monthIndex(month)].name);
+      }
+      if (epoch !== previous) {
+        previous = epoch;
+        const today = sameDate(d, this.savedToday);
+        const row = el(monthBody, 'div', `brpg-timeline-day${today ? ' is-today' : ''}`);
+        const badge = button(row, `Abrir ${e.format(d)} no calendário`, () => {
+          this.mode = 'month'; this.detailOpen = true; this.choose(d);
+        }, { className: 'brpg-button brpg-timeline-date', iconOnly: true });
+        el(badge, 'strong', '', String(d.day));
+        if (today) { badge.setAttribute('aria-current', 'date'); el(badge, 'span', '', 'Hoje'); }
+        entry = el(row, 'div', 'brpg-timeline-entries');
+        const meta = e.dayMeta(d);
+        el(entry, 'span', 'brpg-timeline-weekday', meta.special?.name || meta.weekday || 'Fora da semana');
+      }
+      this.eventCard(entry, c, e, event, d, true);
+    }
+    if (count > max) info(section, `Mostrando os primeiros ${max}. Filtre por mês ou categoria para ver outro recorte.`);
   }
-  eventCard(root, c, e, event, d, showDate = false) {
-    const card = el(root, 'article', 'brpg-event');
-    const top = el(card, 'div', 'brpg-event-heading');
-    this.dot(top, event.color);
-    el(top, 'h4', '', event.title);
-    if (event.hidden) el(top, 'span', 'brpg-chip', 'Reservado');
+  eventCard(root, c, e, event, d, compact = false) {
+    const card = el(root, compact ? 'details' : 'article', compact ? 'brpg-timeline-event' : 'brpg-event');
     const details = [];
-    if (showDate) details.push(e.format(d));
     if (event.category) details.push(event.category);
     if (event.repeat === 'year') details.push('Anual');
     if (event.repeat === 'season') details.push('Início de estação');
     if (event.end && event.repeat === 'none') details.push(`Até ${e.format(event.end)}`);
-    if (details.length) el(card, 'p', 'brpg-hint', details.join(' · '));
-    if (event.description) el(card, 'p', 'brpg-event-description', event.description);
-    const actions = el(card, 'div', 'brpg-toolbar');
+    let body = card;
+    if (compact) {
+      const top = el(card, 'summary', 'brpg-timeline-summary');
+      this.dot(top, event.color);
+      const label = el(top, 'span', 'brpg-timeline-label');
+      el(label, 'strong', '', event.title);
+      if (event.hidden) details.unshift('Reservado');
+      if (details.length) el(label, 'small', '', details.join(' · '));
+      const arrow = el(top, 'span', 'brpg-icon brpg-timeline-chevron');
+      arrow.setAttribute('aria-hidden', 'true'); setIcon(arrow, 'chevron-down');
+      body = el(card, 'div', 'brpg-timeline-event-body');
+    } else {
+      const top = el(card, 'div', 'brpg-event-heading');
+      this.dot(top, event.color);
+      el(top, 'h4', '', event.title);
+      if (event.hidden) el(top, 'span', 'brpg-chip', 'Reservado');
+      if (details.length) el(card, 'p', 'brpg-hint', details.join(' · '));
+    }
+    if (event.description) el(body, 'p', 'brpg-event-description', event.description);
+    const actions = el(body, 'div', 'brpg-toolbar');
     if (event.note) button(actions, 'Abrir nota', this.run(() => this.plugin.openNote(event.note)), { icon: 'file-text' });
     button(actions, 'Editar evento', () => new EventEditor(this.plugin, c, d, event).open(), { icon: 'pencil', iconOnly: true });
     button(actions, 'Remover evento', () => new Confirm(this.app, `Remover “${event.title}” deste calendário?`,

@@ -139,8 +139,11 @@ test('eventos com data invertida são rejeitados', () => {
   assert.throws(() => validateCalendar(c), /anterior/);
 });
 test('backup próprio tem round-trip independente do estado original', () => {
-  const after = decodeImport(encodeExport(preset));
-  assert.deepEqual(after.calendar, preset);
+  const encoded = encodeExport(preset);
+  const after = decodeImport(encoded);
+  assert.deepEqual(after.calendar, encoded.calendar);
+  assert.deepEqual(after.calendar.weather.regions.map((r) => r.name), ['Solus', 'Centrus', 'Nortus']);
+  assert.equal(preset.weather, undefined);
   after.calendar.name = 'Editado';
   assert.equal(preset.name, 'Arkanis');
   assert.deepEqual(after.warnings, []);

@@ -12,7 +12,8 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Usar o relógio do mundo em tempo real, com avanço calculado mesmo quando o Obsidian fica fechado, ou manter o calendário no modo manual.
 - Calcular eclipses solares e lunares e encontrar o próximo pico no calendário.
 - Criar eventos pontuais, de vários dias, anuais ou ligados ao início de uma estação. Vincular notas de sessão, colorir, categorizar e marcar eventos como reservados.
-- Navegar pela cronologia de um ano com filtros de categoria e de eventos reservados. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
+- Navegar pela cronologia de um ano, agrupada por mês e dia, com filtros de mês, categoria e eventos reservados. Toque na data para abrir o dia no calendário, ou no evento para ver os detalhes e ações. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
+- Simular temperatura, vento, rajadas, neblina, umidade, cobertura de nuvens e precipitação em diferentes regiões e estações.
 - Importar JSON do Fantasy Calendar e salvar backups próprios do calendário ativo dentro do cofre.
 
 ## Primeiro uso
@@ -21,7 +22,7 @@ Abra o ícone de calendário do Basic RPG na faixa lateral ou use a paleta de co
 
 O preset **Arkanis** vem pronto, começando em **1 de Arkanis, ano 1, às 00:00**. Ele tem 26 meses, incluindo Skaryel, semanas de 12 dias, quatro estações, três luas, três sóis e o relógio de 32 horas por dia, com 64 minutos por hora. Os botões de avançar e voltar mudam a data do mundo. As setas próximas ao seletor de mês só navegam pela visualização.
 
-Para criar outro calendário, use **Novo calendário** na barra ou **Configurações → Basic RPG → Novo calendário**. O editor visual tem seções para semana e relógio, meses, dias especiais, luas, estações e eras. Dias especiais entram ao final de um mês e podem ficar fora da contagem semanal. Para um dia que ocorre a cada quatro anos, exceto nos múltiplos de 100 e restaurado nos múltiplos de 400, informe **4**, **100** e **400** na regra. A contagem começa no ano 1.
+Para criar outro calendário, use **Novo calendário** na barra ou **Configurações → Basic RPG → Novo calendário**. O editor visual tem seções para semana e relógio, meses, dias especiais, luas, sóis, estações, clima e eras. Dias especiais entram ao final de um mês e podem ficar fora da contagem semanal. Para um dia que ocorre a cada quatro anos, exceto nos múltiplos de 100 e restaurado nos múltiplos de 400, informe **4**, **100** e **400** na regra. A contagem começa no ano 1.
 
 Para um evento de sessão, selecione a data e clique em **Novo evento**. Escolha uma nota existente para abrir a sessão diretamente pelo calendário. Eventos marcados como reservados somem da visualização padrão, mas continuam no cofre e no backup. Isso é um filtro de interface, não uma permissão de acesso.
 
@@ -51,13 +52,23 @@ O Basic RPG diferencia eclipses solares **totais**, **parciais** e **anulares** 
 
 Em **Editar calendário → Luas → Órbita e eclipses**, você pode ajustar a inclinação, o nó ascendente, o raio aparente da lua e o raio da sombra. Luas ocultas não entram na previsão. O modelo usa discos angulares e um plano lunar circular, com a direção solar fixa ao longo de cada dia. Não simula paralaxe, mapas de sombra nem a interação gravitacional entre os corpos. É uma previsão para mundos fictícios. [Referência de geometria dos eclipses](https://science.nasa.gov/eclipses/geometry/).
 
+## Clima
+
+Abra a aba **Clima**, use o atalho em **Dia em foco** ou **Céu**, ou encontre **Abrir clima da campanha** na paleta de comandos. A previsão mostra condição atual, mínima e máxima, vento e direção, rajadas, umidade, nuvens, chance e intensidade de precipitação e visibilidade. Neblina tende a ocorrer à noite e de manhã. Dependendo do frio, da intensidade e do vento, a precipitação pode aparecer como garoa, chuva, tempestade, neve ou nevasca.
+
+O dia atual acompanha o relógio do mundo. Nas outras datas, o destaque é a prévia ao meio-dia, com quatro horários para consultar e até cinco dias seguintes. Toque em uma data da previsão para abri-la sem mudar o relógio da campanha.
+
+Em **Clima → Configurar clima**, escolha a região ativa ou crie outra. Cada região tem um perfil-base e pode substituir os valores por estação. Use perfis iniciais de clima temperado, quente e úmido, árido, frio ou de costa úmida. Edite as faixas de temperatura, chuva, vento, umidade e neblina, o ponto de congelamento, as unidades e o atraso das condições em relação às estações. Sem estações, o perfil-base vale o ano todo. A temperatura e o vento são configurados em °C e km/h mesmo se a visualização usar °F e mph.
+
+Arkanis vem com **Solus**, **Centrus** e **Nortus**, com perfis iniciais editáveis e **Centrus** selecionada. Outros mundos sem clima salvo começam com a opção desligada. A previsão é uma simulação fictícia independente, sem internet, baseada na data, na região e na semente. A mesma configuração repete a previsão mesmo após fechar o Obsidian. Alterar semente, perfis ou estrutura do calendário pode mudar o clima de datas antigas.
+
 ## Importação e backup
 
 Em **Configurações → Basic RPG**, use **Importar JSON**. Cada importação vira um novo calendário, sem sobrescrever os existentes.
 
-O importador aceita a estrutura usada pelo calendário de Arkanis e configurações semelhantes do Fantasy Calendar, com meses anuais, semana global, dias especiais no fim do mês, estações, luas e eventos pontuais ou de início de estação. Quando encontra uma regra avançada de evento que não consegue representar, lista o evento não importado. Se a regra incompatível altera a estrutura de datas, o importador rejeita o arquivo em vez de mover as datas silenciosamente. Clima e dados de localização não são importados. O Fantasy Calendar não carrega o modelo solar do Basic RPG. O importador aplica o céu padrão se reconhecer o calendário de Arkanis. O JSON exportado é um backup no formato **Basic RPG**, não um arquivo de exportação do Fantasy Calendar nem um backup nativo do Calendarium.
+O importador aceita a estrutura usada pelo calendário de Arkanis e configurações semelhantes do Fantasy Calendar, com meses anuais, semana global, dias especiais no fim do mês, estações, luas e eventos pontuais ou de início de estação. Quando encontra uma regra avançada de evento que não consegue representar, lista o evento não importado. Se a regra incompatível altera a estrutura de datas, o importador rejeita o arquivo em vez de mover as datas silenciosamente. Quando o JSON inclui o clima do Fantasy Calendar, a importação preserva as regiões personalizadas, o perfil sazonal de temperatura e precipitação, a semente e o deslocamento. Os presets do site, curvas de ruído, fusos e horários de sol por região não são importados. O Basic RPG calcula sua própria previsão a partir dos parâmetros importados, que não precisa coincidir com a do site. O Fantasy Calendar não carrega o modelo solar do Basic RPG. O importador aplica o céu padrão se reconhecer o calendário de Arkanis. O JSON exportado é um backup no formato **Basic RPG**, não um arquivo de exportação do Fantasy Calendar nem um backup nativo do Calendarium.
 
-A função **Salvar JSON no cofre** gera um novo arquivo, incluindo os sóis e as órbitas lunares editadas, sem substituir backups anteriores. Os eventos armazenados também podem ser sincronizados como dados do plugin pelo mecanismo de sincronização do cofre, quando configurado no Obsidian.
+A função **Salvar JSON no cofre** gera um novo arquivo, incluindo os sóis, as órbitas lunares e os perfis de clima, sem substituir backups anteriores. Os eventos armazenados também podem ser sincronizados como dados do plugin pelo mecanismo de sincronização do cofre, quando configurado no Obsidian.
 
 ## Instalação manual
 

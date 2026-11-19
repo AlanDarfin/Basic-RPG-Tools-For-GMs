@@ -58,7 +58,7 @@
 .brpg-navigation { display: grid; gap: 4px; align-items: center; margin: 6px 0; }
 .brpg-nav-month { grid-template-columns: auto minmax(0, 1fr) minmax(2rem, 3.3rem) auto auto; }
 .brpg-nav-day { grid-template-columns: auto minmax(1.8rem, 2.35rem) minmax(0, 1fr) minmax(2rem, 3.3rem) auto auto; }
-.brpg-nav-year { grid-template-columns: auto minmax(2rem, 4rem) auto auto; justify-content: start; }
+.brpg-nav-year { grid-template-columns: auto minmax(3.25rem, 1fr) auto auto; }
 .brpg-navigation .brpg-input { width: 100%; }
 .brpg-navigation input { text-align: center; padding-inline: 2px; appearance: textfield; }
 .brpg-navigation input::-webkit-inner-spin-button { appearance: none; }
@@ -296,3 +296,115 @@
   .brpg-calendar-content .brpg-selected { grid-column: 2; grid-row: 1; }
 }
 .is-mobile .brpg-view { padding-bottom: max(18px, env(safe-area-inset-bottom)); }
+
+/* Compact, dated timeline and regional weather. */
+.brpg .brpg-event {
+  background: var(--brpg-surface);
+  background: color-mix(in srgb, var(--brpg-surface) 86%, var(--brpg-ink));
+}
+.brpg-timeline > .brpg-hint { margin-top: 2px; }
+.brpg-timeline-month { margin-top: 10px; }
+.brpg .brpg-timeline-month-title {
+  margin: 0 0 5px; padding: 3px 0 5px; border-bottom: 1px solid var(--brpg-border);
+  color: var(--brpg-ink); font-size: .9em; font-weight: 700;
+}
+.brpg-timeline-day {
+  display: grid; position: relative; grid-template-columns: 2.55rem minmax(0, 1fr);
+  align-items: start; gap: 5px 8px; padding-block: 3px 6px;
+}
+.brpg-timeline-day + .brpg-timeline-day { border-top: 1px solid var(--brpg-border); }
+.brpg .brpg-timeline-date {
+  flex-direction: column; gap: 1px; padding: 3px; line-height: 1.05; width: 100%;
+  font-variant-numeric: tabular-nums; background: var(--brpg-surface);
+}
+.brpg-timeline-date strong { font-size: 1.12em; }
+.brpg-timeline-date span { font-size: .68em; }
+.brpg-timeline-day.is-today .brpg-timeline-date { border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface)); }
+.brpg-timeline-entries { min-width: 0; display: grid; gap: 2px; border-inline-start: 1px solid var(--brpg-border); padding-inline-start: 7px; }
+.brpg-timeline-weekday { font-size: .73em; color: var(--brpg-muted); line-height: 1.2; margin: 2px 6px 0; overflow-wrap: anywhere; }
+.brpg .brpg-timeline-event { border: 1px solid transparent; border-radius: 6px; margin: 0; min-width: 0; }
+.brpg .brpg-timeline-event[open] { background: var(--brpg-surface); border-color: var(--brpg-border); }
+.brpg .brpg-timeline-summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+  list-style: none; gap: 7px; min-height: 30px; padding: 3px 6px;
+  border-radius: 5px; color: var(--brpg-ink); cursor: pointer;
+}
+.brpg-timeline-summary::-webkit-details-marker { display: none; }
+.brpg-timeline-summary::marker { content: ""; }
+.brpg .brpg-timeline-summary:hover { background: var(--brpg-faint, var(--background-modifier-hover)); }
+.brpg .brpg-timeline-summary:focus-visible { outline: 2px solid var(--brpg-accent); outline-offset: -2px; }
+.brpg-timeline-label { display: grid; gap: 2px; min-width: 0; line-height: 1.2; }
+.brpg-timeline-label > strong, .brpg-timeline-label > small { overflow-wrap: anywhere; }
+.brpg-timeline-label > strong { font-size: .9em; font-weight: 650; }
+.brpg-timeline-label > small { color: var(--brpg-muted); font-size: .72em; }
+.brpg-timeline-chevron { color: var(--brpg-muted); }
+.brpg-timeline-event[open] .brpg-timeline-chevron { transform: rotate(180deg); }
+.brpg-timeline-event-body { padding: 0 7px 6px; }
+.brpg-timeline-event-body .brpg-event-description { color: var(--brpg-ink); font-size: .88em; }
+.is-mobile .brpg .brpg-timeline-summary { min-height: 35px; }
+
+.brpg-weather { display: grid; gap: 8px; }
+.brpg-weather-heading { display: flex; justify-content: space-between; align-items: center; gap: 7px; }
+.brpg-weather-heading .brpg-hint { margin: 3px 0 0; }
+.brpg-weather-region {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 7px;
+  padding: 4px 7px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius);
+}
+.brpg-weather-region-label, .brpg-weather-fact-label { display: flex; align-items: center; gap: 5px; color: var(--brpg-muted); font-size: .79em; }
+.brpg-weather-region select { width: 100%; }
+.brpg-weather-hero {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px;
+  padding: 10px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius);
+  --brpg-weather-tone: #bd8845;
+  background: var(--brpg-surface);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--brpg-weather-tone) 24%, var(--brpg-surface)), var(--brpg-surface) 86%);
+}
+.brpg-weather-hero[data-condition="mist"], .brpg-weather-hero[data-condition="fog"], .brpg-weather-hero[data-condition="cloud"],
+.brpg-weather-hero[data-condition="gale"] { --brpg-weather-tone: #758e9e; }
+.brpg-weather-hero[data-condition="rain"], .brpg-weather-hero[data-condition="downpour"], .brpg-weather-hero[data-condition="drizzle"],
+.brpg-weather-hero[data-condition="flurry"], .brpg-weather-hero[data-condition="snow"], .brpg-weather-hero[data-condition="sleet"],
+.brpg-weather-hero[data-condition="blizzard"] { --brpg-weather-tone: #508cb8; }
+.brpg-weather-hero[data-condition="storm"] { --brpg-weather-tone: #8966bf; }
+.brpg-weather-symbol, .brpg-weather-symbol > svg { display: block; width: 33px; height: 33px; }
+.brpg-weather-hero-text, .brpg-weather-degrees { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.brpg-weather-condition { line-height: 1.08; font-size: 1.05em; }
+.brpg-weather-degrees { text-align: end; font-variant-numeric: tabular-nums; }
+.brpg-weather-temperature { line-height: 1; font-size: 1.55em; }
+.brpg-weather-time, .brpg-weather-degrees > span { color: var(--brpg-muted); font-size: .71em; }
+.brpg-weather-facts, .brpg-weather-slices { display: grid; gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.brpg-weather-fact, .brpg-weather-slice {
+  display: grid; gap: 2px; min-width: 0; align-content: start;
+  border: 1px solid var(--brpg-border); border-radius: 7px; padding: 6px 7px; overflow-wrap: anywhere;
+}
+.brpg-weather-fact > strong { font-size: .92em; }
+.brpg-weather-fact small, .brpg-weather-slice small, .brpg-weather-next small { color: var(--brpg-muted); font-size: .75em; }
+.brpg-weather-block h4 { margin: 3px 0 6px; font-size: .88em; }
+.brpg-weather-slice { grid-template-columns: minmax(0, 1fr) auto; align-items: center; font-size: .88em; }
+.brpg-weather-slice > small:nth-child(2), .brpg-weather-slice > span:not(.brpg-weather-mini-icon) { text-align: end; }
+.brpg-weather-slice-state { grid-column: 1 / -1; }
+.brpg-weather-mini-icon, .brpg-weather-mini-icon svg { width: 19px; height: 19px; display: block; }
+.brpg-weather-outlook { border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); overflow: hidden; }
+.brpg .brpg-weather-next {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; text-align: start; width: 100%;
+  padding: 5px 7px; border: 0; border-bottom: 1px solid var(--brpg-border); border-radius: 0;
+}
+.brpg .brpg-weather-next:last-child { border-bottom: 0; }
+.brpg-weather-next-date { display: grid; min-width: 0; gap: 1px; text-align: start; overflow-wrap: anywhere; }
+.brpg-weather-next-temp { font-size: .81em; font-variant-numeric: tabular-nums; text-align: end; }
+.brpg .brpg-weather-shortcut { min-height: 28px; justify-content: flex-start; text-align: start; font-size: .77em; }
+.brpg-weather-empty { display: grid; justify-items: start; gap: 5px; padding: 9px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); }
+@container brpg (min-width: 525px) {
+  .brpg-weather-facts, .brpg-weather-slices { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@container brpg (max-width: 370px) {
+  .brpg .brpg-tabs .brpg-button { gap: 3px; font-size: .77em; padding-inline: 3px; }
+  .brpg-tabs .brpg-icon, .brpg-tabs .brpg-icon svg { width: 12px; height: 12px; }
+}
+@container brpg (max-width: 360px) {
+  .brpg .brpg-tabs .brpg-button { flex-direction: column; line-height: 1.2; }
+}
+@container brpg (max-width: 295px) {
+  .brpg-weather-hero { gap: 6px; padding: 7px; }
+  .brpg-weather-symbol, .brpg-weather-symbol > svg { width: 26px; height: 26px; }
+  .brpg-weather-temperature { font-size: 1.25em; }
+}

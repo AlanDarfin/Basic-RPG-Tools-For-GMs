@@ -6,6 +6,7 @@ const { DEFAULT_COLOR } = require('./imports');
 const { MAX_SUNS, emptySky } = require('./sky');
 const { eclipseDefaults } = require('./eclipse');
 const { mode: clockMode, alignLocal } = require('./world-clock');
+const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, biome, region, defaultWeather } = require('./weather');
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -140,7 +141,7 @@ class CalendarEditor extends RPGModal {
   onOpen() {
     const root = this.frame();
     const bar = el(root, 'div', 'brpg-toolbar');
-    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['eras', 'Eras']],
+    select(bar, [['geral', 'Geral'], ['meses', 'Meses'], ['extras', 'Dias especiais'], ['luas', 'Luas'], ['sois', 'Sóis'], ['estacoes', 'Estações'], ['clima', 'Clima'], ['eras', 'Eras']],
       this.tab, (v) => { this.tab = v; this.section(); }, 'Seção do editor');
     this.form = el(root, 'div', 'brpg-form');
     this.section();
@@ -296,12 +297,18 @@ class CalendarEditor extends RPGModal {
           fieldSelect(row, 'Mês', monthOptions(c), x.month, (v) => { x.month = v; });
           inlineNumber(row, 'Dia inicial', x.day, (v) => { x.day = v; }, 1, 240);
         }
-        button(card, 'Remover estação', () => { c.seasons.splice(i, 1); this.section(); }, { icon: 'trash-2' });
+        button(card, 'Remover estação', () => {
+          c.seasons.splice(i, 1);
+          for (const r of c.weather?.regions || []) r.seasons = r.seasons.filter((p) => p.id !== x.id);
+          this.section();
+        }, { icon: 'trash-2' });
       });
       button(root, 'Adicionar estação', () => {
         c.seasons.push({ id: uid('estacao'), name: 'Nova estação', month: c.months[0].id, day: 1, duration: 90, color: DEFAULT_COLOR });
         this.section();
       }, { icon: 'plus' });
+    } else if (this.tab === 'clima') {
+      this.weatherSection(c);
     } else {
       const root = this.group('Eras', 'As eras só mudam como o ano aparece. Datas e eventos mantêm a contagem absoluta.');
       c.eras.forEach((x, i) => {
@@ -314,6 +321,56 @@ class CalendarEditor extends RPGModal {
       });
       button(root, 'Adicionar era', () => { c.eras.push({ name: 'Nova era', start: 1, reset: true }); this.section(); }, { icon: 'plus' });
     }
+  }
+  weatherSection(c) {
+    const w = c.weather ||= defaultWeather();
+    const general = this.group('Simulação do clima', 'A mesma semente, data e região reproduzem o mesmo clima. Não usa internet.');
+    check(general, 'Ativar o clima neste calendário', w.enabled, (v) => { w.enabled = v; });
+    const setup = el(general, 'div', 'brpg-form-row');
+    input(setup, 'Semente do clima', w.seed, (v) => { w.seed = v.trim(); }, { maxLength: 80 });
+    inlineNumber(setup, 'Atraso do clima (dias)', w.offset, (v) => { w.offset = v; }, -MAX_OFFSET, MAX_OFFSET);
+    inlineNumber(setup, 'Ponto de congelamento (°C)', w.freeze, (v) => { w.freeze = v; }, -100, 100, 'any');
+    fieldSelect(setup, 'Exibir temperatura em', [['C', 'Celsius (°C)'], ['F', 'Fahrenheit (°F)']], w.temperature, (v) => { w.temperature = v; });
+    fieldSelect(setup, 'Exibir vento em', [['kmh', 'km/h'], ['mph', 'mph']], w.wind, (v) => { w.wind = v; });
+
+    const body = this.group('Regiões', 'A região ativa vale para a campanha. Edite o perfil-base e ajuste só as estações que precisarem de um clima próprio.');
+    const list = w.regions.map((r) => [r.id, r.name || 'Região sem nome']);
+    const r = w.regions.find((x) => x.id === this.weatherRegion) || w.regions.find((x) => x.id === w.activeId);
+    const selectors = el(body, 'div', 'brpg-form-row');
+    fieldSelect(selectors, 'Região ativa', list, w.activeId, (v) => { w.activeId = v; this.weatherRegion = v; this.section(); });
+    fieldSelect(selectors, 'Região para editar', list, r.id, (v) => { this.weatherRegion = v; this.section(); });
+    const card = el(body, 'div', 'brpg-edit-card');
+    const actions = el(card, 'div', 'brpg-toolbar');
+    button(actions, 'Nova região', () => {
+      const item = region(uid('regiao'), `Região ${w.regions.length + 1}`);
+      w.regions.push(item); this.weatherRegion = item.id; this.weatherProfile = null; this.section();
+    }, { icon: 'plus', disabled: w.regions.length >= MAX_REGIONS });
+    button(actions, 'Remover região', () => new Confirm(this.app, `Remover “${r.name}” e seus perfis climáticos?`, () => {
+      w.regions = w.regions.filter((x) => x.id !== r.id);
+      if (w.activeId === r.id) w.activeId = w.regions[0].id;
+      this.weatherRegion = null; this.weatherProfile = null;
+      this.section();
+    }).open(), { icon: 'trash-2', disabled: w.regions.length <= 1 });
+    input(card, 'Nome da região', r.name, (v) => { r.name = v.trim(); }, { maxLength: 60 });
+    const station = c.seasons.find((s) => s.id === this.weatherProfile);
+    if (c.seasons.length) fieldSelect(card, 'Perfil a editar', [['', 'Perfil-base'], ...c.seasons.map((s) => [s.id, s.name])], station?.id || '',
+      (v) => { this.weatherProfile = v; this.section(); });
+    else info(card, 'Sem estações, a região usa o perfil-base o ano inteiro.');
+    const override = r.seasons.find((s) => s.id === station?.id);
+    if (station) {
+      check(card, `Clima próprio em ${station.name}`, !!override, (v) => {
+        if (v) r.seasons.push({ ...r.base, id: station.id });
+        else r.seasons = r.seasons.filter((s) => s.id !== station.id);
+        this.section();
+      });
+      if (!override) { info(card, 'Esta estação usa o perfil-base.'); return; }
+    }
+    const target = override || r.base;
+    fieldSelect(card, 'Aplicar perfil inicial', [['', 'Escolher bioma…'], ...BIOMES.map(([key, name]) => [key, name])], '', (v) => {
+      if (v) { Object.assign(target, biome(v)); this.section(); }
+    });
+    const fields = el(card, 'div', 'brpg-form-row');
+    for (const [key, label, lo, hi] of PROFILE_FIELDS) inlineNumber(fields, label, target[key], (v) => { target[key] = v; }, lo, hi, 'any');
   }
 }
 

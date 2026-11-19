@@ -2,6 +2,7 @@
 const { assert, copy, validateCalendar, CalendarEngine } = require('./calendar');
 const { ensureSky } = require('./sky');
 const { ensureEclipseOrbits } = require('./eclipse');
+const { MAX_REGIONS, MAX_OFFSET, defaultWeather, region, ensureWeather } = require('./weather');
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -22,6 +23,57 @@ function parseInterval(value) {
   return { every: positives[0], except: negatives[0] || 0, also: positives[1] || 0 };
 }
 
+function importFantasyWeather(cal, seasonData, dynamic, warnings) {
+  const g = seasonData?.global_settings;
+  if (typeof g?.enable_weather !== 'boolean') { ensureWeather(cal); return; }
+  const settings = defaultWeather();
+  settings.enabled = g.enable_weather;
+  if (typeof g.seed === 'number' || typeof g.seed === 'string') settings.seed = String(g.seed).trim().slice(0, 80) || settings.seed;
+  if (Number.isInteger(Number(g.weather_offset)) && Math.abs(Number(g.weather_offset)) <= MAX_OFFSET) settings.offset = Number(g.weather_offset);
+  else if (g.weather_offset !== undefined) warnings.push('O deslocamento de clima não suportado foi mantido em zero.');
+  const imperialTemp = ['imperial', 'both_i'].includes(g.temp_sys);
+  if (imperialTemp) settings.temperature = 'F';
+  if (['imperial', 'both_i'].includes(g.wind_sys)) settings.wind = 'mph';
+  const locations = Array.isArray(seasonData.locations) ? seasonData.locations : [];
+  const seen = new Set();
+  const imported = [];
+  let skipped = 0, invalidProfile = false;
+  const numeric = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim())) ? Number(v) : NaN;
+  const pct = (v) => {
+    const n = numeric(v);
+    return n >= 0 && n <= 1 ? Math.round(n * 10000) / 100 : NaN;
+  };
+  const toC = (v) => imperialTemp ? Math.round((numeric(v) - 32) * 500 / 9) / 100 : numeric(v);
+  for (const [i, loc] of locations.slice(0, MAX_REGIONS).entries()) {
+    const name = text(loc?.name, 60) || ('Região ' + (i + 1));
+    const key = name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+    if (seen.has(key)) { skipped++; continue; }
+    seen.add(key);
+    const r = region('fc-regiao-' + (i + 1), name);
+    for (const [j, s] of cal.seasons.entries()) {
+      const data = loc?.seasons?.[j]?.weather;
+      if (!data) continue;
+      const low = toC(data.temp_low), high = toC(data.temp_high), rain = pct(data.precipitation), intensity = pct(data.precipitation_intensity);
+      if (!(low >= -120 && low <= high && high <= 120 && Number.isFinite(rain) && Number.isFinite(intensity))) { invalidProfile = true; continue; }
+      r.seasons.push({ ...r.base, id: s.id, low, high, rain, intensity,
+        humidity: 52 + Math.round(rain * .42), fog: 12 + Math.round(rain * .55) });
+    }
+    imported.push(r);
+  }
+  if (imported.length) {
+    settings.regions = imported;
+    const index = numeric(dynamic.location);
+    const requested = Number.isInteger(index) && index >= 0 && dynamic.custom_location === true ? 'fc-regiao-' + (index + 1) : '';
+    settings.activeId = imported.find((r) => r.id === requested)?.id || imported[0].id;
+  }
+  cal.weather = settings;
+  if (g.enable_weather) {
+    if (!imported.length || dynamic.custom_location === false) warnings.push('Presets de localização do Fantasy Calendar não são importados. Selecione ou configure uma região no Basic RPG.');
+    if (imported.length) warnings.push('Temperaturas, precipitação e regiões personalizadas importadas. A previsão usa o motor do Basic RPG, sem as curvas de ruído, horários do sol ou fusos das regiões do Fantasy Calendar.');
+  }
+  if (locations.length > MAX_REGIONS || skipped) warnings.push('Algumas regiões foram omitidas por exceder o limite ou repetir um nome.');
+  if (invalidProfile) warnings.push('Perfis sazonais de clima inválidos não foram importados. Essas estações usarão o perfil-base.');
+}
 function importFantasy(raw) {
   const s = raw.static_data, y = s?.year_data, d = raw.dynamic_data;
   assert(y && d && Array.isArray(y.timespans) && Array.isArray(y.global_week), 'Esse não parece um arquivo do Fantasy Calendar.');
@@ -79,7 +131,7 @@ function importFantasy(raw) {
     current: { ...date([d.year, d.timespan, d.day]), hour: Number(d.hour || 0), minute: Number(d.minute || 0) },
     events,
   };
-  if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
+  importFantasyWeather(cal, s.seasons, d, warnings);
   validateCalendar(cal);
   ensureSky(cal, new CalendarEngine(cal).yearStart(2));
   ensureEclipseOrbits(cal);
@@ -93,10 +145,15 @@ function decodeImport(raw) {
     const calendar = validateCalendar(copy(raw.calendar));
     ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
     ensureEclipseOrbits(calendar);
+    ensureWeather(calendar);
     return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
 }
-function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: ensureEclipseOrbits(copy(validateCalendar(calendar))) }; }
+function encodeExport(calendar) {
+  const snapshot = ensureEclipseOrbits(copy(validateCalendar(calendar)));
+  ensureWeather(snapshot);
+  return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: snapshot };
+}
 module.exports = { decodeImport, encodeExport, importFantasy, parseInterval, DEFAULT_COLOR };

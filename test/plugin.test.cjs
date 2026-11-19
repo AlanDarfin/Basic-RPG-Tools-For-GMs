@@ -90,7 +90,7 @@ async function type(root, label, value) { const x = labelInput(root, label); x.v
 test('ciclo de vida abre calendário, navega sem mudar data, avança e grava', async () => {
   const { p, leaves } = mock();
   await p.onload();
-  assert.equal(p.commands.length, 7);
+  assert.equal(p.commands.length, 8);
   await p.open(false);
   const view = leaves[0].view, root = view.contentEl;
   assert.match(root.textContent, /1 de Arkanis, ano 1 · 00:00/);
@@ -259,4 +259,90 @@ test('editar calendário sem mexer no relógio mantém a âncora e a hora live',
   const saved=m.p.active();
   assert.equal(saved.clockSync.since,stable);
   assert.deepEqual(plain(m.p.worldNow(saved)),plain(before));
+});
+
+test('cronologia agrupa mês e dia, mantém ações recolhidas e abre a data no calendário', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Cronologia').click();
+  const timeline = root.querySelector('.brpg-timeline');
+  const first = timeline.querySelector('.brpg-timeline-day');
+  const events = first.all((x) => x.tag === 'details');
+  assert.equal(first.querySelector('.brpg-timeline-date').textContent, '1Hoje');
+  assert.equal(events.length, 2);
+  assert.match(events[0].children[0].textContent, /Arkas, A Criação/);
+  assert.match(events[1].children[0].textContent, /Velanthir.*Início de estação/);
+  assert.ok(events.every((x) => !x.open && x.children[0].tag === 'summary' && pickButton(x.children[1], 'Editar evento')));
+  const monthFilter = root.all((x) => x.attributes['aria-label'] === 'Mês na cronologia')[0];
+  monthFilter.value = 'mes-1'; await monthFilter.emit('change');
+  assert.equal(root.querySelector('.brpg-timeline').all((x) => x.tag === 'section').length, 1);
+  await pickButton(root, 'Abrir 1 de Arkanis, ano 1 no calendário').click();
+  assert.ok(root.querySelector('.brpg-selected'));
+  assert.equal(m.leaves[0].view.mode, 'month');
+});
+
+test('clima atualiza com o relógio, troca região e navega a previsão sem alterar o mundo', async () => {
+  const { p, leaves } = mock();
+  let now = 1800000000000;
+  p.clockNow = () => now;
+  await p.onload(); await p.open(false);
+  const root = leaves[0].view.contentEl;
+  assert.ok(root.querySelector('.brpg-weather-shortcut'));
+  await pickButton(root, 'Clima').click();
+  assert.match(root.querySelector('.brpg-weather').textContent, /Clima do dia.*Centrus.*00:00.*Umidade.*Visibilidade.*Próximos dias/);
+  assert.equal(root.querySelector('.brpg-weather-outlook').children.length, 5);
+  now += .5 * 86400000; p.tickClock();
+  assert.match(root.querySelector('.brpg-weather-time').textContent, /16:00/);
+  const region = root.all((x) => x.tag === 'select' && x.attributes['aria-label'] === 'Região da campanha')[0];
+  region.value = 'nortus'; await region.emit('change');
+  assert.equal(p.saved.calendars[0].weather.activeId, 'nortus');
+  await pickButton(root, 'Ver clima de 2 de Arkanis, ano 1').click();
+  assert.equal(leaves[0].view.selected.day, 2);
+  assert.equal(p.worldNow(p.active()).day, 1);
+  assert.match(root.querySelector('.brpg-weather-time').textContent, /Prévia ao meio-dia/);
+});
+
+test('cria região, edita perfil-base e salva unidades sem reiniciar o relógio', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  const anchor = m.p.active().clockSync.since;
+  await pickButton(root, 'Clima').click();
+  await pickButton(root, 'Configurar clima').click();
+  const form = m.modal().contentEl;
+  await pickButton(form, 'Nova região').click();
+  await type(form, 'Nome da região', 'Baía de Sal');
+  const chooseBiome = labelInput(form, 'Aplicar perfil inicial');
+  chooseBiome.value = 'coast'; await chooseBiome.emit('change');
+  await type(form, 'Chance de neblina (%)', '80');
+  const scale = labelInput(form, 'Exibir temperatura em');
+  scale.value = 'F'; await scale.emit('change');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.modal(), null);
+  const c = m.p.active();
+  assert.equal(c.weather.regions.at(-1).name, 'Baía de Sal');
+  assert.equal(c.weather.regions.at(-1).base.fog, 80);
+  assert.equal(c.weather.regions.at(-1).base.humidity, 84);
+  assert.equal(c.weather.temperature, 'F');
+  assert.equal(c.clockSync.since, anchor);
+  assert.match(root.querySelector('.brpg-weather-temperature').textContent, /°F/);
+});
+
+test('clima desligado em calendário novo oferece configuração e pode ser ativado sem estações', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  m.p.newCalendar();
+  await pickButton(m.modal().contentEl, 'Criar calendário').click();
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Clima').click();
+  assert.match(root.querySelector('.brpg-weather').textContent, /desativado/);
+  await pickButton(root, 'Abrir configurações de clima').click();
+  const form = m.modal().contentEl;
+  assert.match(form.textContent, /Sem estações/);
+  const toggle = form.all((x) => x.tag === 'label' && x.textContent === 'Ativar o clima neste calendário')[0].children[0];
+  toggle.checked = true; await toggle.emit('change');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.p.active().weather.enabled, true);
+  assert.match(root.querySelector('.brpg-weather').textContent, /Região geral.*perfil-base da região/);
 });

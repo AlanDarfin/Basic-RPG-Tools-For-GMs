@@ -1,4 +1,5 @@
 'use strict';
+const { ensureWeather } = require('./weather');
 const { Plugin, PluginSettingTab, Notice, TFile, normalizePath } = require('obsidian');
 const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = require('./calendar');
 const { decodeImport, encodeExport } = require('./imports');
@@ -49,7 +50,7 @@ class Settings extends PluginSettingTab {
     const buttons = el(importBox, 'div', 'brpg-toolbar');
     button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
     button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
-      const preset = copy(arkanis); preset.id = uid('cal');
+      const preset = copy(arkanis); ensureWeather(preset); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
     }), { icon: 'sparkles' });
     const upload = el(importBox, 'input');
@@ -90,19 +91,21 @@ class BasicRPG extends Plugin {
   async onload() {
     this.pending = Promise.resolve();
     this.readOnly = false;
-    let saveClock = false;
+    let saveMigration = false;
     try {
       const saved = await this.loadData();
       if (saved == null) {
         const preset = copy(arkanis);
-        saveClock = ensureClock(preset, this.clockNow());
+        ensureWeather(preset);
+        saveMigration = ensureClock(preset, this.clockNow());
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
           validateCalendar(c);
           ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c);
-          if (ensureClock(c, this.clockNow())) saveClock = true;
+          const migratedClock = ensureClock(c, this.clockNow());
+          if (ensureWeather(c) || migratedClock) saveMigration = true;
           validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
@@ -110,13 +113,14 @@ class BasicRPG extends Plugin {
       }
     } catch {
       const fallback = copy(arkanis);
+      ensureWeather(fallback);
       this.state = { version: 1, activeId: fallback.id, calendars: [fallback] };
       this.readOnly = true;
       new Notice('Basic RPG: não foi possível ler os dados. Alterações bloqueadas para não sobrescrever o cofre.', 10000);
     }
-    if (saveClock && !this.readOnly) {
+    if (saveMigration && !this.readOnly) {
       try { await this.saveData(this.state); }
-      catch { new Notice('Basic RPG: não foi possível salvar a âncora do relógio. Ela não será preservada até uma gravação bem-sucedida.', 9000); }
+      catch { new Notice('Basic RPG: não foi possível salvar os dados iniciais do relógio ou do clima.', 9000); }
     }
     if (typeof window !== 'undefined') {
       this.registerInterval(window.setInterval(() => this.tickClock(), 5000));
@@ -129,6 +133,9 @@ class BasicRPG extends Plugin {
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
+    }) });
+    this.addCommand({ id: 'open-weather', name: 'Abrir clima da campanha', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'weather'; view.render(); }
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
@@ -200,6 +207,7 @@ class BasicRPG extends Plugin {
         assert(idx < 0, 'Já existe um calendário com este ID.');
         if (options.clockMode) anchor(draft, draft.current, options.clockMode, this.clockNow());
         else ensureClock(draft, this.clockNow());
+        ensureWeather(draft);
         validateCalendar(draft);
         s.calendars.push(draft); s.activeId = draft.id;
       } else {

@@ -2,6 +2,7 @@
 
 const { emptySky, validateSky } = require('./sky');
 const { validateEclipseOrbit } = require('./eclipse');
+const { validateWeather } = require('./weather');
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -284,6 +285,7 @@ function validateCalendar(c) {
     else integer(s.day, 1, c.months[e.monthIndex(s.month)].length, 'Dia inicial da estação');
   });
   unique(seasons.map((s) => s.id), 'IDs das estações');
+  validateWeather(c.weather, seasons);
   if (c.seasonMode === 'date') unique(seasons.map((s) => `${s.month}/${s.day}`), 'Datas de estação');
   array(c.eras, 100, 'Eras').forEach((era) => { string(era.name, 60, 'Nome da era'); integer(era.start, 1, MAX_YEAR, 'Ano da era'); });
   unique(c.eras.map((x) => x.start), 'Anos de início das eras');
