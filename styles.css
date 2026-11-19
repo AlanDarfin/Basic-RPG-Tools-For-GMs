@@ -408,3 +408,56 @@
   .brpg-weather-symbol, .brpg-weather-symbol > svg { width: 26px; height: 26px; }
   .brpg-weather-temperature { font-size: 1.25em; }
 }
+
+/* Seasons are browsable inside Weather, without a fifth top-level tab. */
+.brpg-weather-tabs {
+  display: flex; margin: 5px 0 9px; padding: 3px; gap: 3px;
+  border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface);
+}
+.brpg .brpg-weather-tabs .brpg-button { flex: 1 1 0; min-height: 31px; background: transparent; border-color: transparent; }
+.brpg .brpg-weather-tabs .brpg-button[aria-pressed="true"] {
+  background: var(--brpg-active, var(--brpg-surface)); border-color: var(--brpg-accent); font-weight: 650;
+}
+.brpg-seasons { display: grid; gap: 8px; }
+.brpg-season-current, .brpg-season-next, .brpg-season-climate, .brpg-season-row {
+  padding: 8px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius);
+  min-width: 0; overflow-wrap: anywhere;
+}
+.brpg-season-current {
+  display: grid; gap: 3px; border-inline-start: 3px solid var(--brpg-season-color); background: var(--brpg-surface);
+  background: color-mix(in srgb, var(--brpg-season-color) 18%, var(--brpg-surface));
+}
+.brpg-season-name { font-size: 1.3em; line-height: 1.12; }
+.brpg-season-day { font-size: .81em; color: var(--brpg-muted); }
+.brpg-season-progress { width: 100%; height: 7px; max-width: 100%; border: 0; background: var(--brpg-border); accent-color: var(--brpg-accent); border-radius: 9px; overflow: hidden; }
+.brpg-season-progress::-webkit-progress-bar { background: var(--brpg-border); }
+.brpg-season-progress::-webkit-progress-value { background: var(--brpg-accent); }
+.brpg-season-next, .brpg-season-climate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px 8px; }
+.brpg-season-next > div { display: grid; gap: 2px; }
+.brpg-season-next small, .brpg-season-climate small, .brpg-season-date { font-size: .77em; color: var(--brpg-muted); }
+.brpg-season-climate > :not(button) { grid-column: 1; }
+.brpg-season-climate > span { font-size: .87em; }
+.brpg-season-climate > button { grid-column: 2; grid-row: 1 / 4; }
+.brpg-season-cycle { display: grid; gap: 6px; }
+.brpg .brpg-season-cycle > h4, .brpg .brpg-season-cycle .brpg-hint { margin: 0; }
+.brpg-season-strip { display: flex; gap: 2px; height: 10px; overflow: hidden; border-radius: 5px; }
+.brpg-season-strip span {
+  flex: var(--brpg-season-span) 1 0; background: var(--brpg-season-color); min-width: 0; opacity: .7;
+}
+.brpg-season-strip .is-current { opacity: 1; box-shadow: inset 0 0 0 1px var(--brpg-ink); }
+.brpg-season-row { display: grid; gap: 3px; border-inline-start: 3px solid var(--brpg-season-color); }
+.brpg-season-row.is-current { background: var(--brpg-surface); }
+.brpg-season-row-title { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.brpg-season-row-title strong { min-width: 0; }
+.brpg-season-row-title > .brpg-hint { flex: none; }
+.brpg-season-metrics { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 2px; }
+.brpg-season-adjustments { margin-block: 5px; }
+.brpg-season-adjustments > .brpg-form-row { padding-block: 5px; }
+.brpg .brpg-button.brpg-season-shortcut {
+  min-height: 28px; text-align: start; justify-content: start; font-size: .77em; border-inline-start: 3px solid var(--brpg-season-color);
+}
+.brpg .brpg-day.brpg-season-start .brpg-day-number {
+  text-decoration: underline; text-decoration-color: var(--brpg-season-color);
+  text-underline-offset: 3px; text-decoration-thickness: 2px;
+}
+.brpg .brpg-list-day.brpg-season-start .brpg-list-info { flex-wrap: wrap; }

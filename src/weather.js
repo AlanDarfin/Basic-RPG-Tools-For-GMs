@@ -1,5 +1,7 @@
 'use strict';
 
+const { periodicPhase } = require('./seasons');
+
 // Fictional weather. Units in the model are Celsius, km/h, percent and km.
 const MAX_REGIONS = 32, MAX_OFFSET = 100000;
 const PROFILE_FIELDS = [
@@ -10,6 +12,14 @@ const PROFILE_FIELDS = [
   ['humidity', 'Umidade típica (%)', 0, 100],
   ['wind', 'Vento típico (km/h)', 0, 200],
   ['fog', 'Chance de neblina (%)', 0, 100],
+];
+const SEASON_MODIFIERS = [
+  ['temperature', 'Temperatura (°C)', -100, 100],
+  ['rain', 'Chance de precipitação (p.p.)', -100, 100],
+  ['intensity', 'Intensidade da precipitação (p.p.)', -100, 100],
+  ['humidity', 'Umidade (p.p.)', -100, 100],
+  ['wind', 'Vento (km/h)', -200, 200],
+  ['fog', 'Chance de neblina (p.p.)', -100, 100],
 ];
 const BIOMES = [
   ['temperate', 'Temperado', [9, 21, 38, 40, 65, 17, 25]],
@@ -46,6 +56,15 @@ function ensureWeather(c) {
 }
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 function requireWeather(ok, message) { if (!ok) throw new Error(message); }
+function validateSeasonClimate(modifiers, seasonName) {
+  if (modifiers === undefined) return;
+  requireWeather(isRecord(modifiers), 'Ajuste de clima da estação inválido.');
+  for (const [key, value] of Object.entries(modifiers)) {
+    const def = SEASON_MODIFIERS.find((item) => item[0] === key);
+    requireWeather(def && Number.isFinite(value) && value >= def[2] && value <= def[3],
+      'Ajuste climático fora do limite em ' + seasonName + '.');
+  }
+}
 function validateWeather(w, seasons) {
   if (w === undefined) return;
   const validText = (s, limit) => typeof s === 'string' && !!s.trim() && s.length <= limit;
@@ -104,15 +123,10 @@ function climatePhase(c, e, day, maxYear) {
   if (!c.seasons.length) return { from: null, to: null, mix: 0 };
   let from, to, mix;
   if (c.seasonMode === 'periodic') {
-    const span = c.seasons.reduce((n, s) => n + s.duration, 0);
-    let t = mod(day - c.seasonOffset, span);
-    for (let i = 0; i < c.seasons.length; i++) {
-      const s = c.seasons[i];
-      if (t < s.duration || i === c.seasons.length - 1) {
-        from = s; to = c.seasons[(i + 1) % c.seasons.length]; mix = t / s.duration; break;
-      }
-      t -= s.duration;
-    }
+    const { index, season, elapsed } = periodicPhase(c, day);
+    from = season;
+    to = c.seasons[(index + 1) % c.seasons.length];
+    mix = elapsed / season.duration;
   } else {
     const limit = e.yearStart(maxYear + 1);
     const year = e.fromEpoch(clamp(day, 0, limit - 1)).year;
@@ -131,6 +145,15 @@ function climatePhase(c, e, day, maxYear) {
   }
   return { from, to, mix: eased(mix) };
 }
+function seasonTargets(region, season) {
+  const own = region.seasons.find((p) => p.id === season?.id);
+  const base = own || region.base, mods = season?.climate ?? {};
+  const targets = PROFILE_FIELDS.map(([key, , low, high]) => {
+    const delta = mods[key === 'low' || key === 'high' ? 'temperature' : key] ?? 0;
+    return [key, clamp(base[key] + delta, low, high)];
+  });
+  return { regional: !!own, ...Object.fromEntries(targets) };
+}
 function seasonalProfile(c, engine, r, epoch, maxYear) {
   // Extrapolate the calendar at its limits instead of pinning the whole offset
   // to the very first or last day.
@@ -141,8 +164,7 @@ function seasonalProfile(c, engine, r, epoch, maxYear) {
     else if (shifted >= limit) shifted = limit + mod(shifted - limit, engine.yearInfo(maxYear).total);
   }
   const { from, to, mix } = climatePhase(c, engine, shifted, maxYear);
-  const a = r.seasons.find((s) => s.id === from?.id) || r.base;
-  const b = r.seasons.find((s) => s.id === to?.id) || r.base;
+  const a = seasonTargets(r, from), b = seasonTargets(r, to);
   return { season: from?.name ?? '', ...Object.fromEntries(PROFILE_FIELDS.map(([key]) => [key, blend(a[key], b[key], mix)])) };
 }
 
@@ -197,5 +219,5 @@ function weatherDay(c, engine, date, maxYear, id = c.weather?.activeId) {
     condition: wet ? wetCondition(high, true) : fog ? denseFog ? 'fog' : 'mist' : dry, at };
 }
 
-module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, CONDITIONS, biome, region, defaultWeather,
-  arkanisWeather, ensureWeather, validateWeather, seasonalProfile, weatherDay };
+module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, SEASON_MODIFIERS, CONDITIONS, biome, region, defaultWeather,
+  arkanisWeather, ensureWeather, validateWeather, validateSeasonClimate, seasonTargets, seasonalProfile, weatherDay };

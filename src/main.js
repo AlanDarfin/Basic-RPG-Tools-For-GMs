@@ -135,7 +135,10 @@ class BasicRPG extends Plugin {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
     }) });
     this.addCommand({ id: 'open-weather', name: 'Abrir clima da campanha', callback: () => this.attempt(async () => {
-      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'weather'; view.render(); }
+      const view = await this.open(false); if (view instanceof CalendarView) view.showWeather('forecast');
+    }) });
+    this.addCommand({ id: 'open-seasons', name: 'Abrir estações do mundo', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) view.showWeather('seasons');
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {

@@ -6,7 +6,7 @@ const { DEFAULT_COLOR } = require('./imports');
 const { MAX_SUNS, emptySky } = require('./sky');
 const { eclipseDefaults } = require('./eclipse');
 const { mode: clockMode, alignLocal } = require('./world-clock');
-const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, biome, region, defaultWeather } = require('./weather');
+const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, SEASON_MODIFIERS, biome, region, defaultWeather } = require('./weather');
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -297,6 +297,17 @@ class CalendarEditor extends RPGModal {
           fieldSelect(row, 'Mês', monthOptions(c), x.month, (v) => { x.month = v; });
           inlineNumber(row, 'Dia inicial', x.day, (v) => { x.day = v; }, 1, 240);
         }
+        const effects = el(card, 'details', 'brpg-season-adjustments');
+        effects.open = this.seasonEditorId === x.id;
+        el(effects, 'summary', 'brpg-summary', 'Ajustes climáticos da estação');
+        info(effects, 'Somam ao perfil de cada região e entram gradualmente no clima. Zero não altera o perfil. P.p. significa pontos percentuais.');
+        const adjustments = el(effects, 'div', 'brpg-form-row');
+        for (const [key, label, lo, hi] of SEASON_MODIFIERS) inlineNumber(adjustments, label, x.climate?.[key] ?? 0, (v) => {
+          x.climate ||= {};
+          if (v === 0) delete x.climate[key];
+          else x.climate[key] = v;
+          if (!Object.keys(x.climate).length) delete x.climate;
+        }, lo, hi, 'any');
         button(card, 'Remover estação', () => {
           c.seasons.splice(i, 1);
           for (const r of c.weather?.regions || []) r.seasons = r.seasons.filter((p) => p.id !== x.id);
@@ -304,9 +315,21 @@ class CalendarEditor extends RPGModal {
         }, { icon: 'trash-2' });
       });
       button(root, 'Adicionar estação', () => {
-        c.seasons.push({ id: uid('estacao'), name: 'Nova estação', month: c.months[0].id, day: 1, duration: 90, color: DEFAULT_COLOR });
+        const used = new Set(c.seasons.map((s) => s.month + '/' + s.day));
+        let start = { month: c.months[0].id, day: 1 };
+        if (c.seasonMode === 'date') {
+          outer: for (const m of c.months) {
+            for (let day = 1; day <= m.length; day++) {
+              if (!used.has(m.id + '/' + day)) { start = { month: m.id, day }; break outer; }
+            }
+          }
+        }
+        const newSeason = { id: uid('estacao'), name: 'Estação ' + (c.seasons.length + 1), ...start, duration: 90, color: DEFAULT_COLOR };
+        c.seasons.push(newSeason);
+        this.seasonEditorId = newSeason.id;
         this.section();
-      }, { icon: 'plus' });
+      }, { icon: 'plus', disabled: c.seasons.length >= 50 || (c.seasonMode === 'date' &&
+        c.seasons.length >= c.months.reduce((sum, m) => sum + m.length, 0)) });
     } else if (this.tab === 'clima') {
       this.weatherSection(c);
     } else {

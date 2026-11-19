@@ -39,6 +39,16 @@ function fact(parent, icon, label, value, note) {
   if (note) el(tile, 'small', '', note);
 }
 
+function weatherRegionField(parent, p, c) {
+  const w = c.weather;
+  const selectors = el(parent, 'label', 'brpg-weather-region');
+  const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
+  mark(regionLabel, 'map-pin');
+  el(regionLabel, 'span', '', 'Região da campanha');
+  select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
+    (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
+}
+
 function renderWeather(root, view, c, e) {
   const d = view.selected, p = view.plugin;
   const pane = el(root, 'section', 'brpg-weather');
@@ -57,13 +67,7 @@ function renderWeather(root, view, c, e) {
     return null;
   }
 
-  const w = c.weather;
-  const selectors = el(pane, 'label', 'brpg-weather-region');
-  const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
-  mark(regionLabel, 'map-pin');
-  el(regionLabel, 'span', '', 'Região da campanha');
-  select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
-    (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
+  weatherRegionField(pane, p, c);
 
   const isToday = sameDate(d, view.savedToday), total = c.clock.hours * c.clock.minutes;
   const hero = el(pane, 'article', 'brpg-weather-hero');
@@ -137,4 +141,4 @@ function renderWeather(root, view, c, e) {
   return isToday ? update : null;
 }
 
-module.exports = { renderWeather, weatherShortcut };
+module.exports = { renderWeather, weatherShortcut, weatherRegionField, temperature, speed };

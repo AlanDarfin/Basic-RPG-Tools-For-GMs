@@ -8,6 +8,7 @@ const { mode: clockMode, readMinute } = require('./world-clock');
 const { moonDisc, sunDisc } = require('./celestial-ui');
 const { weatherDay } = require('./weather');
 const { renderWeather, weatherShortcut } = require('./weather-view');
+const { renderSeasons } = require('./season-view');
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -38,6 +39,7 @@ class CalendarView extends ItemView {
     this.selected = null;
     this.calId = null;
     this.mode = 'month';
+    this.weatherPanel = 'forecast';
     this.category = '';
     this.showHidden = false;
     this.timelineMonth = '';
@@ -85,6 +87,7 @@ class CalendarView extends ItemView {
     this.savedToday = { ...world };
   }
   choose(d) { this.selected = d; this.render(); }
+  showWeather(panel) { this.mode = 'weather'; this.weatherPanel = panel; this.render(); }
   run(fn) { return () => this.plugin.attempt(fn); }
   filtered(events) { return events.filter((x) => (this.showHidden || !x.hidden) && (!this.category || x.category === this.category)); }
   render() {
@@ -166,7 +169,17 @@ class CalendarView extends ItemView {
     }, { icon: 'locate-fixed', iconOnly: true });
 
     if (skyMode) { this.renderSky(root, c, e); return; }
-    if (weatherMode) { this.paintWeatherClock = renderWeather(root, this, c, e); return; }
+    if (weatherMode) {
+      const weatherTabs = el(root, 'nav', 'brpg-weather-tabs');
+      weatherTabs.setAttribute('aria-label', 'Clima e estações');
+      for (const [id, title, icon] of [['forecast', 'Previsão', 'cloud-sun'], ['seasons', 'Estações', 'leaf']]) {
+        const b = button(weatherTabs, title, () => this.showWeather(id), { icon });
+        b.setAttribute('aria-pressed', String(this.weatherPanel === id));
+      }
+      if (this.weatherPanel === 'seasons') renderSeasons(root, this, c, e);
+      else this.paintWeatherClock = renderWeather(root, this, c, e);
+      return;
+    }
     const tools = el(root, 'div', 'brpg-calendar-tools');
     const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
     let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
@@ -209,7 +222,7 @@ class CalendarView extends ItemView {
     el(title, 'div', 'brpg-hint', e.format(this.selected));
     button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
     const weather = weatherDay(c, e, this.selected, MAX_YEAR);
-    if (weather) weatherShortcut(pane, c, weather, () => { this.mode = 'weather'; this.render(); }, true);
+    if (weather) weatherShortcut(pane, c, weather, () => this.showWeather('forecast'), true);
 
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
@@ -451,7 +464,9 @@ class CalendarView extends ItemView {
   renderDay(root, d, c, e, events, extra) {
     const meta = e.dayMeta(d);
     const state = (sameDate(d, this.savedToday) ? ' is-today' : '') + (sameDate(d, this.selected) ? ' is-selected' : '');
-    const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
+    const season = e.season(d), start = season?.dayOfSeason === 1;
+    const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, start && `Início de ${season.name}`,
+      events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
     const b = button(root, label, () => {
       this.detailOpen = true;
       this.choose(d);
@@ -462,11 +477,17 @@ class CalendarView extends ItemView {
     }, { className: `brpg-day ${extra}${state}`, iconOnly: true });
     b.setAttribute('aria-pressed', String(sameDate(d, this.selected)));
     if (sameDate(d, this.savedToday)) b.setAttribute('aria-current', 'date');
+    if (start) {
+      b.classList.add('brpg-season-start');
+      b.style.setProperty('--brpg-season-color', season.color);
+      b.title = label;
+    }
     el(b, 'strong', 'brpg-day-number', String(d.day));
     if (extra === 'brpg-list-day') {
       const info = el(b, 'span', 'brpg-list-info');
       el(info, 'span', 'brpg-day-name', meta.special?.name || meta.weekday || 'Fora da semana');
-      if (events.length) el(info, 'span', 'brpg-day-event', events[0].title);
+      if (start) el(info, 'span', 'brpg-day-event', `Início de ${season.name}`);
+      if (events.length && (!start || events[0].title !== season.name)) el(info, 'span', 'brpg-day-event', events[0].title);
     } else if (meta.special) el(b, 'span', 'brpg-grid-extra', '◆');
     if (events.length) {
       const marks = el(b, 'span', 'brpg-day-marks');
@@ -489,7 +510,11 @@ class CalendarView extends ItemView {
     const bits = el(section, 'div', 'brpg-metadata');
     el(bits, 'span', 'brpg-chip', meta.weekday || 'Fora da semana');
     if (meta.special) el(bits, 'span', 'brpg-chip', meta.special.name);
-    if (season) el(bits, 'span', 'brpg-chip', `${season.name} · dia ${season.dayOfSeason}`);
+    if (season) {
+      const chip = button(bits, `${season.name} · dia ${season.dayOfSeason}`, () => this.showWeather('seasons'),
+        { icon: 'leaf', className: 'brpg-button brpg-season-shortcut' });
+      chip.style.setProperty('--brpg-season-color', season.color);
+    }
     const discs = el(bits, 'span', 'brpg-focus-moons');
     const phases = (world) => {
       replaceEl(discs);
@@ -505,7 +530,7 @@ class CalendarView extends ItemView {
     phases(this.savedToday);
     this.paintFocusMoons = phases;
     const weather = weatherDay(c, e, d, MAX_YEAR);
-    if (weather) weatherShortcut(bits, c, weather, () => { this.mode = 'weather'; this.render(); });
+    if (weather) weatherShortcut(bits, c, weather, () => this.showWeather('forecast'));
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;

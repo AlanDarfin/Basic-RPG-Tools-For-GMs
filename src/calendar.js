@@ -2,7 +2,8 @@
 
 const { emptySky, validateSky } = require('./sky');
 const { validateEclipseOrbit } = require('./eclipse');
-const { validateWeather } = require('./weather');
+const { validateWeather, validateSeasonClimate } = require('./weather');
+const { civilDay, periodicPhase } = require('./seasons');
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -145,13 +146,8 @@ class CalendarEngine {
   season(d) {
     if (!this.c.seasons.length) return null;
     if (this.c.seasonMode === 'periodic') {
-      const span = this.c.seasons.reduce((n, s) => n + s.duration, 0);
-      let pos = mod(this.epoch(d) - this.c.seasonOffset, span);
-      for (const s of this.c.seasons) {
-        if (pos < s.duration) return { ...s, dayOfSeason: Math.floor(pos) + 1 };
-        pos -= s.duration;
-      }
-      return null;
+      const day = this.epoch(d), { index, season, startOf } = periodicPhase(this.c, day);
+      return { ...season, dayOfSeason: day - civilDay(startOf(index)) + 1 };
     }
     const value = this.epoch(d);
     const candidates = this.c.seasons.flatMap((s) => {
@@ -216,8 +212,8 @@ class CalendarEngine {
     const index = this.c.seasons.indexOf(s);
     const start = this.c.seasonOffset + this.c.seasons.slice(0, index).reduce((n, item) => n + item.duration, 0);
     // Allow a fractional start first detected on the following civil day.
-    let e = Math.max(first, Math.ceil(start + (Math.ceil((first - start) / cycle) - 1) * cycle));
-    const next = Math.max(first, Math.ceil(start + Math.ceil((first - start) / cycle) * cycle));
+    let e = Math.max(first, civilDay(start + (Math.ceil((first - start) / cycle) - 1) * cycle));
+    const next = Math.max(first, civilDay(start + Math.ceil((first - start) / cycle) * cycle));
     if (e >= end || !this.eventOn(event, this.fromEpoch(e))) e = next;
     return e < end && this.eventOn(event, this.fromEpoch(e)) ? this.fromEpoch(e) : null;
   }
@@ -281,6 +277,7 @@ function validateCalendar(c) {
   const seasons = array(c.seasons, 50, 'Estações');
   seasons.forEach((s) => {
     string(s.id, 100, 'ID da estação'); string(s.name, 60, 'Nome da estação'); validateColor(s.color);
+    validateSeasonClimate(s.climate, s.name);
     if (c.seasonMode === 'periodic') number(s.duration, 1, MAX_YEAR, 'Duração da estação');
     else integer(s.day, 1, c.months[e.monthIndex(s.month)].length, 'Dia inicial da estação');
   });

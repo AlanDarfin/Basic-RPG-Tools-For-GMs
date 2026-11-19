@@ -140,7 +140,10 @@ class BasicRPG extends Plugin {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
     }) });
     this.addCommand({ id: 'open-weather', name: 'Abrir clima da campanha', callback: () => this.attempt(async () => {
-      const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'weather'; view.render(); }
+      const view = await this.open(false); if (view instanceof CalendarView) view.showWeather('forecast');
+    }) });
+    this.addCommand({ id: 'open-seasons', name: 'Abrir estações do mundo', callback: () => this.attempt(async () => {
+      const view = await this.open(false); if (view instanceof CalendarView) view.showWeather('seasons');
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
@@ -284,6 +287,8 @@ module.exports = BasicRPG;
     "weather.js": function (module, exports, load, require) {
 'use strict';
 
+const { periodicPhase } = load("seasons.js");
+
 // Fictional weather. Units in the model are Celsius, km/h, percent and km.
 const MAX_REGIONS = 32, MAX_OFFSET = 100000;
 const PROFILE_FIELDS = [
@@ -294,6 +299,14 @@ const PROFILE_FIELDS = [
   ['humidity', 'Umidade típica (%)', 0, 100],
   ['wind', 'Vento típico (km/h)', 0, 200],
   ['fog', 'Chance de neblina (%)', 0, 100],
+];
+const SEASON_MODIFIERS = [
+  ['temperature', 'Temperatura (°C)', -100, 100],
+  ['rain', 'Chance de precipitação (p.p.)', -100, 100],
+  ['intensity', 'Intensidade da precipitação (p.p.)', -100, 100],
+  ['humidity', 'Umidade (p.p.)', -100, 100],
+  ['wind', 'Vento (km/h)', -200, 200],
+  ['fog', 'Chance de neblina (p.p.)', -100, 100],
 ];
 const BIOMES = [
   ['temperate', 'Temperado', [9, 21, 38, 40, 65, 17, 25]],
@@ -330,6 +343,15 @@ function ensureWeather(c) {
 }
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 function requireWeather(ok, message) { if (!ok) throw new Error(message); }
+function validateSeasonClimate(modifiers, seasonName) {
+  if (modifiers === undefined) return;
+  requireWeather(isRecord(modifiers), 'Ajuste de clima da estação inválido.');
+  for (const [key, value] of Object.entries(modifiers)) {
+    const def = SEASON_MODIFIERS.find((item) => item[0] === key);
+    requireWeather(def && Number.isFinite(value) && value >= def[2] && value <= def[3],
+      'Ajuste climático fora do limite em ' + seasonName + '.');
+  }
+}
 function validateWeather(w, seasons) {
   if (w === undefined) return;
   const validText = (s, limit) => typeof s === 'string' && !!s.trim() && s.length <= limit;
@@ -388,15 +410,10 @@ function climatePhase(c, e, day, maxYear) {
   if (!c.seasons.length) return { from: null, to: null, mix: 0 };
   let from, to, mix;
   if (c.seasonMode === 'periodic') {
-    const span = c.seasons.reduce((n, s) => n + s.duration, 0);
-    let t = mod(day - c.seasonOffset, span);
-    for (let i = 0; i < c.seasons.length; i++) {
-      const s = c.seasons[i];
-      if (t < s.duration || i === c.seasons.length - 1) {
-        from = s; to = c.seasons[(i + 1) % c.seasons.length]; mix = t / s.duration; break;
-      }
-      t -= s.duration;
-    }
+    const { index, season, elapsed } = periodicPhase(c, day);
+    from = season;
+    to = c.seasons[(index + 1) % c.seasons.length];
+    mix = elapsed / season.duration;
   } else {
     const limit = e.yearStart(maxYear + 1);
     const year = e.fromEpoch(clamp(day, 0, limit - 1)).year;
@@ -415,6 +432,15 @@ function climatePhase(c, e, day, maxYear) {
   }
   return { from, to, mix: eased(mix) };
 }
+function seasonTargets(region, season) {
+  const own = region.seasons.find((p) => p.id === season?.id);
+  const base = own || region.base, mods = season?.climate ?? {};
+  const targets = PROFILE_FIELDS.map(([key, , low, high]) => {
+    const delta = mods[key === 'low' || key === 'high' ? 'temperature' : key] ?? 0;
+    return [key, clamp(base[key] + delta, low, high)];
+  });
+  return { regional: !!own, ...Object.fromEntries(targets) };
+}
 function seasonalProfile(c, engine, r, epoch, maxYear) {
   // Extrapolate the calendar at its limits instead of pinning the whole offset
   // to the very first or last day.
@@ -425,8 +451,7 @@ function seasonalProfile(c, engine, r, epoch, maxYear) {
     else if (shifted >= limit) shifted = limit + mod(shifted - limit, engine.yearInfo(maxYear).total);
   }
   const { from, to, mix } = climatePhase(c, engine, shifted, maxYear);
-  const a = r.seasons.find((s) => s.id === from?.id) || r.base;
-  const b = r.seasons.find((s) => s.id === to?.id) || r.base;
+  const a = seasonTargets(r, from), b = seasonTargets(r, to);
   return { season: from?.name ?? '', ...Object.fromEntries(PROFILE_FIELDS.map(([key]) => [key, blend(a[key], b[key], mix)])) };
 }
 
@@ -481,8 +506,80 @@ function weatherDay(c, engine, date, maxYear, id = c.weather?.activeId) {
     condition: wet ? wetCondition(high, true) : fog ? denseFog ? 'fog' : 'mist' : dry, at };
 }
 
-module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, CONDITIONS, biome, region, defaultWeather,
-  arkanisWeather, ensureWeather, validateWeather, seasonalProfile, weatherDay };
+module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, SEASON_MODIFIERS, CONDITIONS, biome, region, defaultWeather,
+  arkanisWeather, ensureWeather, validateWeather, validateSeasonClimate, seasonTargets, seasonalProfile, weatherDay };
+
+    },
+    "seasons.js": function (module, exports, load, require) {
+'use strict';
+
+// Snap only floating-point roundoff at integer boundaries before locating the
+// first calendar day of a season that can begin between two civil days.
+function civilDay(epoch) {
+  const nearest = Math.round(epoch);
+  const days = Math.max(1, Math.abs(epoch)) * 16 * Number.EPSILON;
+  return Math.abs(epoch - nearest) <= days ? nearest : Math.ceil(epoch);
+}
+function periodicPhase(c, day) {
+  if (!c.seasons.length) return null;
+  const offsets = [0];
+  for (const s of c.seasons) offsets.push(offsets[offsets.length - 1] + s.duration);
+  const span = offsets[offsets.length - 1];
+  let turn = Math.floor((day - c.seasonOffset) / span);
+  const origin = (i) => c.seasonOffset + i * span;
+  if (civilDay(origin(turn)) > day) turn--;
+  else if (civilDay(origin(turn + 1)) <= day) turn++;
+  const start = origin(turn);
+  const startOf = (index) => origin(turn + Math.floor(index / c.seasons.length)) + offsets[index % c.seasons.length];
+  const index = c.seasons.findIndex((_, i) => day < civilDay(startOf(i + 1)));
+  const season = c.seasons[index];
+  const rawStart = start + offsets[index];
+  return { index, season, elapsed: Math.max(0, day - rawStart), startOf, span };
+}
+
+function seasonSchedule(c, engine, date, maxYear) {
+  const epoch = engine.epoch(date);
+  const limit = engine.yearStart(maxYear + 1);
+  const toDate = (day) => day >= 0 && day < limit ? engine.fromEpoch(day) : null;
+  const window = (season, from, until) => ({
+    season, from, until, duration: until - from, startDate: toDate(from), endDate: toDate(until - 1),
+  });
+  const items = [];
+  const count = c.seasons.length;
+  if (!count) return { current: null, next: null, items, cycleLength: 0, epoch };
+  if (c.seasonMode === 'periodic') {
+    const { index, startOf, span } = periodicPhase(c, epoch);
+    for (let step = 0; step < Math.max(count, 2); step++) {
+      const s = c.seasons[(index + step) % count];
+      items.push(window(s, civilDay(startOf(index + step)), civilDay(startOf(index + step + 1))));
+    }
+    return { current: items[0], next: items[1]?.startDate ? items[1] : null,
+      items: items.slice(0, count), cycleLength: span, epoch };
+  }
+
+  const sorted = c.seasons.slice().sort((a, b) => engine.monthIndex(a.month) - engine.monthIndex(b.month) || a.day - b.day);
+  const points = [];
+  for (let year = Math.max(1, date.year - 1); year <= Math.min(maxYear + 1, date.year + 2); year++) {
+    for (const season of sorted) {
+      const sourceYear = Math.min(year, maxYear);
+      const month = engine.yearInfo(sourceYear).months[engine.monthIndex(season.month)];
+      points.push({ season, day: engine.yearStart(year) + month.start + season.day - 1 });
+    }
+  }
+  let index = points.findIndex((item) => item.day > epoch);
+  if (index === -1) index = points.length - 1;
+  const start = index > 0 ? index - 1 : 0;
+  for (let i = start; i < Math.min(start + Math.max(count, 2), points.length - 1); i++) {
+    const item = points[i];
+    items.push(window(item.season, item.day, points[i + 1].day));
+  }
+  const current = items[0]?.from <= epoch ? items[0] : null;
+  const upcoming = current ? items[1] : items[0];
+  return { current, next: upcoming?.startDate ? upcoming : null, items: items.slice(0, count),
+    cycleLength: engine.yearInfo(date.year).total, epoch };
+}
+
+module.exports = { civilDay, periodicPhase, seasonSchedule };
 
     },
     "calendar.js": function (module, exports, load, require) {
@@ -490,7 +587,8 @@ module.exports = { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, CONDITIONS, 
 
 const { emptySky, validateSky } = load("sky.js");
 const { validateEclipseOrbit } = load("eclipse.js");
-const { validateWeather } = load("weather.js");
+const { validateWeather, validateSeasonClimate } = load("weather.js");
+const { civilDay, periodicPhase } = load("seasons.js");
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -633,13 +731,8 @@ class CalendarEngine {
   season(d) {
     if (!this.c.seasons.length) return null;
     if (this.c.seasonMode === 'periodic') {
-      const span = this.c.seasons.reduce((n, s) => n + s.duration, 0);
-      let pos = mod(this.epoch(d) - this.c.seasonOffset, span);
-      for (const s of this.c.seasons) {
-        if (pos < s.duration) return { ...s, dayOfSeason: Math.floor(pos) + 1 };
-        pos -= s.duration;
-      }
-      return null;
+      const day = this.epoch(d), { index, season, startOf } = periodicPhase(this.c, day);
+      return { ...season, dayOfSeason: day - civilDay(startOf(index)) + 1 };
     }
     const value = this.epoch(d);
     const candidates = this.c.seasons.flatMap((s) => {
@@ -704,8 +797,8 @@ class CalendarEngine {
     const index = this.c.seasons.indexOf(s);
     const start = this.c.seasonOffset + this.c.seasons.slice(0, index).reduce((n, item) => n + item.duration, 0);
     // Allow a fractional start first detected on the following civil day.
-    let e = Math.max(first, Math.ceil(start + (Math.ceil((first - start) / cycle) - 1) * cycle));
-    const next = Math.max(first, Math.ceil(start + Math.ceil((first - start) / cycle) * cycle));
+    let e = Math.max(first, civilDay(start + (Math.ceil((first - start) / cycle) - 1) * cycle));
+    const next = Math.max(first, civilDay(start + Math.ceil((first - start) / cycle) * cycle));
     if (e >= end || !this.eventOn(event, this.fromEpoch(e))) e = next;
     return e < end && this.eventOn(event, this.fromEpoch(e)) ? this.fromEpoch(e) : null;
   }
@@ -769,6 +862,7 @@ function validateCalendar(c) {
   const seasons = array(c.seasons, 50, 'Estações');
   seasons.forEach((s) => {
     string(s.id, 100, 'ID da estação'); string(s.name, 60, 'Nome da estação'); validateColor(s.color);
+    validateSeasonClimate(s.climate, s.name);
     if (c.seasonMode === 'periodic') number(s.duration, 1, MAX_YEAR, 'Duração da estação');
     else integer(s.day, 1, c.months[e.monthIndex(s.month)].length, 'Dia inicial da estação');
   });
@@ -1235,6 +1329,7 @@ const { mode: clockMode, readMinute } = load("world-clock.js");
 const { moonDisc, sunDisc } = load("celestial-ui.js");
 const { weatherDay } = load("weather.js");
 const { renderWeather, weatherShortcut } = load("weather-view.js");
+const { renderSeasons } = load("season-view.js");
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -1265,6 +1360,7 @@ class CalendarView extends ItemView {
     this.selected = null;
     this.calId = null;
     this.mode = 'month';
+    this.weatherPanel = 'forecast';
     this.category = '';
     this.showHidden = false;
     this.timelineMonth = '';
@@ -1312,6 +1408,7 @@ class CalendarView extends ItemView {
     this.savedToday = { ...world };
   }
   choose(d) { this.selected = d; this.render(); }
+  showWeather(panel) { this.mode = 'weather'; this.weatherPanel = panel; this.render(); }
   run(fn) { return () => this.plugin.attempt(fn); }
   filtered(events) { return events.filter((x) => (this.showHidden || !x.hidden) && (!this.category || x.category === this.category)); }
   render() {
@@ -1393,7 +1490,17 @@ class CalendarView extends ItemView {
     }, { icon: 'locate-fixed', iconOnly: true });
 
     if (skyMode) { this.renderSky(root, c, e); return; }
-    if (weatherMode) { this.paintWeatherClock = renderWeather(root, this, c, e); return; }
+    if (weatherMode) {
+      const weatherTabs = el(root, 'nav', 'brpg-weather-tabs');
+      weatherTabs.setAttribute('aria-label', 'Clima e estações');
+      for (const [id, title, icon] of [['forecast', 'Previsão', 'cloud-sun'], ['seasons', 'Estações', 'leaf']]) {
+        const b = button(weatherTabs, title, () => this.showWeather(id), { icon });
+        b.setAttribute('aria-pressed', String(this.weatherPanel === id));
+      }
+      if (this.weatherPanel === 'seasons') renderSeasons(root, this, c, e);
+      else this.paintWeatherClock = renderWeather(root, this, c, e);
+      return;
+    }
     const tools = el(root, 'div', 'brpg-calendar-tools');
     const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
     let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
@@ -1436,7 +1543,7 @@ class CalendarView extends ItemView {
     el(title, 'div', 'brpg-hint', e.format(this.selected));
     button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
     const weather = weatherDay(c, e, this.selected, MAX_YEAR);
-    if (weather) weatherShortcut(pane, c, weather, () => { this.mode = 'weather'; this.render(); }, true);
+    if (weather) weatherShortcut(pane, c, weather, () => this.showWeather('forecast'), true);
 
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
@@ -1678,7 +1785,9 @@ class CalendarView extends ItemView {
   renderDay(root, d, c, e, events, extra) {
     const meta = e.dayMeta(d);
     const state = (sameDate(d, this.savedToday) ? ' is-today' : '') + (sameDate(d, this.selected) ? ' is-selected' : '');
-    const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
+    const season = e.season(d), start = season?.dayOfSeason === 1;
+    const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, start && `Início de ${season.name}`,
+      events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
     const b = button(root, label, () => {
       this.detailOpen = true;
       this.choose(d);
@@ -1689,11 +1798,17 @@ class CalendarView extends ItemView {
     }, { className: `brpg-day ${extra}${state}`, iconOnly: true });
     b.setAttribute('aria-pressed', String(sameDate(d, this.selected)));
     if (sameDate(d, this.savedToday)) b.setAttribute('aria-current', 'date');
+    if (start) {
+      b.classList.add('brpg-season-start');
+      b.style.setProperty('--brpg-season-color', season.color);
+      b.title = label;
+    }
     el(b, 'strong', 'brpg-day-number', String(d.day));
     if (extra === 'brpg-list-day') {
       const info = el(b, 'span', 'brpg-list-info');
       el(info, 'span', 'brpg-day-name', meta.special?.name || meta.weekday || 'Fora da semana');
-      if (events.length) el(info, 'span', 'brpg-day-event', events[0].title);
+      if (start) el(info, 'span', 'brpg-day-event', `Início de ${season.name}`);
+      if (events.length && (!start || events[0].title !== season.name)) el(info, 'span', 'brpg-day-event', events[0].title);
     } else if (meta.special) el(b, 'span', 'brpg-grid-extra', '◆');
     if (events.length) {
       const marks = el(b, 'span', 'brpg-day-marks');
@@ -1716,7 +1831,11 @@ class CalendarView extends ItemView {
     const bits = el(section, 'div', 'brpg-metadata');
     el(bits, 'span', 'brpg-chip', meta.weekday || 'Fora da semana');
     if (meta.special) el(bits, 'span', 'brpg-chip', meta.special.name);
-    if (season) el(bits, 'span', 'brpg-chip', `${season.name} · dia ${season.dayOfSeason}`);
+    if (season) {
+      const chip = button(bits, `${season.name} · dia ${season.dayOfSeason}`, () => this.showWeather('seasons'),
+        { icon: 'leaf', className: 'brpg-button brpg-season-shortcut' });
+      chip.style.setProperty('--brpg-season-color', season.color);
+    }
     const discs = el(bits, 'span', 'brpg-focus-moons');
     const phases = (world) => {
       replaceEl(discs);
@@ -1732,7 +1851,7 @@ class CalendarView extends ItemView {
     phases(this.savedToday);
     this.paintFocusMoons = phases;
     const weather = weatherDay(c, e, d, MAX_YEAR);
-    if (weather) weatherShortcut(bits, c, weather, () => { this.mode = 'weather'; this.render(); });
+    if (weather) weatherShortcut(bits, c, weather, () => this.showWeather('forecast'));
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;
@@ -1825,7 +1944,7 @@ const { DEFAULT_COLOR } = load("imports.js");
 const { MAX_SUNS, emptySky } = load("sky.js");
 const { eclipseDefaults } = load("eclipse.js");
 const { mode: clockMode, alignLocal } = load("world-clock.js");
-const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, biome, region, defaultWeather } = load("weather.js");
+const { BIOMES, MAX_REGIONS, MAX_OFFSET, PROFILE_FIELDS, SEASON_MODIFIERS, biome, region, defaultWeather } = load("weather.js");
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -2116,6 +2235,17 @@ class CalendarEditor extends RPGModal {
           fieldSelect(row, 'Mês', monthOptions(c), x.month, (v) => { x.month = v; });
           inlineNumber(row, 'Dia inicial', x.day, (v) => { x.day = v; }, 1, 240);
         }
+        const effects = el(card, 'details', 'brpg-season-adjustments');
+        effects.open = this.seasonEditorId === x.id;
+        el(effects, 'summary', 'brpg-summary', 'Ajustes climáticos da estação');
+        info(effects, 'Somam ao perfil de cada região e entram gradualmente no clima. Zero não altera o perfil. P.p. significa pontos percentuais.');
+        const adjustments = el(effects, 'div', 'brpg-form-row');
+        for (const [key, label, lo, hi] of SEASON_MODIFIERS) inlineNumber(adjustments, label, x.climate?.[key] ?? 0, (v) => {
+          x.climate ||= {};
+          if (v === 0) delete x.climate[key];
+          else x.climate[key] = v;
+          if (!Object.keys(x.climate).length) delete x.climate;
+        }, lo, hi, 'any');
         button(card, 'Remover estação', () => {
           c.seasons.splice(i, 1);
           for (const r of c.weather?.regions || []) r.seasons = r.seasons.filter((p) => p.id !== x.id);
@@ -2123,9 +2253,21 @@ class CalendarEditor extends RPGModal {
         }, { icon: 'trash-2' });
       });
       button(root, 'Adicionar estação', () => {
-        c.seasons.push({ id: uid('estacao'), name: 'Nova estação', month: c.months[0].id, day: 1, duration: 90, color: DEFAULT_COLOR });
+        const used = new Set(c.seasons.map((s) => s.month + '/' + s.day));
+        let start = { month: c.months[0].id, day: 1 };
+        if (c.seasonMode === 'date') {
+          outer: for (const m of c.months) {
+            for (let day = 1; day <= m.length; day++) {
+              if (!used.has(m.id + '/' + day)) { start = { month: m.id, day }; break outer; }
+            }
+          }
+        }
+        const newSeason = { id: uid('estacao'), name: 'Estação ' + (c.seasons.length + 1), ...start, duration: 90, color: DEFAULT_COLOR };
+        c.seasons.push(newSeason);
+        this.seasonEditorId = newSeason.id;
         this.section();
-      }, { icon: 'plus' });
+      }, { icon: 'plus', disabled: c.seasons.length >= 50 || (c.seasonMode === 'date' &&
+        c.seasons.length >= c.months.reduce((sum, m) => sum + m.length, 0)) });
     } else if (this.tab === 'clima') {
       this.weatherSection(c);
     } else {
@@ -2402,6 +2544,16 @@ function fact(parent, icon, label, value, note) {
   if (note) el(tile, 'small', '', note);
 }
 
+function weatherRegionField(parent, p, c) {
+  const w = c.weather;
+  const selectors = el(parent, 'label', 'brpg-weather-region');
+  const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
+  mark(regionLabel, 'map-pin');
+  el(regionLabel, 'span', '', 'Região da campanha');
+  select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
+    (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
+}
+
 function renderWeather(root, view, c, e) {
   const d = view.selected, p = view.plugin;
   const pane = el(root, 'section', 'brpg-weather');
@@ -2420,13 +2572,7 @@ function renderWeather(root, view, c, e) {
     return null;
   }
 
-  const w = c.weather;
-  const selectors = el(pane, 'label', 'brpg-weather-region');
-  const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
-  mark(regionLabel, 'map-pin');
-  el(regionLabel, 'span', '', 'Região da campanha');
-  select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
-    (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
+  weatherRegionField(pane, p, c);
 
   const isToday = sameDate(d, view.savedToday), total = c.clock.hours * c.clock.minutes;
   const hero = el(pane, 'article', 'brpg-weather-hero');
@@ -2500,7 +2646,117 @@ function renderWeather(root, view, c, e) {
   return isToday ? update : null;
 }
 
-module.exports = { renderWeather, weatherShortcut };
+module.exports = { renderWeather, weatherShortcut, weatherRegionField, temperature, speed };
+
+    },
+    "season-view.js": function (module, exports, load, require) {
+'use strict';
+
+const { MAX_YEAR } = load("calendar.js");
+const { el, button, info, CalendarEditor } = load("ui.js");
+const { seasonSchedule } = load("seasons.js");
+const { seasonalProfile, seasonTargets } = load("weather.js");
+const { weatherRegionField, temperature, speed } = load("weather-view.js");
+
+const amount = (n) => n.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+const days = (n) => `${amount(n)} ${n === 1 ? 'dia' : 'dias'}`;
+const percent = (n) => `${Math.round(n)}%`;
+function tone(node, s) { node.style.setProperty('--brpg-season-color', s.color); }
+function renderSeasons(root, view, c, e) {
+  const d = view.selected, p = view.plugin;
+  const pane = el(root, 'section', 'brpg-seasons');
+  const heading = el(pane, 'div', 'brpg-weather-heading');
+  const title = el(heading, 'div');
+  el(title, 'h3', 'brpg-section-title', 'Estações do mundo');
+  el(title, 'p', 'brpg-hint', e.format(d));
+  const schedule = seasonSchedule(c, e, d, MAX_YEAR);
+  const { current, next, items, cycleLength, epoch } = schedule;
+  const openEditor = () => {
+    const editor = new CalendarEditor(p, c, false, 'estacoes');
+    editor.seasonEditorId = current?.season.id;
+    editor.open();
+  };
+  button(heading, 'Editar estações', openEditor, { icon: 'settings', iconOnly: true });
+  if (!items.length) {
+    const empty = el(pane, 'div', 'brpg-weather-empty');
+    info(empty, 'Este calendário ainda não tem estações. O clima usa o perfil-base de cada região.');
+    button(empty, 'Configurar estações', openEditor, { icon: 'plus' });
+    return;
+  }
+  if (c.weather?.enabled) weatherRegionField(pane, p, c);
+
+  if (current) {
+    const card = el(pane, 'div', 'brpg-season-current');
+    tone(card, current.season);
+    el(card, 'span', 'brpg-eyebrow', 'NA DATA SELECIONADA');
+    el(card, 'strong', 'brpg-season-name', current.season.name);
+    const day = epoch - current.from + 1;
+    el(card, 'span', 'brpg-season-day', `Dia ${amount(day)} de ${amount(current.duration)}`);
+    const bar = el(card, 'progress', 'brpg-season-progress');
+    bar.max = current.duration; bar.value = day;
+    bar.setAttribute('aria-label', 'Progresso da estação');
+  } else info(pane, 'A primeira estação começa depois da data selecionada.');
+
+  if (next) {
+    const block = el(pane, 'div', 'brpg-season-next');
+    const label = el(block, 'div');
+    el(label, 'span', 'brpg-eyebrow', 'PRÓXIMA VIRADA');
+    el(label, 'strong', '', next.season.name);
+    el(label, 'small', '', `${e.format(next.startDate)} · em ${days(next.from - epoch)}`);
+    button(block, 'Ver início de ' + next.season.name, () => view.choose(next.startDate), { icon: 'arrow-right', iconOnly: true });
+  }
+
+  const climate = el(pane, 'div', 'brpg-season-climate');
+  const r = c.weather?.enabled ? c.weather.regions.find((item) => item.id === c.weather.activeId) : null;
+  if (r) {
+    const actual = seasonalProfile(c, e, r, epoch, MAX_YEAR);
+    el(climate, 'strong', '', `Clima de ${r.name}`);
+    if (actual.season) el(climate, 'span', '', `Influência nesta data · ${actual.season}`);
+    const shift = c.weather.offset;
+    const adjustment = shift === 0 ? '' : ` com ${days(Math.abs(shift))} de ${shift > 0 ? 'atraso' : 'adiantamento'}`;
+    el(climate, 'small', '', `O clima muda gradualmente entre os perfis sazonais${adjustment}.`);
+    button(climate, 'Editar perfil da região', () => {
+      const editor = new CalendarEditor(p, c, false, 'clima');
+      editor.weatherRegion = r.id; editor.weatherProfile = current?.season.id;
+      editor.open();
+    }, { icon: 'sliders-horizontal', iconOnly: true });
+  } else info(climate, 'A previsão está desativada. Ative o clima para aplicar os efeitos das estações às regiões.');
+
+  const map = el(pane, 'section', 'brpg-season-cycle');
+  el(map, 'h4', '', c.seasonMode === 'periodic' ? 'Ciclo contínuo' : 'Ciclo por datas');
+  const description = c.seasonMode === 'periodic' ? days(cycleLength) + ' por ciclo' : days(cycleLength) + ' no ano selecionado';
+  info(map, description + ' · duração dos trechos mostrada em dias do calendário');
+  const strip = el(map, 'div', 'brpg-season-strip');
+  strip.setAttribute('aria-hidden', 'true');
+  for (const item of items) {
+    const segment = el(strip, 'span', item === current ? 'is-current' : '');
+    segment.style.setProperty('--brpg-season-span', String(item.duration));
+    tone(segment, item.season);
+  }
+  for (const item of items) {
+    const s = item.season;
+    const row = el(map, 'article', 'brpg-season-row' + (item === current ? ' is-current' : ''));
+    tone(row, s);
+    const main = el(row, 'div', 'brpg-season-row-title');
+    el(main, 'strong', '', s.name);
+    el(main, 'span', 'brpg-hint', days(item.duration));
+    if (item.startDate) el(row, 'span', 'brpg-season-date', `Início · ${e.format(item.startDate)}`);
+    if (item.endDate) el(row, 'span', 'brpg-season-date', `Até · ${e.format(item.endDate)}`);
+    if (r) {
+      const profile = seasonTargets(r, s);
+      const metrics = el(row, 'div', 'brpg-season-metrics');
+      el(metrics, 'span', 'brpg-chip', `${temperature(c, profile.low)} a ${temperature(c, profile.high)}`);
+      el(metrics, 'span', 'brpg-chip', `Precipitação ${percent(profile.rain)}`);
+      el(metrics, 'span', 'brpg-chip', `Neblina ${percent(profile.fog)}`);
+      el(metrics, 'span', 'brpg-chip', `Vento ${speed(c, Math.round(profile.wind))}`);
+      el(metrics, 'span', 'brpg-chip', `Umidade ${percent(profile.humidity)}`);
+      el(row, 'span', 'brpg-season-date', profile.regional ? 'Perfil regional desta estação' : 'Perfil-base da região');
+    }
+  }
+  if (r) info(map, 'Os valores são referências do perfil, não a previsão de um dia específico.');
+}
+
+module.exports = { renderSeasons };
 
     },
     "arkanis.json": function (module, exports, load, require) {

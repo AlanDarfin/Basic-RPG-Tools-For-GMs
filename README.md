@@ -13,6 +13,7 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Calcular eclipses solares e lunares e encontrar o próximo pico no calendário.
 - Criar eventos pontuais, de vários dias, anuais ou ligados ao início de uma estação. Vincular notas de sessão, colorir, categorizar e marcar eventos como reservados.
 - Navegar pela cronologia de um ano, agrupada por mês e dia, com filtros de mês, categoria e eventos reservados. Toque na data para abrir o dia no calendário, ou no evento para ver os detalhes e ações. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
+- Acompanhar a estação atual, o progresso e a próxima virada. Marcar inícios de estação no calendário e comparar o clima de cada trecho do ciclo.
 - Simular temperatura, vento, rajadas, neblina, umidade, cobertura de nuvens e precipitação em diferentes regiões e estações.
 - Importar JSON do Fantasy Calendar e salvar backups próprios do calendário ativo dentro do cofre.
 
@@ -61,6 +62,16 @@ O dia atual acompanha o relógio do mundo. Nas outras datas, o destaque é a pr�
 Em **Clima → Configurar clima**, escolha a região ativa ou crie outra. Cada região tem um perfil-base e pode substituir os valores por estação. Use perfis iniciais de clima temperado, quente e úmido, árido, frio ou de costa úmida. Edite as faixas de temperatura, chuva, vento, umidade e neblina, o ponto de congelamento, as unidades e o atraso das condições em relação às estações. Sem estações, o perfil-base vale o ano todo. A temperatura e o vento são configurados em °C e km/h mesmo se a visualização usar °F e mph.
 
 Arkanis vem com **Solus**, **Centrus** e **Nortus**, com perfis iniciais editáveis e **Centrus** selecionada. Outros mundos sem clima salvo começam com a opção desligada. A previsão é uma simulação fictícia independente, sem internet, baseada na data, na região e na semente. A mesma configuração repete a previsão mesmo após fechar o Obsidian. Alterar semente, perfis ou estrutura do calendário pode mudar o clima de datas antigas.
+
+## Estações e efeito no clima
+
+Vá em **Clima → Estações** ou toque no nome da estação em **Dia em foco**. A tela mostra a estação da data selecionada, o dia dentro dela, a próxima virada e os trechos do ciclo. A seta abre a data de início da próxima estação sem avançar o relógio da campanha. Os inícios também ficam marcados na grade e na lista do calendário.
+
+Em **Editar estações**, configure nome, cor e início em uma data fixa ou a duração de cada trecho de um ciclo contínuo. Arkanis começa com **Velanthir**, seguida de **Solanarê**, **Drosmy** e **Kealyth**, com 252 dias cada um. Eventos vinculados ao início de estação continuam aparecendo no dia correspondente.
+
+Em **Ajustes climáticos da estação**, use valores positivos ou negativos para modificar temperatura, chance e intensidade de precipitação, umidade, vento e neblina. Os ajustes são somados ao perfil de cada região. Por exemplo, **+20** em precipitação transforma uma chance de **35%** em **55%** no perfil daquela estação. Também dá pra usar um perfil diferente para cada par de região e estação em **Editar perfil da região**.
+
+A previsão faz a transição de um perfil para o próximo aos poucos. O atraso configurado no clima desloca essa transição sem mover a estação no calendário. Em Arkanis, o atraso inicial é de **64 dias do mundo**.
 
 ## Importação e backup
 

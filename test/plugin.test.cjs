@@ -90,7 +90,7 @@ async function type(root, label, value) { const x = labelInput(root, label); x.v
 test('ciclo de vida abre calendário, navega sem mudar data, avança e grava', async () => {
   const { p, leaves } = mock();
   await p.onload();
-  assert.equal(p.commands.length, 8);
+  assert.equal(p.commands.length, 9);
   await p.open(false);
   const view = leaves[0].view, root = view.contentEl;
   assert.match(root.textContent, /1 de Arkanis, ano 1 · 00:00/);
@@ -345,4 +345,63 @@ test('clima desligado em calendário novo oferece configuração e pode ser ativ
   await pickButton(form, 'Salvar calendário').click();
   assert.equal(m.p.active().weather.enabled, true);
   assert.match(root.querySelector('.brpg-weather').textContent, /Região geral.*perfil-base da região/);
+});
+
+test('estações têm atalho, progresso, efeito regional e virada navegável sem avançar o mundo', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const view = m.leaves[0].view, root = view.contentEl;
+  assert.ok(root.querySelector('.brpg-season-start'));
+  await pickButton(root, 'Velanthir · dia 1').click();
+  assert.equal(view.weatherPanel, 'seasons');
+  const panel = root.querySelector('.brpg-seasons');
+  assert.match(panel.querySelector('.brpg-season-current').textContent, /Velanthir.*Dia 1 de 252/);
+  assert.match(panel.querySelector('.brpg-season-next').textContent, /Solanarê.*252 dias/);
+  assert.match(panel.querySelector('.brpg-season-climate').textContent, /Clima de Centrus.*Kealyth.*64 dias de atraso/);
+  assert.equal(panel.all((x) => x.className.split(' ').includes('brpg-season-row')).length, 4);
+  await pickButton(root, 'Ver início de Solanarê').click();
+  assert.match(root.querySelector('.brpg-season-current').textContent, /Solanarê.*Dia 1 de 252/);
+  assert.equal(m.p.active().current.month, 'mes-1');
+  await pickButton(root, 'Previsão').click();
+  assert.equal(view.weatherPanel, 'forecast');
+  assert.ok(root.querySelector('.brpg-weather'));
+});
+
+test('editor de estações grava um ajuste climático sem reiniciar o relógio ou mudar o perfil da região', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl, anchor = m.p.active().clockSync.since;
+  const weather = plain(m.p.active().weather);
+  await pickButton(root, 'Clima').click();
+  await pickButton(root, 'Estações').click();
+  await pickButton(root, 'Editar estações').click();
+  const form = m.modal().contentEl;
+  const station = form.all((x) => x.tag === 'details' && x.open)[0];
+  assert.ok(station);
+  await type(station, 'Temperatura (°C)', '-8');
+  await type(station, 'Chance de precipitação (p.p.)', '20');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.modal(), null);
+  assert.deepEqual(plain(m.p.active().seasons[0].climate), { temperature: -8, rain: 20 });
+  assert.equal(m.p.active().clockSync.since, anchor);
+  assert.deepEqual(plain(m.p.active().weather), weather);
+  assert.match(root.querySelector('.brpg-seasons').textContent, /4 °C a 15 °C.*Precipitação 75%/);
+});
+
+test('mundo sem estação pode abrir o editor e cadastrar duas estreias em datas válidas', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  m.p.newCalendar();
+  await pickButton(m.modal().contentEl, 'Criar calendário').click();
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Clima').click();
+  await pickButton(root, 'Estações').click();
+  assert.match(root.querySelector('.brpg-seasons').textContent, /ainda não tem estações/);
+  await pickButton(root, 'Configurar estações').click();
+  const form = m.modal().contentEl;
+  await pickButton(form, 'Adicionar estação').click();
+  await pickButton(form, 'Adicionar estação').click();
+  await pickButton(form, 'Salvar calendário').click();
+  assert.deepEqual(plain(m.p.active().seasons.map((s) => s.day)), [1, 2]);
+  assert.match(root.querySelector('.brpg-seasons').textContent, /previsão está desativada/);
 });
