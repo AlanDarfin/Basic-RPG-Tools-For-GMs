@@ -37,9 +37,9 @@ Use **Definir data e hora do mundo** para ajustar a data, alinhar a hora à posi
 
 ## Céu e sóis
 
-Abra **Céu** ou escolha o ícone solar em **Dia em foco**. Os discos dos sóis mostram cor, tamanho relativo e estado de visibilidade. As luas têm discos próprios com a fase e a porcentagem iluminada na hora observada. Em **Horários e órbitas dos sóis**, a faixa de cada sol mostra quando ele fica acima do horizonte. A linha indica a hora em consulta.
+Abra **Céu** ou escolha o ícone solar em **Dia em foco**. Os discos dos sóis mostram cor, tamanho relativo e estado de visibilidade. As luas têm discos próprios com a fase e a porcentagem iluminada na hora observada. Em **Dia em foco**, os dois grupos aparecem juntos na hora do mundo ou ao meio-dia para outras datas. Toque em qualquer grupo para abrir o céu da data. Em **Horários e órbitas dos sóis**, a faixa de cada sol mostra quando ele fica acima do horizonte. A linha indica a hora em consulta.
 
-No dia atual, **Hora do mundo** acompanha o relógio. Mover o controle deslizante, digitar `HH:MM` ou escolher **Meio-dia** fixa uma prévia sem mexer no relógio da campanha. Use **Hora do mundo** pra voltar à observação ao vivo.
+No dia atual, **Hora do mundo** acompanha o relógio. Arraste a barra, use **−/+** para saltar uma hora, toque nos horários da escala ou digite `HH:MM`. Isso fixa uma prévia sem mexer no relógio da campanha. Use **Hora do mundo** pra voltar à observação ao vivo.
 
 O preset Arkanis usa **Innart, Dinart e Reart**. Reart é a referência, chega ao ponto mais alto às **16:00** e nasce em todos os dias. Há dias em que Innart ou Dinart não nascem e dias com sobreposição. O cálculo usa órbitas circulares independentes, com período proporcional ao semieixo elevado a 3/2. É uma aproximação para um céu fictício, sem interação gravitacional entre as três estrelas. [Referência de órbitas e gravidade](https://science.nasa.gov/learn/basics-of-space-flight/chapter3-3/).
 
@@ -65,7 +65,7 @@ Arkanis vem com **Solus**, **Centrus** e **Nortus**, com perfis iniciais editáv
 
 ## Estações e efeito no clima
 
-Vá em **Clima → Estações** ou toque no nome da estação em **Dia em foco**. A tela mostra a estação da data selecionada, o dia dentro dela, a próxima virada e os trechos do ciclo. A seta abre a data de início da próxima estação sem avançar o relógio da campanha. Os inícios também ficam marcados na grade e na lista do calendário.
+Vá em **Clima → Estações** ou toque no nome da estação em **Dia em foco**. A tela reúne a estação da data selecionada, o progresso e a próxima virada num resumo. A lista do ciclo mostra as datas e a faixa de temperatura de cada estação para a região selecionada. Toque numa estação para ver o restante do clima, ir ao primeiro dia ou editar o perfil regional. A seta abre a data de início da próxima estação sem avançar o relógio da campanha. Os inícios também ficam marcados na grade e na lista do calendário.
 
 Em **Editar estações**, configure nome, cor e início em uma data fixa ou a duração de cada trecho de um ciclo contínuo. Arkanis começa com **Velanthir**, seguida de **Solanarê**, **Drosmy** e **Kealyth**, com 252 dias cada um. Eventos vinculados ao início de estação continuam aparecendo no dia correspondente.
 

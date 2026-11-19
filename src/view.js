@@ -5,7 +5,7 @@ const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldD
 const { solarPositions, formatTime } = require('./sky');
 const { eclipsesForDay, nextEclipse } = require('./eclipse');
 const { mode: clockMode, readMinute } = require('./world-clock');
-const { moonDisc, sunDisc } = require('./celestial-ui');
+const { focusSky, skyOverview, gridIcon } = require('./celestial-ui');
 const { weatherDay } = require('./weather');
 const { renderWeather, weatherShortcut } = require('./weather-view');
 const { renderSeasons } = require('./season-view');
@@ -40,6 +40,7 @@ class CalendarView extends ItemView {
     this.calId = null;
     this.mode = 'month';
     this.weatherPanel = 'forecast';
+    this.expandedSeasons = new Set();
     this.category = '';
     this.showHidden = false;
     this.timelineMonth = '';
@@ -48,14 +49,14 @@ class CalendarView extends ItemView {
     this.skyMinute = null;
     this.skyFollowing = true;
     this.paintSkyClock = null;
-    this.paintFocusMoons = null;
+    this.paintFocusSky = null;
     this.paintWeatherClock = null;
   }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Basic RPG · Calendário'; }
   getIcon() { return 'calendar-days'; }
   async onOpen() { this.render(); }
-  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; this.paintWeatherClock = null; replaceEl(this.contentEl); }
+  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusSky = null; this.paintWeatherClock = null; replaceEl(this.contentEl); }
   clockTick() {
     const c = this.plugin.active();
     if (!c || !this.clockReadout || this.calId !== c.id) return;
@@ -66,7 +67,7 @@ class CalendarView extends ItemView {
     this.clockReadout.textContent = `${e.format(next)} · ${clockText(next)}`;
     if (sameDate(next, this.selected)) {
       if (this.mode === 'sky' && this.skyFollowing) this.paintSkyClock?.(readMinute(c, next));
-      if (this.mode === 'month') this.paintFocusMoons?.(next);
+      if (this.mode === 'month') this.paintFocusSky?.(next);
       if (this.mode === 'weather') this.paintWeatherClock?.(readMinute(c, next));
     }
   }
@@ -75,6 +76,7 @@ class CalendarView extends ItemView {
       this.selected = { ...world };
       this.category = '';
       this.showHidden = false;
+      this.expandedSeasons.clear();
       this.timelineMonth = '';
       this.detailOpen = false;
       this.skyMinute = null;
@@ -88,6 +90,10 @@ class CalendarView extends ItemView {
   }
   choose(d) { this.selected = d; this.render(); }
   showWeather(panel) { this.mode = 'weather'; this.weatherPanel = panel; this.render(); }
+  openSkyFromFocus() { this.mode = 'sky'; this.skyFollowing = true; this.render(); }
+  defaultSkyMinute(c, date, world) {
+    return sameDate(date, world) ? readMinute(c, world) : Math.floor(c.clock.hours * c.clock.minutes / 2);
+  }
   run(fn) { return () => this.plugin.attempt(fn); }
   filtered(events) { return events.filter((x) => (this.showHidden || !x.hidden) && (!this.category || x.category === this.category)); }
   render() {
@@ -97,7 +103,7 @@ class CalendarView extends ItemView {
     const worldNow = this.plugin.worldNow(c, e);
     this.sync(c, e, worldNow);
     this.paintSkyClock = null;
-    this.paintFocusMoons = null;
+    this.paintFocusSky = null;
     this.paintWeatherClock = null;
     const root = this.contentEl;
     root.classList.add('brpg', 'brpg-view');
@@ -224,83 +230,76 @@ class CalendarView extends ItemView {
     const weather = weatherDay(c, e, this.selected, MAX_YEAR);
     if (weather) weatherShortcut(pane, c, weather, () => this.showWeather('forecast'), true);
 
+    const date = this.selected;
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
+    const initial = this.skyFollowing ? this.defaultSkyMinute(c, date, this.savedToday) : (this.skyMinute ?? middle);
     const controls = el(pane, 'div', 'brpg-sky-controls');
     const sliderRow = el(controls, 'div', 'brpg-sky-time');
     const row = el(sliderRow, 'div', 'brpg-toolbar brpg-time-head');
     const label = el(row, 'div', 'brpg-sky-mode');
     const modeText = el(label, 'strong', 'brpg-label');
     const status = el(label, 'span', 'brpg-hint');
-    const time = el(row, 'input', 'brpg-input brpg-time-input');
+    const timeCluster = el(row, 'div', 'brpg-time-stepper');
+    const go = (minute) => { this.skyFollowing = false; update(minute); };
+    const previous = button(timeCluster, 'Voltar uma hora na simulação', () => go(this.skyMinute - c.clock.minutes), { icon: 'minus', iconOnly: true });
+    const time = el(timeCluster, 'input', 'brpg-input brpg-time-input');
     time.type = 'text'; time.inputMode = 'text'; time.maxLength = 5; time.setAttribute('aria-label', 'Hora simulada (HH:MM)');
-    const slider = el(sliderRow, 'input', 'brpg-time-range');
+    const next = button(timeCluster, 'Avançar uma hora na simulação', () => go(this.skyMinute + c.clock.minutes), { icon: 'plus', iconOnly: true });
+    const rail = el(sliderRow, 'div', 'brpg-sky-rail');
+    const slider = el(rail, 'input', 'brpg-time-range');
     slider.type = 'range'; slider.min = '0'; slider.max = String(day - 1); slider.step = '1';
     slider.setAttribute('aria-label', 'Percorrer as horas do dia');
     slider.disabled = day === 1;
     const axis = el(sliderRow, 'div', 'brpg-sky-axis');
-    el(axis, 'span', '', '00:00');
-    el(axis, 'span', '', formatTime(middle, c.clock));
-    el(axis, 'span', '', formatTime(day, c.clock, true));
-    const shortcuts = el(controls, 'div', 'brpg-toolbar');
+    const marks = day === 1 ? [[0, 'Início do dia']] : day === 2 ? [[0, 'Início do dia'], [1, 'Fim do dia']] :
+      [[0, 'Início do dia'], [middle, 'Meio-dia'], [day - 1, 'Fim do dia']].filter(([at], i, all) => all.findIndex(([n]) => n === at) === i);
+    for (const [at, label] of marks) {
+      const point = button(axis, label, () => go(at), { className: 'brpg-button brpg-sky-point', iconOnly: true, disabled: day === 1 });
+      const stamp = formatTime(at, c.clock);
+      point.title = label + ' · ' + stamp;
+      point.setAttribute('aria-label', label);
+      el(point, 'span', '', stamp);
+    }
+    const shortcuts = el(controls, 'div', 'brpg-toolbar brpg-sky-shortcuts');
     const useClock = button(shortcuts, 'Hora do mundo', () => {
       this.skyFollowing = true;
       this.choose(this.plugin.worldNow(c, e));
     }, { icon: 'clock-3' });
-    button(shortcuts, 'Meio-dia', () => { this.skyFollowing = false; update(middle); }, { icon: 'sun' });
+    el(shortcuts, 'span', 'brpg-hint', 'Toque na hora para digitar');
 
     const overview = el(pane, 'div', 'brpg-celestial-overview');
-    const at = e.epoch(this.selected);
+    const at = e.epoch(date);
+    const suns = solarPositions(c.sky, at, c.clock, initial);
+    const paintBodies = skyOverview(overview, suns, e.moons(date, initial / day));
     const updateEclipses = this.renderEclipses(pane, c, e, at, day);
     const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
     summary(details, 'Horários e órbitas dos sóis', 'orbit');
     const cards = el(details, 'div', 'brpg-solar-cards');
+    const paintOrbits = suns.map((sun) => this.solarCard(cards, sun, c.clock, day));
     const update = (minute, keepText = false) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
-      const following = this.skyFollowing && sameDate(this.savedToday, this.selected);
+      const following = this.skyFollowing && sameDate(this.savedToday, date);
       modeText.textContent = following ? 'Hora do mundo' : 'Hora simulada';
-      status.textContent = following ? (clockMode(c) === 'real' ? 'Acompanhando o relógio' : 'Relógio em modo manual') : 'Não altera a campanha';
+      status.textContent = following ? (clockMode(c) === 'real' ? 'Acompanhando o relógio' : 'Relógio em modo manual') : 'Prévia sem alterar a campanha';
       useClock.setAttribute('aria-pressed', String(following));
-      if (!keepText) time.value = formatTime(this.skyMinute, c.clock);
+      const value = formatTime(this.skyMinute, c.clock);
+      if (!keepText) time.value = value;
       slider.value = String(this.skyMinute);
-      slider.setAttribute('aria-valuetext', formatTime(this.skyMinute, c.clock));
+      slider.setAttribute('aria-valuetext', value);
+      slider.style.setProperty('--brpg-time-progress', day > 1 ? pct(this.skyMinute, day - 1) : '0%');
+      previous.disabled = this.skyMinute === 0;
+      next.disabled = this.skyMinute === day - 1;
       updateEclipses(this.skyMinute);
-      replaceEl(overview); replaceEl(cards);
-      const p = solarPositions(c.sky, at, c.clock, this.skyMinute);
-      const moons = e.moons(this.selected, this.skyMinute / day);
-      const solar = el(overview, 'section', 'brpg-celestial-group');
-      el(solar, 'h3', 'brpg-section-title', 'Sóis');
-      if (p.length) {
-        const icons = el(solar, 'div', 'brpg-celestial-grid');
-        for (const sun of p) {
-          const tile = el(icons, 'article', 'brpg-celestial-tile' + (sun.visibleNow ? ' is-above' : ''));
-          sunDisc(tile, sun);
-          el(tile, 'strong', '', sun.name);
-          el(tile, 'small', '', sun.visibleNow ? 'No céu' : sun.visibleToday ? 'Abaixo do horizonte' : 'Não nasce');
-          tile.title = sun.label;
-          this.solarCard(cards, sun, c.clock, this.skyMinute, day);
-        }
-      } else info(solar, 'Nenhum sol configurado.');
-      if (moons.length) {
-        const group = el(overview, 'section', 'brpg-celestial-group');
-        el(group, 'h3', 'brpg-section-title', 'Luas');
-        const icons = el(group, 'div', 'brpg-celestial-grid');
-        for (const moon of moons) {
-          const tile = el(icons, 'article', 'brpg-celestial-tile');
-          moonDisc(tile, moon);
-          el(tile, 'strong', '', moon.name);
-          const label = el(tile, 'small', '', moon.phase);
-          label.title = `${Math.round(moon.illumination * 100)}% iluminada`;
-          el(tile, 'small', 'brpg-celestial-illumination', `${Math.round(moon.illumination * 100)}%`);
-        }
-      }
+      const currentSuns = solarPositions(c.sky, at, c.clock, this.skyMinute);
+      paintBodies(currentSuns, e.moons(date, this.skyMinute / day));
+      paintOrbits.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
     };
-    slider.addEventListener('input', () => { this.skyFollowing = false; update(Number(slider.value)); });
+    slider.addEventListener('input', () => go(Number(slider.value)));
     time.addEventListener('change', () => {
       const value = /^(\d{1,2}):(\d{2})$/.exec(time.value.trim());
       if (value && Number(value[1]) < c.clock.hours && Number(value[2]) < c.clock.minutes) {
-        this.skyFollowing = false;
-        update(Number(value[1]) * c.clock.minutes + Number(value[2]));
+        go(Number(value[1]) * c.clock.minutes + Number(value[2]));
       } else {
         time.value = formatTime(this.skyMinute, c.clock);
         this.plugin.attempt(() => { throw new Error(`Use HH:MM de 00:00 a ${formatTime(day - 1, c.clock)}.`); });
@@ -308,7 +307,7 @@ class CalendarView extends ItemView {
     });
     this.paintSkyClock = (n) => update(n, time.ownerDocument.activeElement === time);
     if (!c.sky.suns.length) details.hidden = true;
-    update(this.skyFollowing ? (sameDate(this.savedToday, this.selected) ? readMinute(c, this.savedToday) : middle) : (this.skyMinute ?? middle));
+    update(initial);
   }
 
   renderEclipses(parent, c, engine, epoch, total) {
@@ -375,8 +374,8 @@ class CalendarView extends ItemView {
     };
   }
 
-  solarCard(root, sun, clock, minute, total) {
-    const card = el(root, 'article', 'brpg-solar-card' + (sun.visibleNow ? ' is-visible' : ''));
+  solarCard(root, sun, clock, total) {
+    const card = el(root, 'article', 'brpg-solar-card');
     card.style.setProperty('--brpg-sun-color', sun.color);
     const head = el(card, 'div', 'brpg-sun-heading');
     const icon = el(head, 'span', 'brpg-sun-icon');
@@ -384,7 +383,7 @@ class CalendarView extends ItemView {
     setIcon(icon, 'sun');
     const title = el(head, 'div', 'brpg-sun-name');
     el(title, 'h4', '', sun.name);
-    el(title, 'div', 'brpg-hint', sun.label);
+    const state = el(title, 'div', 'brpg-hint');
     if (sun.reference) el(head, 'span', 'brpg-chip', 'Referência');
     const track = el(card, 'div', 'brpg-sun-track');
     const windows = sun.intervals.map(([a, b]) => `${formatTime(a, clock)} a ${formatTime(b, clock, true)}`);
@@ -395,16 +394,22 @@ class CalendarView extends ItemView {
       stripe.style.setProperty('--brpg-from', pct(start, total));
       stripe.style.setProperty('--brpg-duration', pct(end - start, total));
     }
-    el(track, 'span', 'brpg-sun-marker').style.setProperty('--brpg-now', pct(minute, total));
+    const marker = el(track, 'span', 'brpg-sun-marker');
     const marks = el(card, 'div', 'brpg-sun-marks');
     const n = (num) => num.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
     if (sun.horizon === 'normal') {
       el(marks, 'span', '', `Nascer ${formatTime(sun.from, clock)}`);
       el(marks, 'span', '', `Pôr ${formatTime(sun.to, clock)}`);
     }
-    el(marks, 'span', '', `Altura ${n(sun.altitude)}°`);
+    const altitude = el(marks, 'span');
     el(marks, 'span', '', `Ciclo de ${n(sun.period)} dias`);
     el(marks, 'span', '', `Tamanho ×${n(sun.size)}`);
+    return (current, minute) => {
+      card.classList.toggle('is-visible', current.visibleNow);
+      state.textContent = current.label;
+      altitude.textContent = `Altura ${n(current.altitude)}°`;
+      marker.style.setProperty('--brpg-now', pct(minute, total));
+    };
   }
   renderMonth(root, c, e) {
     const { year, month } = this.selected, m = c.months[e.monthIndex(month)];
@@ -420,11 +425,12 @@ class CalendarView extends ItemView {
     const count = [...busy.values()].filter((events) => events.length).length;
     el(label, 'p', 'brpg-hint', `${len} dias${count ? ' · '+count+' com eventos' : ''}`);
     const layouts = el(head, 'div', 'brpg-month-layouts');
-    for (const [layout, name, icon] of [['grid', 'Usar grade', 'grid-3x3'], ['list', 'Usar lista', 'list']]) {
+    for (const [layout, name, icon] of [['grid', 'Usar grade', null], ['list', 'Usar lista', 'list']]) {
       const b = button(layouts, name, () => {
         this.layout = this.layout === layout ? 'auto' : layout;
         this.render();
       }, { icon, iconOnly: true });
+      if (layout === 'grid') gridIcon(el(b, 'span', 'brpg-icon'));
       b.setAttribute('aria-pressed', String(this.layout === layout));
     }
     const group = el(body, 'div', `brpg-layout brpg-layout-${this.layout}${c.week.length > 8 ? ' brpg-long-week' : ''}`);
@@ -505,7 +511,7 @@ class CalendarView extends ItemView {
     const label = el(head, 'div', 'brpg-day-heading');
     el(label, 'div', 'brpg-eyebrow', 'DIA EM FOCO');
     el(label, 'h3', 'brpg-section-title', e.format(d));
-    button(head, 'Ver céu desta data', () => { this.mode = 'sky'; this.render(); }, { icon: 'sun', iconOnly: true });
+    button(head, 'Ver céu desta data', () => this.openSkyFromFocus(), { icon: 'sun', iconOnly: true });
     button(head, 'Definir como data do mundo', () => new WorldDateEditor(this.plugin, c, d).open(), { icon: 'clock-3', iconOnly: true });
     const bits = el(section, 'div', 'brpg-metadata');
     el(bits, 'span', 'brpg-chip', meta.weekday || 'Fora da semana');
@@ -515,22 +521,17 @@ class CalendarView extends ItemView {
         { icon: 'leaf', className: 'brpg-button brpg-season-shortcut' });
       chip.style.setProperty('--brpg-season-color', season.color);
     }
-    const discs = el(bits, 'span', 'brpg-focus-moons');
-    const phases = (world) => {
-      replaceEl(discs);
-      const minute = sameDate(d, world) ? readMinute(c, world) : 0;
-      const moons = e.moons(d, minute / (c.clock.hours * c.clock.minutes));
-      discs.hidden = !moons.length;
-      for (const moon of moons) moonDisc(discs, moon);
-      if (moons.length) {
-        discs.title = moons.map((moon) => `${moon.name} · ${moon.phase}`).join(' | ');
-        discs.setAttribute('aria-label', discs.title);
-      }
-    };
-    phases(this.savedToday);
-    this.paintFocusMoons = phases;
     const weather = weatherDay(c, e, d, MAX_YEAR);
     if (weather) weatherShortcut(bits, c, weather, () => this.showWeather('forecast'));
+    const sky = (minute) => solarPositions(c.sky, e.epoch(d), c.clock, minute);
+    const moonPhases = (minute) => e.moons(d, minute / (c.clock.hours * c.clock.minutes));
+    const paint = focusSky(section, sky(0), moonPhases(0), () => this.openSkyFromFocus());
+    const phases = (world) => {
+      const minute = this.defaultSkyMinute(c, d, world);
+      paint(sky(minute), moonPhases(minute), formatTime(minute, c.clock));
+    };
+    phases(this.savedToday);
+    this.paintFocusSky = phases;
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;

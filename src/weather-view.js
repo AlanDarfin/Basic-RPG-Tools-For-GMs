@@ -39,12 +39,12 @@ function fact(parent, icon, label, value, note) {
   if (note) el(tile, 'small', '', note);
 }
 
-function weatherRegionField(parent, p, c) {
+function weatherRegionField(parent, p, c, label = 'Região da campanha') {
   const w = c.weather;
   const selectors = el(parent, 'label', 'brpg-weather-region');
   const regionLabel = el(selectors, 'span', 'brpg-weather-region-label');
   mark(regionLabel, 'map-pin');
-  el(regionLabel, 'span', '', 'Região da campanha');
+  el(regionLabel, 'span', '', label);
   select(selectors, w.regions.map((r) => [r.id, r.name]), w.activeId,
     (activeId) => p.attempt(() => p.editCalendar(c.id, (cal) => { cal.weather.activeId = activeId; })), 'Região da campanha');
 }

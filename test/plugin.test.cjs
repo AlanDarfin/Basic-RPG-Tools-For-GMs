@@ -357,7 +357,7 @@ test('estações têm atalho, progresso, efeito regional e virada navegável sem
   const panel = root.querySelector('.brpg-seasons');
   assert.match(panel.querySelector('.brpg-season-current').textContent, /Velanthir.*Dia 1 de 252/);
   assert.match(panel.querySelector('.brpg-season-next').textContent, /Solanarê.*252 dias/);
-  assert.match(panel.querySelector('.brpg-season-climate').textContent, /Clima de Centrus.*Kealyth.*64 dias de atraso/);
+  assert.match(panel.querySelector('.brpg-season-climate').textContent, /Clima regional.*Centrus.*Kealyth.*64 dias de atraso/);
   assert.equal(panel.all((x) => x.className.split(' ').includes('brpg-season-row')).length, 4);
   await pickButton(root, 'Ver início de Solanarê').click();
   assert.match(root.querySelector('.brpg-season-current').textContent, /Solanarê.*Dia 1 de 252/);
@@ -385,7 +385,7 @@ test('editor de estações grava um ajuste climático sem reiniciar o relógio o
   assert.deepEqual(plain(m.p.active().seasons[0].climate), { temperature: -8, rain: 20 });
   assert.equal(m.p.active().clockSync.since, anchor);
   assert.deepEqual(plain(m.p.active().weather), weather);
-  assert.match(root.querySelector('.brpg-seasons').textContent, /4 °C a 15 °C.*Precipitação 75%/);
+  assert.match(root.querySelector('.brpg-seasons').textContent, /4–15 °C.*Precipitação 75%/);
 });
 
 test('mundo sem estação pode abrir o editor e cadastrar duas estreias em datas válidas', async () => {
@@ -404,4 +404,96 @@ test('mundo sem estação pode abrir o editor e cadastrar duas estreias em datas
   await pickButton(form, 'Salvar calendário').click();
   assert.deepEqual(plain(m.p.active().seasons.map((s) => s.day)), [1, 2]);
   assert.match(root.querySelector('.brpg-seasons').textContent, /previsão está desativada/);
+});
+
+test('barra do céu permite hora exata, saltos de uma hora e o último minuto de Arkanis', async () => {
+  const m = mock();
+  m.p.clockNow = () => 1800000000000;
+  await m.p.onload(); await m.p.open(false);
+  const view = m.leaves[0].view, root = view.contentEl;
+  await pickButton(root, 'Céu').click();
+  const range = root.querySelector('.brpg-time-range');
+  const sky = root.querySelector('.brpg-celestial-overview');
+  const card = sky.querySelector('.brpg-celestial-tile');
+  const moon = sky.all((x) => x.attributes.class === 'brpg-moon-disc')[0];
+  const moonPath = moon.all((x) => x.tag === 'path')[0];
+  const old = moonPath.attributes.d;
+  assert.equal(range.max, '2047');
+  assert.equal(range.attributes['aria-valuetext'], '00:00');
+  assert.ok(pickButton(root, 'Voltar uma hora na simulação').disabled);
+  await pickButton(root, 'Meio-dia').click();
+  assert.equal(view.skyMinute, 16 * 64);
+  assert.equal(range.attributes['aria-valuetext'], '16:00');
+  assert.notEqual(moonPath.attributes.d, old);
+  assert.equal(sky.querySelector('.brpg-celestial-tile'), card);
+  assert.equal(sky.all((x) => x.attributes.class === 'brpg-moon-disc')[0], moon);
+  await pickButton(root, 'Avançar uma hora na simulação').click();
+  assert.equal(view.skyMinute, 17 * 64);
+  await pickButton(root, 'Voltar uma hora na simulação').click();
+  assert.equal(view.skyMinute, 16 * 64);
+  range.value = '1041'; await range.emit('input');
+  assert.equal(range.attributes['aria-valuetext'], '16:17');
+  await pickButton(root, 'Fim do dia').click();
+  assert.equal(range.attributes['aria-valuetext'], '31:63');
+  assert.ok(pickButton(root, 'Avançar uma hora na simulação').disabled);
+  assert.equal(view.skyFollowing, false);
+  assert.equal(m.p.active().current.hour, 0);
+});
+
+test('Dia em foco reúne sóis e luas e acompanha o relógio sem substituir os discos', async () => {
+  const m = mock();
+  let now = 1800000000000;
+  m.p.clockNow = () => now;
+  await m.p.onload(); await m.p.open(false);
+  const view = m.leaves[0].view, root = view.contentEl;
+  const focus = root.querySelector('.brpg-focus-sky');
+  const suns = focus.querySelector('.brpg-focus-suns');
+  const moons = focus.querySelector('.brpg-focus-moons');
+  assert.match(suns.attributes['aria-label'], /Innart.*Dinart.*Reart/);
+  assert.match(suns.attributes['aria-label'], /Reart · Abaixo do horizonte/);
+  assert.match(moons.attributes['aria-label'], /Verika.*Neurika.*Menrika/);
+  const sun = suns.all((x) => x.className.split(' ').includes('brpg-sun-disc'))[2];
+  assert.equal(focus.querySelector('.brpg-focus-hour').textContent, '00:00');
+  now += .5 * 86400000; m.p.tickClock();
+  assert.match(suns.attributes['aria-label'], /Reart · No céu/);
+  assert.equal(focus.querySelector('.brpg-focus-hour').textContent, '16:00');
+  assert.ok(sun.className.split(' ').includes('is-above'));
+  await pickButton(root, 'Usar grade').click();
+  assert.ok(pickButton(root, 'Usar grade').all((x) => x.tag === 'svg').length);
+  const calendarSuns = root.querySelector('.brpg-focus-suns');
+  await calendarSuns.click();
+  assert.equal(view.mode, 'sky');
+  assert.equal(view.skyMinute, 16 * 64);
+  assert.equal(view.selected.day, 1);
+  await pickButton(root, 'Próximo dia').click();
+  await pickButton(root, 'Calendário').click();
+  assert.equal(root.querySelector('.brpg-focus-hour').textContent, '16:00');
+});
+
+test('estações agrupam atual e próxima, abrem detalhes sob demanda e preservam expansão ao trocar região', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Clima').click();
+  await pickButton(root, 'Estações').click();
+  const overview = root.querySelector('.brpg-season-overview');
+  assert.ok(overview.querySelector('.brpg-season-current') && overview.querySelector('.brpg-season-next'));
+  const rows = root.querySelector('.brpg-season-rows');
+  let station = rows.children[1];
+  assert.equal(station.tag, 'details');
+  assert.equal(station.open, false);
+  assert.match(station.children[0].textContent, /Solanarê.*1 Hysteria.*19–32 °C/);
+  station.open = true;
+  await station.emit('toggle');
+  const select = root.all((x) => x.attributes['aria-label'] === 'Região da campanha')[0];
+  select.value = 'nortus';
+  await select.emit('change');
+  station = root.querySelector('.brpg-season-rows').children[1];
+  assert.equal(station.open, true);
+  assert.match(station.children[0].textContent, /6–18 °C/);
+  assert.match(station.querySelector('.brpg-season-metrics').textContent, /Precipitação 42%.*Neblina 23%/);
+  await pickButton(station, 'Editar clima de Solanarê').click();
+  const editor = m.modal().contentEl;
+  assert.equal(labelInput(editor, 'Região para editar').value, 'nortus');
+  assert.equal(labelInput(editor, 'Perfil a editar').value, 'estacao-2');
 });
