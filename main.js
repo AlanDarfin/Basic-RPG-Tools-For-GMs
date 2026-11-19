@@ -10,6 +10,7 @@ const { decodeImport, encodeExport } = load("imports.js");
 const { VIEW, CalendarView } = load("view.js");
 const { ensureSky } = load("sky.js");
 const { ensureEclipseOrbits } = load("eclipse.js");
+const { worldDate, mode: clockMode, anchor, ensureClock, transferDate } = load("world-clock.js");
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const arkanis = load("arkanis.json");
 
@@ -31,6 +32,7 @@ class Settings extends PluginSettingTab {
     el(facts, 'span', 'brpg-chip', `${c.months.length} meses`);
     el(facts, 'span', 'brpg-chip', `Semana de ${c.week.length} dias`);
     el(facts, 'span', 'brpg-chip', `${c.sky.suns.length} sóis · ${c.moons.length} luas`);
+    el(facts, 'span', 'brpg-chip', clockMode(c) === 'real' ? 'Relógio em tempo real' : 'Relógio manual');
     const row = el(current, 'div', 'brpg-toolbar');
     button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days', className: 'brpg-button mod-cta' });
     button(row, 'Editar calendário', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
@@ -40,6 +42,7 @@ class Settings extends PluginSettingTab {
     const manage = el(advanced, 'div', 'brpg-toolbar');
     button(manage, 'Duplicar', () => p.attempt(async () => {
       const draft = copy(c);
+      anchor(draft, p.worldNow(c), clockMode(c), p.clockNow());
       draft.id = uid('cal'); draft.name = (draft.name.slice(0, 88) + ' (cópia)');
       await p.putCalendar(draft, true); this.display();
     }), { icon: 'copy' });
@@ -92,15 +95,20 @@ class BasicRPG extends Plugin {
   async onload() {
     this.pending = Promise.resolve();
     this.readOnly = false;
+    let saveClock = false;
     try {
       const saved = await this.loadData();
       if (saved == null) {
         const preset = copy(arkanis);
+        saveClock = ensureClock(preset, this.clockNow());
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
-          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c); validateCalendar(c);
+          validateCalendar(c);
+          ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c);
+          if (ensureClock(c, this.clockNow())) saveClock = true;
+          validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;
@@ -111,6 +119,15 @@ class BasicRPG extends Plugin {
       this.readOnly = true;
       new Notice('Basic RPG: não foi possível ler os dados. Alterações bloqueadas para não sobrescrever o cofre.', 10000);
     }
+    if (saveClock && !this.readOnly) {
+      try { await this.saveData(this.state); }
+      catch { new Notice('Basic RPG: não foi possível salvar a âncora do relógio. Ela não será preservada até uma gravação bem-sucedida.', 9000); }
+    }
+    if (typeof window !== 'undefined') {
+      this.registerInterval(window.setInterval(() => this.tickClock(), 5000));
+      this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) this.tickClock(); });
+      this.registerDomEvent(window, 'focus', () => this.tickClock());
+    }
     this.registerView(VIEW, (leaf) => new CalendarView(leaf, this));
     this.addRibbonIcon('calendar-days', 'Basic RPG · Calendário', () => this.attempt(() => this.open(false)));
     this.addSettingTab(new Settings(this));
@@ -120,12 +137,12 @@ class BasicRPG extends Plugin {
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
-      const cal = this.active(); new EventEditor(this, cal, cal.current).open();
+      const cal = this.active(); new EventEditor(this, cal, this.worldNow(cal)).open();
     } });
     this.addCommand({ id: 'next-world-day', name: 'Avançar um dia no mundo', callback: () => this.attempt(() => this.advance(1)) });
     this.addCommand({ id: 'previous-world-day', name: 'Voltar um dia no mundo', callback: () => this.attempt(() => this.advance(-1)) });
     this.addCommand({ id: 'set-world-date', name: 'Definir data e hora do mundo', callback: () => {
-      const cal = this.active(); new WorldDateEditor(this, cal, cal.current).open();
+      const cal = this.active(); new WorldDateEditor(this, cal, {}).open();
     } });
     this.onLayoutReady();
   }
@@ -142,6 +159,14 @@ class BasicRPG extends Plugin {
     });
   }
   active() { return this.state.calendars.find((c) => c.id === this.state.activeId) || this.state.calendars[0]; }
+  clockNow() { return Date.now(); }
+  worldNow(c, engine) { return worldDate(c, this.clockNow(), engine); }
+  tickClock() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.clockTick();
+  }
+  setWorldDate(id, date, selectedMode) {
+    return this.editCalendar(id, (cal) => anchor(cal, date, selectedMode || clockMode(cal), this.clockNow()));
+  }
   attempt(fn) {
     return Promise.resolve().then(fn).catch((error) => {
       new Notice(error instanceof Error ? error.message : String(error), 6500);
@@ -172,17 +197,32 @@ class BasicRPG extends Plugin {
       validateCalendar(c);
     });
   }
-  putCalendar(cal, isNew) {
+  putCalendar(cal, isNew, options = {}) {
     return this.change((s) => {
       const idx = s.calendars.findIndex((item) => item.id === cal.id);
-      const draft = copy(validateCalendar(cal));
+      const draft = copy(cal);
       if (isNew) {
         assert(idx < 0, 'Já existe um calendário com este ID.');
+        if (options.clockMode) anchor(draft, draft.current, options.clockMode, this.clockNow());
+        else ensureClock(draft, this.clockNow());
+        validateCalendar(draft);
         s.calendars.push(draft); s.activeId = draft.id;
       } else {
         assert(idx >= 0, 'Esse calendário foi removido.');
-        // Structural drafts should not overwrite events edited from another open pane.
-        draft.events = s.calendars[idx].events;
+        const old = s.calendars[idx];
+        // Active editing must anchor to the live time at save, not to the old stored base date.
+        const now = this.clockNow();
+        const requestedMode = options.clockMode || clockMode(old);
+        const clockChanged = old.clock.hours !== draft.clock.hours || old.clock.minutes !== draft.clock.minutes;
+        const structureChanged = JSON.stringify(old.months) !== JSON.stringify(draft.months) || JSON.stringify(old.leapDays) !== JSON.stringify(draft.leapDays);
+        if (options.explicitDate || clockChanged || structureChanged || requestedMode !== clockMode(old)) {
+          const value = options.explicitDate ? draft.current : transferDate(old, draft, worldDate(old, now));
+          anchor(draft, value, requestedMode, now);
+        } else {
+          draft.current = old.current;
+          draft.clockSync = old.clockSync;
+        }
+        draft.events = old.events;
         validateCalendar(draft);
         s.calendars[idx] = draft;
       }
@@ -196,7 +236,9 @@ class BasicRPG extends Plugin {
   newCalendar() { new CalendarEditor(this, newCalendar(), true).open(); }
   async advance(amount) {
     await this.editCalendar(this.active().id, (c) => {
-      Object.assign(c.current, new CalendarEngine(c).shift(c.current, amount));
+      const now = this.clockNow(), engine = new CalendarEngine(c);
+      const current = worldDate(c, now, engine);
+      anchor(c, { ...current, ...engine.shift(current, amount) }, clockMode(c), now);
     });
   }
   async open(main) {
@@ -221,7 +263,9 @@ class BasicRPG extends Plugin {
     const clean = c.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'calendario';
     let path = `Basic-RPG-${clean}.json`;
     for (let count = 2; this.app.vault.getAbstractFileByPath(path); count++) path = `Basic-RPG-${clean}-${count}.json`;
-    await this.app.vault.create(path, JSON.stringify(encodeExport(c), null, 2) + '\n');
+    const output = copy(c), now = this.clockNow();
+    anchor(output, worldDate(c, now), clockMode(c), now);
+    await this.app.vault.create(path, JSON.stringify(encodeExport(output), null, 2) + '\n');
     return path;
   }
 }
@@ -361,15 +405,16 @@ class CalendarEngine {
     const idx = mod(this.c.firstWeekday + within + (this.c.weekOverflow ? this.yearStart(d.year, true) + info.regularStart : 0), this.c.week.length);
     return { special, weekday: this.c.week[idx], index: idx };
   }
-  moons(d) {
-    const epoch = this.epoch(d);
+  moons(d, fraction = 0) {
+    const epoch = this.epoch(d) + fraction;
     return this.c.moons.filter((m) => !m.hidden).map((m) => {
       const gran = m.granularity || 8;
       const round = { floor: Math.floor, ceil: Math.ceil, round: Math.round }[m.rounding || 'round'];
-      const exact = mod(round(mod(epoch - m.offset, m.period) / m.period * gran), gran);
+      const degrees = mod(epoch - m.offset, m.period) / m.period;
+      const exact = mod(round(degrees * gran), gran);
       const p = exact * 8 / gran;
       const index = Number.isInteger(p) ? p : Math.floor(p / 2) * 2 + 1;
-      return { ...m, phase: PHASES[index], icon: ICONS[index], index };
+      return { ...m, phase: PHASES[index], icon: ICONS[index], index, illumination: (1 - Math.cos(degrees * Math.PI * 2)) / 2, waxing: degrees < .5 };
     });
   }
   season(d) {
@@ -520,6 +565,10 @@ function validateCalendar(c) {
   unique(c.eras.map((x) => x.start), 'Anos de início das eras');
   assert(c.clock && typeof c.clock === 'object', 'Relógio inválido.');
   integer(c.clock.hours, 1, 100, 'Horas por dia'); integer(c.clock.minutes, 1, 100, 'Minutos por hora');
+  if (c.clockSync !== undefined) {
+    assert(c.clockSync && ['manual', 'real'].includes(c.clockSync.mode), 'Modo do relógio inválido.');
+    integer(c.clockSync.since, 0, Number.MAX_SAFE_INTEGER, 'Âncora do relógio');
+  }
   e.check(c.current);
   integer(c.current.hour, 0, c.clock.hours - 1, 'Hora atual');
   integer(c.current.minute, 0, c.clock.minutes - 1, 'Minuto atual');
@@ -911,6 +960,8 @@ const { CalendarEngine, MAX_YEAR, sameDate, clockText } = load("calendar.js");
 const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const { solarPositions, formatTime } = load("sky.js");
 const { eclipsesForDay, nextEclipse } = load("eclipse.js");
+const { mode: clockMode, readMinute } = load("world-clock.js");
+const { moonDisc, sunDisc } = load("celestial-ui.js");
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -946,25 +997,42 @@ class CalendarView extends ItemView {
     this.layout = 'auto';
     this.detailOpen = false;
     this.skyMinute = null;
+    this.skyFollowing = true;
+    this.paintSkyClock = null;
+    this.paintFocusMoons = null;
   }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Basic RPG · Calendário'; }
   getIcon() { return 'calendar-days'; }
   async onOpen() { this.render(); }
-  async onClose() { replaceEl(this.contentEl); }
-  sync(c, e) {
+  async onClose() { this.clockReadout = null; this.paintSkyClock = null; this.paintFocusMoons = null; replaceEl(this.contentEl); }
+  clockTick() {
+    const c = this.plugin.active();
+    if (!c || !this.clockReadout || this.calId !== c.id) return;
+    const e = new CalendarEngine(c), next = this.plugin.worldNow(c, e);
+    if (!sameDate(next, this.savedToday)) { this.render(); return; }
+    if (next.hour === this.savedToday.hour && next.minute === this.savedToday.minute) return;
+    this.savedToday = { ...next };
+    this.clockReadout.textContent = `${e.format(next)} · ${clockText(next)}`;
+    if (sameDate(next, this.selected)) {
+      if (this.mode === 'sky' && this.skyFollowing) this.paintSkyClock?.(readMinute(c, next));
+      if (this.mode === 'month') this.paintFocusMoons?.(next);
+    }
+  }
+  sync(c, e, world) {
     if (!this.selected || this.calId !== c.id) {
-      this.selected = { ...c.current };
+      this.selected = { ...world };
       this.category = '';
       this.showHidden = false;
       this.detailOpen = false;
       this.skyMinute = null;
+      this.skyFollowing = true;
     } else {
-      try { e.check(this.selected); } catch { this.selected = { ...c.current }; }
-      if (this.savedToday && sameDate(this.selected, this.savedToday) && !sameDate(c.current, this.savedToday)) this.selected = { ...c.current };
+      try { e.check(this.selected); } catch { this.selected = { ...world }; }
+      if (this.savedToday && sameDate(this.selected, this.savedToday) && !sameDate(world, this.savedToday)) this.selected = { ...world };
     }
     this.calId = c.id;
-    this.savedToday = { ...c.current };
+    this.savedToday = { ...world };
   }
   choose(d) { this.selected = d; this.render(); }
   run(fn) { return () => this.plugin.attempt(fn); }
@@ -973,7 +1041,10 @@ class CalendarView extends ItemView {
     const c = this.plugin.active();
     if (!c) return;
     const e = new CalendarEngine(c);
-    this.sync(c, e);
+    const worldNow = this.plugin.worldNow(c, e);
+    this.sync(c, e, worldNow);
+    this.paintSkyClock = null;
+    this.paintFocusMoons = null;
     const root = this.contentEl;
     root.classList.add('brpg', 'brpg-view');
     replaceEl(root);
@@ -991,12 +1062,13 @@ class CalendarView extends ItemView {
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
-    el(readout, 'span', 'brpg-world-label', 'Data do mundo');
-    el(readout, 'span', 'brpg-world-date', `${e.format(c.current)} · ${clockText(c.current)}`);
+    const live = clockMode(c) === 'real';
+    el(readout, 'span', `brpg-world-label${live ? ' is-live' : ''}`, live ? 'Relógio em tempo real' : 'Relógio manual');
+    this.clockReadout = el(readout, 'span', 'brpg-world-date', `${e.format(worldNow)} · ${clockText(worldNow)}`);
     const worldActions = el(world, 'div', 'brpg-toolbar');
-    button(worldActions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: e.epoch(c.current) === 0 });
+    button(worldActions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: e.epoch(worldNow) === 0 });
     button(worldActions, 'Avançar um dia no mundo', this.run(() => this.plugin.advance(1)), { icon: 'skip-forward', iconOnly: true,
-      disabled: e.epoch(c.current) + 1 === e.yearStart(MAX_YEAR + 1) });
+      disabled: e.epoch(worldNow) + 1 === e.yearStart(MAX_YEAR + 1) });
 
     const tabs = el(root, 'nav', 'brpg-tabs');
     tabs.setAttribute('aria-label', 'Visualização');
@@ -1036,7 +1108,10 @@ class CalendarView extends ItemView {
     button(nav, monthMode ? 'Próximo mês' : skyMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
       { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length :
         skyMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
-    button(nav, 'Hoje', () => this.choose({ ...c.current }), { icon: 'locate-fixed', iconOnly: true });
+    button(nav, 'Hoje', () => {
+      this.skyFollowing = true;
+      this.choose(this.plugin.worldNow(c, e));
+    }, { icon: 'locate-fixed', iconOnly: true });
 
     if (skyMode) { this.renderSky(root, c, e); return; }
     const tools = el(root, 'div', 'brpg-calendar-tools');
@@ -1069,14 +1144,16 @@ class CalendarView extends ItemView {
     const title = el(heading, 'div');
     el(title, 'h3', 'brpg-section-title', 'Céu do dia');
     el(title, 'div', 'brpg-hint', e.format(this.selected));
-    button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings' });
+    button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
 
     const day = c.clock.hours * c.clock.minutes;
     const middle = Math.floor(day / 2);
     const controls = el(pane, 'div', 'brpg-sky-controls');
     const sliderRow = el(controls, 'div', 'brpg-sky-time');
-    const row = el(sliderRow, 'div', 'brpg-toolbar');
-    el(row, 'span', 'brpg-label', 'Hora simulada');
+    const row = el(sliderRow, 'div', 'brpg-toolbar brpg-time-head');
+    const label = el(row, 'div', 'brpg-sky-mode');
+    const modeText = el(label, 'strong', 'brpg-label');
+    const status = el(label, 'span', 'brpg-hint');
     const time = el(row, 'input', 'brpg-input brpg-time-input');
     time.type = 'text'; time.inputMode = 'text'; time.maxLength = 5; time.setAttribute('aria-label', 'Hora simulada (HH:MM)');
     const slider = el(sliderRow, 'input', 'brpg-time-range');
@@ -1088,52 +1165,72 @@ class CalendarView extends ItemView {
     el(axis, 'span', '', formatTime(middle, c.clock));
     el(axis, 'span', '', formatTime(day, c.clock, true));
     const shortcuts = el(controls, 'div', 'brpg-toolbar');
-    button(shortcuts, 'Hora do mundo', () => update(c.current.hour * c.clock.minutes + c.current.minute), { icon: 'clock-3' });
-    button(shortcuts, 'Meio-dia', () => update(middle), { icon: 'sun' });
-    const summaryBox = el(pane, 'div', 'brpg-sky-summary');
-    summaryBox.setAttribute('aria-live', 'polite');
+    const useClock = button(shortcuts, 'Hora do mundo', () => {
+      this.skyFollowing = true;
+      this.choose(this.plugin.worldNow(c, e));
+    }, { icon: 'clock-3' });
+    button(shortcuts, 'Meio-dia', () => { this.skyFollowing = false; update(middle); }, { icon: 'sun' });
+
+    const overview = el(pane, 'div', 'brpg-celestial-overview');
     const at = e.epoch(this.selected);
     const updateEclipses = this.renderEclipses(pane, c, e, at, day);
-    const cards = el(pane, 'div', 'brpg-solar-cards');
-    const update = (minute) => {
+    const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
+    summary(details, 'Horários e órbitas dos sóis', 'orbit');
+    const cards = el(details, 'div', 'brpg-solar-cards');
+    const update = (minute, keepText = false) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
-      time.value = formatTime(this.skyMinute, c.clock);
+      const following = this.skyFollowing && sameDate(this.savedToday, this.selected);
+      modeText.textContent = following ? 'Hora do mundo' : 'Hora simulada';
+      status.textContent = following ? (clockMode(c) === 'real' ? 'Acompanhando o relógio' : 'Relógio em modo manual') : 'Não altera a campanha';
+      useClock.setAttribute('aria-pressed', String(following));
+      if (!keepText) time.value = formatTime(this.skyMinute, c.clock);
       slider.value = String(this.skyMinute);
-      slider.setAttribute('aria-valuetext', time.value);
+      slider.setAttribute('aria-valuetext', formatTime(this.skyMinute, c.clock));
       updateEclipses(this.skyMinute);
-      replaceEl(summaryBox); replaceEl(cards);
+      replaceEl(overview); replaceEl(cards);
       const p = solarPositions(c.sky, at, c.clock, this.skyMinute);
-      if (!p.length) {
-        info(cards, 'Nenhum sol configurado neste calendário. Use Configurar sóis para adicionar um.');
-        return;
+      const moons = e.moons(this.selected, this.skyMinute / day);
+      const solar = el(overview, 'section', 'brpg-celestial-group');
+      el(solar, 'h3', 'brpg-section-title', 'Sóis');
+      if (p.length) {
+        const icons = el(solar, 'div', 'brpg-celestial-grid');
+        for (const sun of p) {
+          const tile = el(icons, 'article', 'brpg-celestial-tile' + (sun.visibleNow ? ' is-above' : ''));
+          sunDisc(tile, sun);
+          el(tile, 'strong', '', sun.name);
+          el(tile, 'small', '', sun.visibleNow ? 'No céu' : sun.visibleToday ? 'Abaixo do horizonte' : 'Não nasce');
+          tile.title = sun.label;
+          this.solarCard(cards, sun, c.clock, this.skyMinute, day);
+        }
+      } else info(solar, 'Nenhum sol configurado.');
+      if (moons.length) {
+        const group = el(overview, 'section', 'brpg-celestial-group');
+        el(group, 'h3', 'brpg-section-title', 'Luas');
+        const icons = el(group, 'div', 'brpg-celestial-grid');
+        for (const moon of moons) {
+          const tile = el(icons, 'article', 'brpg-celestial-tile');
+          moonDisc(tile, moon);
+          el(tile, 'strong', '', moon.name);
+          const label = el(tile, 'small', '', moon.phase);
+          label.title = `${Math.round(moon.illumination * 100)}% iluminada`;
+          el(tile, 'small', 'brpg-celestial-illumination', `${Math.round(moon.illumination * 100)}%`);
+        }
       }
-      const today = p.filter((x) => x.visibleToday);
-      const now = p.filter((x) => x.visibleNow);
-      for (const [label, items] of [['Acima do horizonte agora', now], ['Visíveis em algum momento do dia', today]]) {
-        const line = el(summaryBox, 'div', 'brpg-sky-fact');
-        el(line, 'span', 'brpg-label', label);
-        el(line, 'strong', '', items.length ? items.map((x) => x.name).join(' · ') : 'Nenhum');
-      }
-      for (const sun of p) this.solarCard(cards, sun, c.clock, this.skyMinute, day);
     };
-    slider.addEventListener('input', () => update(Number(slider.value)));
+    slider.addEventListener('input', () => { this.skyFollowing = false; update(Number(slider.value)); });
     time.addEventListener('change', () => {
       const value = /^(\d{1,2}):(\d{2})$/.exec(time.value.trim());
-      if (value && Number(value[1]) < c.clock.hours && Number(value[2]) < c.clock.minutes)
+      if (value && Number(value[1]) < c.clock.hours && Number(value[2]) < c.clock.minutes) {
+        this.skyFollowing = false;
         update(Number(value[1]) * c.clock.minutes + Number(value[2]));
-      else {
+      } else {
         time.value = formatTime(this.skyMinute, c.clock);
         this.plugin.attempt(() => { throw new Error(`Use HH:MM de 00:00 a ${formatTime(day - 1, c.clock)}.`); });
       }
     });
-    update(this.skyMinute ?? middle);
-    const moons = e.moons(this.selected);
-    if (moons.length) {
-      const group = el(pane, 'div', 'brpg-sky-moons');
-      el(group, 'h3', 'brpg-section-title', 'Luas');
-      const list = el(group, 'div', 'brpg-metadata');
-      moons.forEach((m) => el(list, 'span', 'brpg-chip', `${m.icon} ${m.name} · ${m.phase}`));
-    }
+    this.paintSkyClock = (n) => update(n, time.ownerDocument.activeElement === time);
+    if (!c.sky.suns.length) details.hidden = true;
+    update(this.skyFollowing ? (sameDate(this.savedToday, this.selected) ? readMinute(c, this.savedToday) : middle) : (this.skyMinute ?? middle));
   }
 
   renderEclipses(parent, c, engine, epoch, total) {
@@ -1156,6 +1253,7 @@ class CalendarView extends ItemView {
       const first = next.events[0];
       info(output, `${engine.format(date)} · ${first.label.toLowerCase()} · ${formatTime(first.peak * total, c.clock, true)} · ${first.aboveHorizon ? 'pico acima' : 'pico abaixo'} do horizonte`);
       button(output, 'Abrir dia do eclipse', () => {
+        this.skyFollowing = false;
         this.skyMinute = Math.min(total - 1, Math.round(first.peak * total));
         this.choose(date);
       }, { icon: 'arrow-right' });
@@ -1233,12 +1331,24 @@ class CalendarView extends ItemView {
   renderMonth(root, c, e) {
     const { year, month } = this.selected, m = c.months[e.monthIndex(month)];
     const content = el(root, 'div', 'brpg-calendar-content');
-    const body = el(content, 'section', 'brpg-month');
-    el(body, 'h3', 'brpg-section-title', `${m.name} · ano ${e.yearLabel(year)}`);
     const busy = new Map();
     const len = e.monthLength(year, month);
     for (let day = 1; day <= len; day++) busy.set(day, this.filtered(e.eventsOn({ year, month, day })));
     this.renderSelected(content, c, e, busy.get(this.selected.day) || []);
+    const body = el(content, 'section', 'brpg-month');
+    const head = el(body, 'div', 'brpg-month-head');
+    const label = el(head, 'div');
+    el(label, 'h3', 'brpg-section-title', `${m.name} · ano ${e.yearLabel(year)}`);
+    const count = [...busy.values()].filter((events) => events.length).length;
+    el(label, 'p', 'brpg-hint', `${len} dias${count ? ' · '+count+' com eventos' : ''}`);
+    const layouts = el(head, 'div', 'brpg-month-layouts');
+    for (const [layout, name, icon] of [['grid', 'Usar grade', 'grid-3x3'], ['list', 'Usar lista', 'list']]) {
+      const b = button(layouts, name, () => {
+        this.layout = this.layout === layout ? 'auto' : layout;
+        this.render();
+      }, { icon, iconOnly: true });
+      b.setAttribute('aria-pressed', String(this.layout === layout));
+    }
     const group = el(body, 'div', `brpg-layout brpg-layout-${this.layout}${c.week.length > 8 ? ' brpg-long-week' : ''}`);
     // Render one layout in explicit modes. CSS selects the responsive default in auto.
     if (this.layout !== 'list') {
@@ -1260,12 +1370,22 @@ class CalendarView extends ItemView {
     }
     if (this.layout !== 'grid') {
       const list = el(group, 'div', 'brpg-month-list');
-      for (let day = 1; day <= len; day++) this.renderDay(list, { year, month, day }, c, e, busy.get(day), 'brpg-list-day');
+      let week = 0;
+      for (let day = 1; day <= len; day++) {
+        const date = { year, month, day };
+        const meta = e.dayMeta(date);
+        if (meta.index !== null && (meta.index === 0 || !week)) {
+          week++;
+          el(list, 'div', 'brpg-list-week', `Semana ${week}`);
+        } else if (meta.index === null && (day === 1 || e.dayMeta({ year, month, day: day - 1 }).index !== null))
+          el(list, 'div', 'brpg-list-week', 'Fora da semana');
+        this.renderDay(list, date, c, e, busy.get(day), 'brpg-list-day');
+      }
     }
   }
   renderDay(root, d, c, e, events, extra) {
     const meta = e.dayMeta(d);
-    const state = (sameDate(d, c.current) ? ' is-today' : '') + (sameDate(d, this.selected) ? ' is-selected' : '');
+    const state = (sameDate(d, this.savedToday) ? ' is-today' : '') + (sameDate(d, this.selected) ? ' is-selected' : '');
     const label = [e.format(d), meta.weekday || 'fora da semana', meta.special?.name, events.length ? `${events.length} evento(s)` : ''].filter(Boolean).join(' · ');
     const b = button(root, label, () => {
       this.detailOpen = true;
@@ -1276,7 +1396,7 @@ class CalendarView extends ItemView {
       else Array.from(container.querySelectorAll('.brpg-layout button[aria-pressed="true"]')).find((node) => node.offsetParent)?.focus({ preventScroll: true });
     }, { className: `brpg-day ${extra}${state}`, iconOnly: true });
     b.setAttribute('aria-pressed', String(sameDate(d, this.selected)));
-    if (sameDate(d, c.current)) b.setAttribute('aria-current', 'date');
+    if (sameDate(d, this.savedToday)) b.setAttribute('aria-current', 'date');
     el(b, 'strong', 'brpg-day-number', String(d.day));
     if (extra === 'brpg-list-day') {
       const info = el(b, 'span', 'brpg-list-info');
@@ -1293,7 +1413,7 @@ class CalendarView extends ItemView {
   dot(root, color) { el(root, 'span', 'brpg-dot').style.setProperty('--brpg-event-color', color); }
   renderSelected(root, c, e, events) {
     const d = this.selected;
-    const meta = e.dayMeta(d), season = e.season(d), moons = e.moons(d);
+    const meta = e.dayMeta(d), season = e.season(d);
     const section = el(root, 'section', 'brpg-selected');
     const head = el(section, 'div', 'brpg-toolbar');
     const label = el(head, 'div', 'brpg-day-heading');
@@ -1305,11 +1425,20 @@ class CalendarView extends ItemView {
     el(bits, 'span', 'brpg-chip', meta.weekday || 'Fora da semana');
     if (meta.special) el(bits, 'span', 'brpg-chip', meta.special.name);
     if (season) el(bits, 'span', 'brpg-chip', `${season.name} · dia ${season.dayOfSeason}`);
-    if (moons.length) {
-      const m = el(bits, 'span', 'brpg-chip', moons.map((moon) => moon.icon).join(' '));
-      m.title = moons.map((moon) => `${moon.name} · ${moon.phase}`).join(' | ');
-      m.setAttribute('aria-label', m.title);
-    }
+    const discs = el(bits, 'span', 'brpg-focus-moons');
+    const phases = (world) => {
+      replaceEl(discs);
+      const minute = sameDate(d, world) ? readMinute(c, world) : 0;
+      const moons = e.moons(d, minute / (c.clock.hours * c.clock.minutes));
+      discs.hidden = !moons.length;
+      for (const moon of moons) moonDisc(discs, moon);
+      if (moons.length) {
+        discs.title = moons.map((moon) => `${moon.name} · ${moon.phase}`).join(' | ');
+        discs.setAttribute('aria-label', discs.title);
+      }
+    };
+    phases(this.savedToday);
+    this.paintFocusMoons = phases;
     if (events.length) {
       const details = el(section, 'details', 'brpg-disclosure brpg-day-events');
       details.open = this.detailOpen;
@@ -1359,10 +1488,11 @@ module.exports = { VIEW, CalendarView };
 'use strict';
 
 const { Modal, FuzzySuggestModal, setIcon } = require('obsidian');
-const { CalendarEngine, MAX_YEAR, copy, uid, validateCalendar } = load("calendar.js");
+const { CalendarEngine, MAX_YEAR, copy, uid } = load("calendar.js");
 const { DEFAULT_COLOR } = load("imports.js");
 const { MAX_SUNS, emptySky } = load("sky.js");
 const { eclipseDefaults } = load("eclipse.js");
+const { mode: clockMode, alignLocal } = load("world-clock.js");
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -1425,7 +1555,7 @@ function inlineNumber(parent, label, value, update, min, max, step = 1) {
 function monthOptions(c) { return c.months.map((m) => [m.id, m.name]); }
 function replaceEl(root) { root.replaceChildren(); }
 
-function dateFields(root, cal, date, clock = false) {
+function dateFields(root, cal, date, clock = false, changed = () => {}) {
   const row = el(root, 'div', 'brpg-form-row');
   const byMonth = (id) => cal.months.find((m) => m.id === id);
   const days = () => {
@@ -1443,13 +1573,13 @@ function dateFields(root, cal, date, clock = false) {
       }
     }
   };
-  const yearInput = inlineNumber(row, 'Ano', date.year, (v) => { date.year = v; }, 1, MAX_YEAR);
+  const yearInput = inlineNumber(row, 'Ano', date.year, (v) => { date.year = v; changed(); }, 1, MAX_YEAR);
   yearInput.addEventListener('change', clamp);
-  fieldSelect(row, 'Mês', monthOptions(cal), date.month, (v) => { date.month = v; clamp(); });
-  dayInput = inlineNumber(row, 'Dia', date.day, (v) => { date.day = v; }, 1, days());
+  fieldSelect(row, 'Mês', monthOptions(cal), date.month, (v) => { date.month = v; clamp(); changed(); });
+  dayInput = inlineNumber(row, 'Dia', date.day, (v) => { date.day = v; changed(); }, 1, days());
   if (clock) {
-    inlineNumber(row, 'Hora', date.hour, (v) => { date.hour = v; }, 0, cal.clock.hours - 1);
-    inlineNumber(row, 'Minuto', date.minute, (v) => { date.minute = v; }, 0, cal.clock.minutes - 1);
+    inlineNumber(row, 'Hora', date.hour, (v) => { date.hour = v; changed(); }, 0, cal.clock.hours - 1);
+    inlineNumber(row, 'Minuto', date.minute, (v) => { date.minute = v; changed(); }, 0, cal.clock.minutes - 1);
   }
 }
 
@@ -1488,6 +1618,9 @@ class CalendarEditor extends RPGModal {
     this.plugin = plugin;
     this.draft = copy(cal);
     this.isNew = isNew;
+    this.clockMode = isNew && !cal.clockSync ? 'real' : clockMode(cal);
+    this.wasDateEdited = false;
+    if (!isNew) this.draft.current = plugin.worldNow(cal);
     this.tab = start;
     this.draft.sky ||= emptySky(new CalendarEngine(cal).yearStart(2));
   }
@@ -1500,8 +1633,9 @@ class CalendarEditor extends RPGModal {
     this.section();
     this.actions(root, async () => {
       this.draft.name = this.draft.name.trim();
-      validateCalendar(this.draft);
-      await this.plugin.putCalendar(this.draft, this.isNew);
+      await this.plugin.putCalendar(this.draft, this.isNew, {
+        clockMode: this.clockMode, explicitDate: this.wasDateEdited,
+      });
     }, this.isNew ? 'Criar calendário' : 'Salvar calendário');
   }
   group(title, desc) {
@@ -1526,7 +1660,10 @@ class CalendarEditor extends RPGModal {
       const row = el(clock, 'div', 'brpg-form-row');
       inlineNumber(row, 'Horas por dia', c.clock.hours, (v) => { c.clock.hours = v; }, 1, 100);
       inlineNumber(row, 'Minutos por hora', c.clock.minutes, (v) => { c.clock.minutes = v; }, 1, 100);
-      dateFields(this.group('Data e hora atuais'), c, c.current, true);
+      fieldSelect(clock, 'Avanço do relógio', [['real', 'Tempo real'], ['manual', 'Manual']], this.clockMode,
+        (v) => { this.clockMode = v; });
+      info(clock, 'Em tempo real, 24 horas reais equivalem a um dia do mundo. O tempo decorrido é recuperado ao reabrir o Obsidian.');
+      dateFields(this.group('Definir data e hora'), c, c.current, true, () => { this.wasDateEdited = true; });
     } else if (this.tab === 'meses') {
       const root = this.group('Meses', 'A ordem é a ordem do ano. Meses intercalados não consomem dias da semana.');
       c.months.forEach((m, i) => {
@@ -1542,7 +1679,10 @@ class CalendarEditor extends RPGModal {
         button(actions, 'Remover mês', () => {
           const next = c.months.find((item) => item.id !== m.id);
           c.months.splice(i, 1);
-          if (c.current.month === m.id) Object.assign(c.current, { month: next.id, day: 1 });
+          if (c.current.month === m.id) {
+            Object.assign(c.current, { month: next.id, day: 1 });
+            this.wasDateEdited = true;
+          }
           this.section();
         }, { icon: 'trash-2', iconOnly: true, disabled: c.months.length === 1 });
       });
@@ -1725,12 +1865,22 @@ class WorldDateEditor extends RPGModal {
   constructor(plugin, cal, chosen) {
     super(plugin.app, 'Definir data do mundo');
     this.plugin = plugin; this.calendar = copy(cal);
-    this.date = { ...cal.current, ...chosen };
+    this.date = plugin.worldNow(cal);
+    for (const key of ['year','month','day']) if (chosen[key] !== undefined) this.date[key] = chosen[key];
+    this.clockMode = clockMode(cal);
   }
   onOpen() {
     const root = this.frame();
-    dateFields(root, this.calendar, this.date, true);
-    this.actions(root, () => this.plugin.editCalendar(this.calendar.id, (c) => { c.current = this.date; }));
+    const values = el(root, 'div');
+    const draw = () => { replaceEl(values); dateFields(values, this.calendar, this.date, true); };
+    draw();
+    button(root, 'Alinhar à hora local', () => {
+      this.date = alignLocal(this.calendar, this.date, this.plugin.clockNow());
+      draw();
+    }, { icon: 'clock-3' });
+    fieldSelect(root, 'Avanço do relógio', [['real', 'Tempo real'], ['manual', 'Manual']], this.clockMode, (v) => { this.clockMode = v; });
+    info(root, 'Alinhar altera apenas a hora. A data do mundo continua sendo a escolhida acima.');
+    this.actions(root, () => this.plugin.setWorldDate(this.calendar.id, this.date, this.clockMode));
   }
 }
 class Confirm extends RPGModal {
@@ -1738,6 +1888,87 @@ class Confirm extends RPGModal {
   onOpen() { const root = this.frame(); info(root, this.message); this.actions(root, this.act, 'Remover'); }
 }
 module.exports = { el, button, select, input, info, inlineNumber, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm };
+
+    },
+    "world-clock.js": function (module, exports, load, require) {
+'use strict';
+
+const { CalendarEngine, MAX_YEAR } = load("calendar.js");
+const REAL_DAY_MS = 86_400_000;
+
+function totalMinutes(c) { return c.clock.hours * c.clock.minutes; }
+function readMinute(c, date) { return date.hour * c.clock.minutes + date.minute; }
+function splitMinute(c, value) { return { hour: Math.floor(value / c.clock.minutes), minute: value % c.clock.minutes }; }
+function mode(c) { return c.clockSync?.mode || 'manual'; }
+function worldDate(c, now, engine = new CalendarEngine(c)) {
+  const base = c.current;
+  if (mode(c) !== 'real') return { ...base };
+  const total = totalMinutes(c);
+  const elapsed = Math.max(0, now - c.clockSync.since);
+  const days = Math.floor(elapsed / REAL_DAY_MS);
+  const delta = days * total + Math.floor((elapsed - days * REAL_DAY_MS) * total / REAL_DAY_MS);
+  if (!delta) return { ...base };
+  const minute = Math.min(engine.yearStart(MAX_YEAR + 1) * total - 1, engine.epoch(base) * total + readMinute(c, base) + delta);
+  return { ...engine.fromEpoch(Math.floor(minute / total)), ...splitMinute(c, minute % total) };
+}
+function anchor(c, date, clockMode, now) {
+  c.current = { year: date.year, month: date.month, day: date.day, hour: date.hour, minute: date.minute };
+  c.clockSync = { mode: clockMode, since: now };
+  return c;
+}
+function ensureClock(c, now) {
+  if (c.clockSync !== undefined) return false;
+  anchor(c, c.current, 'real', now);
+  return true;
+}
+function transferDate(from, to, date) {
+  const elapsed = readMinute(from, date);
+  return { ...date, ...splitMinute(to, Math.floor(elapsed * totalMinutes(to) / totalMinutes(from))) };
+}
+function alignLocal(c, date, now) {
+  const real = new Date(now);
+  const localTime = ((real.getHours() * 60 + real.getMinutes()) * 60 + real.getSeconds()) * 1000 + real.getMilliseconds();
+  return { ...date, ...splitMinute(c, Math.floor(localTime * totalMinutes(c) / REAL_DAY_MS)) };
+}
+module.exports = { REAL_DAY_MS, totalMinutes, readMinute, splitMinute, mode, worldDate, anchor, ensureClock, transferDate, alignLocal };
+
+    },
+    "celestial-ui.js": function (module, exports, load, require) {
+'use strict';
+const { el } = load("ui.js");
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function element(parent, tag, attributes) {
+  const node = parent.ownerDocument.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+  parent.appendChild(node);
+  return node;
+}
+function moonDisc(parent, moon) {
+  const ratio = Math.min(1, Math.max(0, moon.illumination));
+  const svg = element(parent, 'svg', { viewBox: '0 0 36 36', class: 'brpg-moon-disc', 'aria-hidden': 'true', focusable: 'false' });
+  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-shadow' });
+  if (ratio >= .9999) element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-lit' });
+  else if (ratio > .0001) {
+    const rx = Math.abs(1 - 2 * ratio) * 14;
+    const waxing = moon.waxing;
+    const outer = waxing ? 1 : 0;
+    const inner = waxing ? (ratio < .5 ? 0 : 1) : (ratio < .5 ? 1 : 0);
+    const back = rx > .001 ? `A ${rx.toFixed(3)} 14 0 0 ${inner} 18 4` : 'L 18 4';
+    element(svg, 'path', { class: 'brpg-moon-lit', d: `M 18 4 A 14 14 0 0 ${outer} 18 32 ${back} Z` });
+  }
+  element(svg, 'circle', { cx: 18, cy: 18, r: 14, class: 'brpg-moon-outline' });
+  return svg;
+}
+function sunDisc(parent, sun) {
+  const node = el(parent, 'span', 'brpg-sun-disc' + (sun.visibleNow ? ' is-above' : ''));
+  node.style.setProperty('--brpg-star-color', sun.color);
+  node.style.setProperty('--brpg-star-scale', String(.47 + .46 * Math.min(sun.size, 1.8)));
+  node.setAttribute('aria-hidden', 'true');
+  el(node, 'span');
+  return node;
+}
+module.exports = { moonDisc, sunDisc };
 
     },
     "arkanis.json": function (module, exports, load, require) {

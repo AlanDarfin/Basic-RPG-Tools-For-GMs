@@ -31,7 +31,10 @@ class Element {
   querySelectorAll() { return []; }
 }
 function mock(startingState = null) {
-  const document = { createElement(tag) { return new Element(document, tag); } };
+  const document = {
+    createElement(tag) { return new Element(document, tag); },
+    createElementNS(namespace, tag) { return new Element(document, tag); },
+  };
   const notices = [], app = {}, files = new Map(), leaves = [];
   const factories = new Map();
   let modal, settings, rename, opened, rejectSave = false;
@@ -211,4 +214,49 @@ test('painel lista eclipses e abre o próximo pico sem avançar o mundo', async 
   assert.equal(m.p.active().current.hour,0);
   const time=root.all((x)=>x.attributes['aria-label']==='Hora simulada (HH:MM)')[0];
   assert.match(time.value, /^\d\d:\d\d$/);
+});
+
+test('reabrir depois de dois dias recupera a data com a âncora persistida', async () => {
+  const base = 1800000000000;
+  const first = mock();
+  first.p.clockNow=()=>base;
+  await first.p.onload();
+  assert.equal(first.p.saved.calendars[0].clockSync.since,base);
+  const next = mock(plain(first.p.saved));
+  next.p.clockNow=()=>base + 2.25*86400000;
+  await next.p.onload(); await next.p.open(false);
+  assert.deepEqual(plain(next.p.worldNow(next.p.active())), {year:1,month:'mes-1',day:3,hour:8,minute:0});
+  assert.match(next.leaves[0].view.contentEl.textContent,/3 de Arkanis, ano 1 · 08:00/);
+});
+test('céu acompanha os minutos reais enquanto a prévia manual fica parada', async () => {
+  const {p,leaves}=mock();
+  let now=1800000000000;
+  p.clockNow=()=>now;
+  await p.onload();await p.open(false);
+  const view=leaves[0].view, root=view.contentEl;
+  await pickButton(root,'Céu').click();
+  now+=.5*86400000; p.tickClock();
+  assert.match(root.querySelector('.brpg-world-date').textContent,/16:00/);
+  assert.equal(view.skyMinute,16*64);
+  await pickButton(root,'Meio-dia').click();
+  now+=.25*86400000; p.tickClock();
+  assert.match(root.querySelector('.brpg-world-date').textContent,/24:00/);
+  assert.equal(view.skyMinute,16*64);
+  await pickButton(root,'Hora do mundo').click();
+  assert.equal(view.skyMinute,24*64);
+  assert.equal(root.all((el)=>el.tag==='svg'&&el.attributes.class==='brpg-moon-disc').length,3);
+});
+test('editar calendário sem mexer no relógio mantém a âncora e a hora live', async () => {
+  const m=mock();
+  let now=1800000000000;
+  m.p.clockNow=()=>now;
+  await m.p.onload();
+  const cal=m.p.active(), stable=cal.clockSync.since;
+  const original=plain(cal); original.name='Novo título';
+  now+=40002000;
+  const before=m.p.worldNow(cal);
+  await m.p.putCalendar(original,false,{clockMode:'real',explicitDate:false});
+  const saved=m.p.active();
+  assert.equal(saved.clockSync.since,stable);
+  assert.deepEqual(plain(m.p.worldNow(saved)),plain(before));
 });

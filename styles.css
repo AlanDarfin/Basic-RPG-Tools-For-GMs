@@ -222,3 +222,77 @@
 .brpg-eclipse-live { border-color: var(--brpg-accent); color: var(--brpg-ink); }
 .brpg-eclipse-settings { margin-bottom: 6px; }
 .brpg-eclipse-settings .brpg-form-row { margin-top: 5px; }
+
+/* Local clock & calendar-first layout */
+.brpg-world-label.is-live { display: inline-flex; align-items: center; gap: 4px; width: fit-content; }
+.brpg-world-label.is-live::before { content: ''; width: .42rem; height: .42rem; background: var(--color-green, #65b482); border-radius: 50%; }
+.brpg-month-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.brpg-month-head .brpg-hint { margin: 2px 0 0; font-size: .76em; }
+.brpg-month-layouts { display: flex; flex: none; gap: 3px; }
+.brpg-month-layouts .brpg-button[aria-pressed="true"] { border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface)); }
+.brpg-list-week {
+  padding: 5px 11px; color: var(--brpg-muted); background: var(--brpg-plain);
+  border-bottom: 1px solid var(--brpg-border); font-size: .70em; letter-spacing: .06em; font-weight: 650;
+}
+.brpg.brpg-view button.brpg-list-day {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  padding-inline: 9px 11px; gap: 9px; margin: 0; justify-items: stretch;
+}
+.brpg.brpg-view .brpg-list-day .brpg-day-number {
+  display: grid; place-items: center; inline-size: 28px; min-block-size: 26px;
+  padding: 0; text-align: center; font-size: .9em; border: 1px solid var(--brpg-border); border-radius: 6px;
+}
+.brpg.brpg-view .brpg-list-day.is-today .brpg-day-number, .brpg.brpg-view .brpg-list-day.is-selected .brpg-day-number {
+  border-color: var(--brpg-accent); color: var(--brpg-ink); background: var(--brpg-active, var(--brpg-surface));
+}
+.brpg-selected .brpg-event { background: color-mix(in srgb, var(--brpg-surface) 93%, var(--brpg-ink)); }
+.brpg-focus-moons { display: inline-flex; align-items: center; gap: 0; min-width: 0; }
+.brpg-focus-moons[hidden] { display: none; }
+.brpg-focus-moons .brpg-moon-disc { width: 21px; height: 21px; flex: none; }
+
+/* One compact sky overview. Orbital telemetry is still one tap away. */
+.brpg .brpg-sky-time > input.brpg-time-range {
+  display: block; width: 100% !important; max-width: none !important; min-width: 0; box-sizing: border-box;
+  margin: 7px 0 2px; 
+}
+.brpg .brpg-time-head { justify-content: space-between; flex-wrap: nowrap; }
+.brpg-sky-mode { flex: 1 1 auto; min-width: 0; display: grid; }
+.brpg-sky-mode .brpg-hint { margin: 0; font-size: .73em; }
+.brpg .brpg-time-head .brpg-time-input { flex: 0 0 4rem; width: 4rem; max-width: 4.5rem; padding-inline: 3px; }
+.brpg-sky-controls .brpg-button[aria-pressed="true"] { border-color: var(--brpg-accent); }
+.brpg-celestial-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem),1fr)); gap: 8px; }
+.brpg-celestial-group {
+  min-width: 0; padding: 7px; border: 1px solid var(--brpg-border);
+  border-radius: var(--brpg-radius); background: var(--brpg-surface);
+}
+.brpg-celestial-group > .brpg-section-title { margin: 0 0 5px; }
+.brpg-celestial-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 4.6rem), 1fr)); gap: 4px; }
+.brpg-celestial-tile {
+  min-width: 0; padding: 3px 2px 5px; min-height: 4.5rem; display: flex;
+  flex-direction: column; align-items: center; justify-content: start; gap: 1px;
+  text-align: center; border: 1px solid var(--brpg-border); border-radius: 7px;
+}
+.brpg-celestial-tile.is-above { background: color-mix(in srgb, #d89655 17%, var(--brpg-surface)); }
+.brpg-celestial-tile > strong { font-size: .82em; overflow-wrap: anywhere; }
+.brpg-celestial-tile > small { font-size: .70em; color: var(--brpg-muted); line-height: 1.17; overflow-wrap: anywhere; }
+.brpg-celestial-illumination { font-variant-numeric: tabular-nums; }
+.brpg-sun-disc { width: 32px; height: 32px; display: inline-grid; place-items: center; }
+.brpg-sun-disc > span {
+  width: 20px; height: 20px; border-radius: 50%; transform: scale(var(--brpg-star-scale, 1));
+  border: 1px solid var(--brpg-star-color); opacity: .67;
+}
+.brpg-sun-disc.is-above > span {
+  background: var(--brpg-star-color); opacity: 1;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--brpg-star-color) 60%, transparent),
+    inset 0 0 5px #fff8;
+}
+.brpg-moon-disc { width: 32px; height: 32px; display: block; }
+.brpg-moon-shadow { fill: color-mix(in srgb, var(--brpg-plain) 65%, #0e0f26); }
+.brpg-moon-lit { fill: #ded3f3; }
+.brpg-moon-outline { fill: none; stroke: color-mix(in srgb, var(--brpg-muted) 70%, #a897c3); stroke-width: 1.15; }
+.brpg-sun-details .brpg-solar-cards { margin-top: 5px; }
+@container brpg (min-width: 850px) {
+  .brpg-calendar-content .brpg-month { grid-column: 1; grid-row: 1; }
+  .brpg-calendar-content .brpg-selected { grid-column: 2; grid-row: 1; }
+}
+.is-mobile .brpg-view { padding-bottom: max(18px, env(safe-area-inset-bottom)); }

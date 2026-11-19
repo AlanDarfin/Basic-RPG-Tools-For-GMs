@@ -8,7 +8,8 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Definir nomes e ordem dos meses, duração, tamanho da semana, continuidade entre meses, dias especiais, meses intercalados e regras de ano bissexto.
 - Criar eras com numeração própria, estações por data ou duração, luas com ciclos independentes e relógios fictícios.
 - Configurar até oito sóis por mundo, com tamanho, cor, órbita, inclinação, fase inicial e latitude do observador. Simular o céu de qualquer data e horário.
-- Consultar os dias em grade ou lista e ver o dia selecionado sem chegar ao fim do mês. Navegar na previsão sem mover o relógio da campanha e avançar ou voltar a data atual quando quiser.
+- Consultar os dias em grade ou lista, com atalhos junto do mês, numeração alinhada e lista agrupada por semana. Ver o dia selecionado sem chegar ao fim do mês.
+- Usar o relógio do mundo em tempo real, com avanço calculado mesmo quando o Obsidian fica fechado, ou manter o calendário no modo manual.
 - Calcular eclipses solares e lunares e encontrar o próximo pico no calendário.
 - Criar eventos pontuais, de vários dias, anuais ou ligados ao início de uma estação. Vincular notas de sessão, colorir, categorizar e marcar eventos como reservados.
 - Navegar pela cronologia de um ano com filtros de categoria e de eventos reservados. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
@@ -16,7 +17,7 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 
 ## Primeiro uso
 
-Abra o ícone de calendário do Basic RPG na faixa lateral ou use a paleta de comandos. A ação **Abrir calendário na área principal** dá mais espaço para a grade. Em painéis estreitos, **Automático** troca a grade por lista. Em **Exibição e filtros**, você também pode escolher o formato manualmente. Use **Calendários** na barra superior para alternar ou editar um mundo.
+Abra o ícone de calendário do Basic RPG na faixa lateral ou use a paleta de comandos. A ação **Abrir calendário na área principal** dá mais espaço para a grade. Em painéis estreitos, **Automático** troca a grade por lista. Use os ícones de **grade** e **lista** ao lado do título do mês pra alternar o formato. Toque de novo no formato ativo pra voltar ao automático. Use **Calendários** na barra superior para alternar ou editar um mundo.
 
 O preset **Arkanis** vem pronto, começando em **1 de Arkanis, ano 1, às 00:00**. Ele tem 26 meses, incluindo Skaryel, semanas de 12 dias, quatro estações, três luas, três sóis e o relógio de 32 horas por dia, com 64 minutos por hora. Os botões de avançar e voltar mudam a data do mundo. As setas próximas ao seletor de mês só navegam pela visualização.
 
@@ -24,9 +25,19 @@ Para criar outro calendário, use **Novo calendário** na barra ou **Configuraç
 
 Para um evento de sessão, selecione a data e clique em **Novo evento**. Escolha uma nota existente para abrir a sessão diretamente pelo calendário. Eventos marcados como reservados somem da visualização padrão, mas continuam no cofre e no backup. Isso é um filtro de interface, não uma permissão de acesso.
 
+## Relógio em tempo real
+
+Ao abrir pela primeira vez, ou ao atualizar um calendário que ainda não tem uma configuração de relógio, o Basic RPG ativa **Tempo real** usando a data e a hora que já estavam salvas. Cada **24 horas reais equivalem a um dia completo do mundo**, seja qual for a duração do dia fictício.
+
+O plugin guarda o horário real de referência. Fechar o Obsidian não congela a campanha. Ao reabrir, o Basic RPG calcula quantos dias e minutos passaram, sem serviços externos e sem executar nada em segundo plano. Os eventos salvos continuam na mesma data.
+
+Use **Definir data e hora do mundo** para ajustar a data, alinhar a hora à posição no dia real do aparelho ou mudar para **Manual**. O modo manual pausa o avanço a partir da hora mostrada. O alinhamento preserva a data que você selecionou, por exemplo, meio-dia local vira **16:00 em Arkanis**. Alterar o tamanho do dia sem informar outra hora mantém a mesma proporção do dia do mundo.
+
 ## Céu e sóis
 
-Abra **Céu** ou escolha o ícone solar em **Dia em foco**. A aba mostra quais sóis chegam acima do horizonte naquele dia, quais estão visíveis na hora simulada e seus horários de nascer e pôr. Cada faixa representa os intervalos visíveis em relação às horas do dia. A posição da linha indica a hora em consulta. Mude a hora pelo controle deslizante ou por `HH:MM`. A simulação não altera a data ou a hora da campanha.
+Abra **Céu** ou escolha o ícone solar em **Dia em foco**. Os discos dos sóis mostram cor, tamanho relativo e estado de visibilidade. As luas têm discos próprios com a fase e a porcentagem iluminada na hora observada. Em **Horários e órbitas dos sóis**, a faixa de cada sol mostra quando ele fica acima do horizonte. A linha indica a hora em consulta.
+
+No dia atual, **Hora do mundo** acompanha o relógio. Mover o controle deslizante, digitar `HH:MM` ou escolher **Meio-dia** fixa uma prévia sem mexer no relógio da campanha. Use **Hora do mundo** pra voltar à observação ao vivo.
 
 O preset Arkanis usa **Innart, Dinart e Reart**. Reart é a referência, chega ao ponto mais alto às **16:00** e nasce em todos os dias. Há dias em que Innart ou Dinart não nascem e dias com sobreposição. O cálculo usa órbitas circulares independentes, com período proporcional ao semieixo elevado a 3/2. É uma aproximação para um céu fictício, sem interação gravitacional entre as três estrelas. [Referência de órbitas e gravidade](https://science.nasa.gov/learn/basics-of-space-flight/chapter3-3/).
 

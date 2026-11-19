@@ -5,6 +5,7 @@ const { decodeImport, encodeExport } = require('./imports');
 const { VIEW, CalendarView } = require('./view');
 const { ensureSky } = require('./sky');
 const { ensureEclipseOrbits } = require('./eclipse');
+const { worldDate, mode: clockMode, anchor, ensureClock, transferDate } = require('./world-clock');
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const arkanis = require('./arkanis.json');
 
@@ -26,6 +27,7 @@ class Settings extends PluginSettingTab {
     el(facts, 'span', 'brpg-chip', `${c.months.length} meses`);
     el(facts, 'span', 'brpg-chip', `Semana de ${c.week.length} dias`);
     el(facts, 'span', 'brpg-chip', `${c.sky.suns.length} sóis · ${c.moons.length} luas`);
+    el(facts, 'span', 'brpg-chip', clockMode(c) === 'real' ? 'Relógio em tempo real' : 'Relógio manual');
     const row = el(current, 'div', 'brpg-toolbar');
     button(row, 'Abrir calendário', () => p.attempt(() => p.open(true)), { icon: 'calendar-days', className: 'brpg-button mod-cta' });
     button(row, 'Editar calendário', () => new CalendarEditor(p, c).open(), { icon: 'settings' });
@@ -35,6 +37,7 @@ class Settings extends PluginSettingTab {
     const manage = el(advanced, 'div', 'brpg-toolbar');
     button(manage, 'Duplicar', () => p.attempt(async () => {
       const draft = copy(c);
+      anchor(draft, p.worldNow(c), clockMode(c), p.clockNow());
       draft.id = uid('cal'); draft.name = (draft.name.slice(0, 88) + ' (cópia)');
       await p.putCalendar(draft, true); this.display();
     }), { icon: 'copy' });
@@ -87,15 +90,20 @@ class BasicRPG extends Plugin {
   async onload() {
     this.pending = Promise.resolve();
     this.readOnly = false;
+    let saveClock = false;
     try {
       const saved = await this.loadData();
       if (saved == null) {
         const preset = copy(arkanis);
+        saveClock = ensureClock(preset, this.clockNow());
         this.state = { version: 1, activeId: preset.id, calendars: [preset] };
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
-          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c); validateCalendar(c);
+          validateCalendar(c);
+          ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c);
+          if (ensureClock(c, this.clockNow())) saveClock = true;
+          validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;
@@ -106,6 +114,15 @@ class BasicRPG extends Plugin {
       this.readOnly = true;
       new Notice('Basic RPG: não foi possível ler os dados. Alterações bloqueadas para não sobrescrever o cofre.', 10000);
     }
+    if (saveClock && !this.readOnly) {
+      try { await this.saveData(this.state); }
+      catch { new Notice('Basic RPG: não foi possível salvar a âncora do relógio. Ela não será preservada até uma gravação bem-sucedida.', 9000); }
+    }
+    if (typeof window !== 'undefined') {
+      this.registerInterval(window.setInterval(() => this.tickClock(), 5000));
+      this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) this.tickClock(); });
+      this.registerDomEvent(window, 'focus', () => this.tickClock());
+    }
     this.registerView(VIEW, (leaf) => new CalendarView(leaf, this));
     this.addRibbonIcon('calendar-days', 'Basic RPG · Calendário', () => this.attempt(() => this.open(false)));
     this.addSettingTab(new Settings(this));
@@ -115,12 +132,12 @@ class BasicRPG extends Plugin {
     }) });
     this.addCommand({ id: 'open-calendar-main', name: 'Abrir calendário na área principal', callback: () => this.attempt(() => this.open(true)) });
     this.addCommand({ id: 'new-event', name: 'Criar evento na data atual', callback: () => {
-      const cal = this.active(); new EventEditor(this, cal, cal.current).open();
+      const cal = this.active(); new EventEditor(this, cal, this.worldNow(cal)).open();
     } });
     this.addCommand({ id: 'next-world-day', name: 'Avançar um dia no mundo', callback: () => this.attempt(() => this.advance(1)) });
     this.addCommand({ id: 'previous-world-day', name: 'Voltar um dia no mundo', callback: () => this.attempt(() => this.advance(-1)) });
     this.addCommand({ id: 'set-world-date', name: 'Definir data e hora do mundo', callback: () => {
-      const cal = this.active(); new WorldDateEditor(this, cal, cal.current).open();
+      const cal = this.active(); new WorldDateEditor(this, cal, {}).open();
     } });
     this.onLayoutReady();
   }
@@ -137,6 +154,14 @@ class BasicRPG extends Plugin {
     });
   }
   active() { return this.state.calendars.find((c) => c.id === this.state.activeId) || this.state.calendars[0]; }
+  clockNow() { return Date.now(); }
+  worldNow(c, engine) { return worldDate(c, this.clockNow(), engine); }
+  tickClock() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.clockTick();
+  }
+  setWorldDate(id, date, selectedMode) {
+    return this.editCalendar(id, (cal) => anchor(cal, date, selectedMode || clockMode(cal), this.clockNow()));
+  }
   attempt(fn) {
     return Promise.resolve().then(fn).catch((error) => {
       new Notice(error instanceof Error ? error.message : String(error), 6500);
@@ -167,17 +192,32 @@ class BasicRPG extends Plugin {
       validateCalendar(c);
     });
   }
-  putCalendar(cal, isNew) {
+  putCalendar(cal, isNew, options = {}) {
     return this.change((s) => {
       const idx = s.calendars.findIndex((item) => item.id === cal.id);
-      const draft = copy(validateCalendar(cal));
+      const draft = copy(cal);
       if (isNew) {
         assert(idx < 0, 'Já existe um calendário com este ID.');
+        if (options.clockMode) anchor(draft, draft.current, options.clockMode, this.clockNow());
+        else ensureClock(draft, this.clockNow());
+        validateCalendar(draft);
         s.calendars.push(draft); s.activeId = draft.id;
       } else {
         assert(idx >= 0, 'Esse calendário foi removido.');
-        // Structural drafts should not overwrite events edited from another open pane.
-        draft.events = s.calendars[idx].events;
+        const old = s.calendars[idx];
+        // Active editing must anchor to the live time at save, not to the old stored base date.
+        const now = this.clockNow();
+        const requestedMode = options.clockMode || clockMode(old);
+        const clockChanged = old.clock.hours !== draft.clock.hours || old.clock.minutes !== draft.clock.minutes;
+        const structureChanged = JSON.stringify(old.months) !== JSON.stringify(draft.months) || JSON.stringify(old.leapDays) !== JSON.stringify(draft.leapDays);
+        if (options.explicitDate || clockChanged || structureChanged || requestedMode !== clockMode(old)) {
+          const value = options.explicitDate ? draft.current : transferDate(old, draft, worldDate(old, now));
+          anchor(draft, value, requestedMode, now);
+        } else {
+          draft.current = old.current;
+          draft.clockSync = old.clockSync;
+        }
+        draft.events = old.events;
         validateCalendar(draft);
         s.calendars[idx] = draft;
       }
@@ -191,7 +231,9 @@ class BasicRPG extends Plugin {
   newCalendar() { new CalendarEditor(this, newCalendar(), true).open(); }
   async advance(amount) {
     await this.editCalendar(this.active().id, (c) => {
-      Object.assign(c.current, new CalendarEngine(c).shift(c.current, amount));
+      const now = this.clockNow(), engine = new CalendarEngine(c);
+      const current = worldDate(c, now, engine);
+      anchor(c, { ...current, ...engine.shift(current, amount) }, clockMode(c), now);
     });
   }
   async open(main) {
@@ -216,7 +258,9 @@ class BasicRPG extends Plugin {
     const clean = c.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'calendario';
     let path = `Basic-RPG-${clean}.json`;
     for (let count = 2; this.app.vault.getAbstractFileByPath(path); count++) path = `Basic-RPG-${clean}-${count}.json`;
-    await this.app.vault.create(path, JSON.stringify(encodeExport(c), null, 2) + '\n');
+    const output = copy(c), now = this.clockNow();
+    anchor(output, worldDate(c, now), clockMode(c), now);
+    await this.app.vault.create(path, JSON.stringify(encodeExport(output), null, 2) + '\n');
     return path;
   }
 }

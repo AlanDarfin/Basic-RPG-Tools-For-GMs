@@ -1,10 +1,11 @@
 'use strict';
 
 const { Modal, FuzzySuggestModal, setIcon } = require('obsidian');
-const { CalendarEngine, MAX_YEAR, copy, uid, validateCalendar } = require('./calendar');
+const { CalendarEngine, MAX_YEAR, copy, uid } = require('./calendar');
 const { DEFAULT_COLOR } = require('./imports');
 const { MAX_SUNS, emptySky } = require('./sky');
 const { eclipseDefaults } = require('./eclipse');
+const { mode: clockMode, alignLocal } = require('./world-clock');
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -67,7 +68,7 @@ function inlineNumber(parent, label, value, update, min, max, step = 1) {
 function monthOptions(c) { return c.months.map((m) => [m.id, m.name]); }
 function replaceEl(root) { root.replaceChildren(); }
 
-function dateFields(root, cal, date, clock = false) {
+function dateFields(root, cal, date, clock = false, changed = () => {}) {
   const row = el(root, 'div', 'brpg-form-row');
   const byMonth = (id) => cal.months.find((m) => m.id === id);
   const days = () => {
@@ -85,13 +86,13 @@ function dateFields(root, cal, date, clock = false) {
       }
     }
   };
-  const yearInput = inlineNumber(row, 'Ano', date.year, (v) => { date.year = v; }, 1, MAX_YEAR);
+  const yearInput = inlineNumber(row, 'Ano', date.year, (v) => { date.year = v; changed(); }, 1, MAX_YEAR);
   yearInput.addEventListener('change', clamp);
-  fieldSelect(row, 'Mês', monthOptions(cal), date.month, (v) => { date.month = v; clamp(); });
-  dayInput = inlineNumber(row, 'Dia', date.day, (v) => { date.day = v; }, 1, days());
+  fieldSelect(row, 'Mês', monthOptions(cal), date.month, (v) => { date.month = v; clamp(); changed(); });
+  dayInput = inlineNumber(row, 'Dia', date.day, (v) => { date.day = v; changed(); }, 1, days());
   if (clock) {
-    inlineNumber(row, 'Hora', date.hour, (v) => { date.hour = v; }, 0, cal.clock.hours - 1);
-    inlineNumber(row, 'Minuto', date.minute, (v) => { date.minute = v; }, 0, cal.clock.minutes - 1);
+    inlineNumber(row, 'Hora', date.hour, (v) => { date.hour = v; changed(); }, 0, cal.clock.hours - 1);
+    inlineNumber(row, 'Minuto', date.minute, (v) => { date.minute = v; changed(); }, 0, cal.clock.minutes - 1);
   }
 }
 
@@ -130,6 +131,9 @@ class CalendarEditor extends RPGModal {
     this.plugin = plugin;
     this.draft = copy(cal);
     this.isNew = isNew;
+    this.clockMode = isNew && !cal.clockSync ? 'real' : clockMode(cal);
+    this.wasDateEdited = false;
+    if (!isNew) this.draft.current = plugin.worldNow(cal);
     this.tab = start;
     this.draft.sky ||= emptySky(new CalendarEngine(cal).yearStart(2));
   }
@@ -142,8 +146,9 @@ class CalendarEditor extends RPGModal {
     this.section();
     this.actions(root, async () => {
       this.draft.name = this.draft.name.trim();
-      validateCalendar(this.draft);
-      await this.plugin.putCalendar(this.draft, this.isNew);
+      await this.plugin.putCalendar(this.draft, this.isNew, {
+        clockMode: this.clockMode, explicitDate: this.wasDateEdited,
+      });
     }, this.isNew ? 'Criar calendário' : 'Salvar calendário');
   }
   group(title, desc) {
@@ -168,7 +173,10 @@ class CalendarEditor extends RPGModal {
       const row = el(clock, 'div', 'brpg-form-row');
       inlineNumber(row, 'Horas por dia', c.clock.hours, (v) => { c.clock.hours = v; }, 1, 100);
       inlineNumber(row, 'Minutos por hora', c.clock.minutes, (v) => { c.clock.minutes = v; }, 1, 100);
-      dateFields(this.group('Data e hora atuais'), c, c.current, true);
+      fieldSelect(clock, 'Avanço do relógio', [['real', 'Tempo real'], ['manual', 'Manual']], this.clockMode,
+        (v) => { this.clockMode = v; });
+      info(clock, 'Em tempo real, 24 horas reais equivalem a um dia do mundo. O tempo decorrido é recuperado ao reabrir o Obsidian.');
+      dateFields(this.group('Definir data e hora'), c, c.current, true, () => { this.wasDateEdited = true; });
     } else if (this.tab === 'meses') {
       const root = this.group('Meses', 'A ordem é a ordem do ano. Meses intercalados não consomem dias da semana.');
       c.months.forEach((m, i) => {
@@ -184,7 +192,10 @@ class CalendarEditor extends RPGModal {
         button(actions, 'Remover mês', () => {
           const next = c.months.find((item) => item.id !== m.id);
           c.months.splice(i, 1);
-          if (c.current.month === m.id) Object.assign(c.current, { month: next.id, day: 1 });
+          if (c.current.month === m.id) {
+            Object.assign(c.current, { month: next.id, day: 1 });
+            this.wasDateEdited = true;
+          }
           this.section();
         }, { icon: 'trash-2', iconOnly: true, disabled: c.months.length === 1 });
       });
@@ -367,12 +378,22 @@ class WorldDateEditor extends RPGModal {
   constructor(plugin, cal, chosen) {
     super(plugin.app, 'Definir data do mundo');
     this.plugin = plugin; this.calendar = copy(cal);
-    this.date = { ...cal.current, ...chosen };
+    this.date = plugin.worldNow(cal);
+    for (const key of ['year','month','day']) if (chosen[key] !== undefined) this.date[key] = chosen[key];
+    this.clockMode = clockMode(cal);
   }
   onOpen() {
     const root = this.frame();
-    dateFields(root, this.calendar, this.date, true);
-    this.actions(root, () => this.plugin.editCalendar(this.calendar.id, (c) => { c.current = this.date; }));
+    const values = el(root, 'div');
+    const draw = () => { replaceEl(values); dateFields(values, this.calendar, this.date, true); };
+    draw();
+    button(root, 'Alinhar à hora local', () => {
+      this.date = alignLocal(this.calendar, this.date, this.plugin.clockNow());
+      draw();
+    }, { icon: 'clock-3' });
+    fieldSelect(root, 'Avanço do relógio', [['real', 'Tempo real'], ['manual', 'Manual']], this.clockMode, (v) => { this.clockMode = v; });
+    info(root, 'Alinhar altera apenas a hora. A data do mundo continua sendo a escolhida acima.');
+    this.actions(root, () => this.plugin.setWorldDate(this.calendar.id, this.date, this.clockMode));
   }
 }
 class Confirm extends RPGModal {

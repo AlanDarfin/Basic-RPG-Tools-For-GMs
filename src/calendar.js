@@ -129,15 +129,16 @@ class CalendarEngine {
     const idx = mod(this.c.firstWeekday + within + (this.c.weekOverflow ? this.yearStart(d.year, true) + info.regularStart : 0), this.c.week.length);
     return { special, weekday: this.c.week[idx], index: idx };
   }
-  moons(d) {
-    const epoch = this.epoch(d);
+  moons(d, fraction = 0) {
+    const epoch = this.epoch(d) + fraction;
     return this.c.moons.filter((m) => !m.hidden).map((m) => {
       const gran = m.granularity || 8;
       const round = { floor: Math.floor, ceil: Math.ceil, round: Math.round }[m.rounding || 'round'];
-      const exact = mod(round(mod(epoch - m.offset, m.period) / m.period * gran), gran);
+      const degrees = mod(epoch - m.offset, m.period) / m.period;
+      const exact = mod(round(degrees * gran), gran);
       const p = exact * 8 / gran;
       const index = Number.isInteger(p) ? p : Math.floor(p / 2) * 2 + 1;
-      return { ...m, phase: PHASES[index], icon: ICONS[index], index };
+      return { ...m, phase: PHASES[index], icon: ICONS[index], index, illumination: (1 - Math.cos(degrees * Math.PI * 2)) / 2, waxing: degrees < .5 };
     });
   }
   season(d) {
@@ -288,6 +289,10 @@ function validateCalendar(c) {
   unique(c.eras.map((x) => x.start), 'Anos de início das eras');
   assert(c.clock && typeof c.clock === 'object', 'Relógio inválido.');
   integer(c.clock.hours, 1, 100, 'Horas por dia'); integer(c.clock.minutes, 1, 100, 'Minutos por hora');
+  if (c.clockSync !== undefined) {
+    assert(c.clockSync && ['manual', 'real'].includes(c.clockSync.mode), 'Modo do relógio inválido.');
+    integer(c.clockSync.since, 0, Number.MAX_SAFE_INTEGER, 'Âncora do relógio');
+  }
   e.check(c.current);
   integer(c.current.hour, 0, c.clock.hours - 1, 'Hora atual');
   integer(c.current.minute, 0, c.clock.minutes - 1, 'Minuto atual');
