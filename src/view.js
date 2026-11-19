@@ -2,7 +2,8 @@
 const { ItemView, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, sameDate, clockText } = require('./calendar');
 const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
-const { solarPositions, formatTime } = require('./sky');
+const { formatTime } = require('./sky');
+const { observatory, horizonLabel, observer } = require('./observatory');
 const { eclipsesForDay, nextEclipse } = require('./eclipse');
 const { mode: clockMode, readMinute } = require('./world-clock');
 const { focusSky, skyOverview, gridIcon } = require('./celestial-ui');
@@ -95,11 +96,14 @@ class CalendarView extends ItemView {
     return sameDate(date, world) ? readMinute(c, world) : Math.floor(c.clock.hours * c.clock.minutes / 2);
   }
   run(fn) { return () => this.plugin.attempt(fn); }
-  filtered(events) { return events.filter((x) => (this.showHidden || !x.hidden) && (!this.category || x.category === this.category)); }
+  filtered(events) {
+    return events.filter((x) => (this.showHidden || this.plugin.isPublicEvent(this.plugin.active(), x)) &&
+      (!this.category || x.category === this.category));
+  }
   render() {
     const c = this.plugin.active();
     if (!c) return;
-    const e = new CalendarEngine(c);
+    const e = new CalendarEngine(c, this.plugin.noteIndex.forCalendar(c.id));
     const worldNow = this.plugin.worldNow(c, e);
     this.sync(c, e, worldNow);
     this.paintSkyClock = null;
@@ -123,51 +127,55 @@ class CalendarView extends ItemView {
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
     const live = clockMode(c) === 'real';
-    el(readout, 'span', `brpg-world-label${live ? ' is-live' : ''}`, live ? 'Relógio em tempo real' : 'Relógio manual');
+    el(readout, 'span', `brpg-world-label${live ? ' is-live' : ''}`, c.clockLink ? 'Relógio vinculado' : live ? 'Relógio em tempo real' : 'Relógio manual');
     this.clockReadout = el(readout, 'span', 'brpg-world-date', `${e.format(worldNow)} · ${clockText(worldNow)}`);
     const worldActions = el(world, 'div', 'brpg-toolbar');
-    button(worldActions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: e.epoch(worldNow) === 0 });
+    button(worldActions, 'Voltar um dia no mundo', this.run(() => this.plugin.advance(-1)), { icon: 'skip-back', iconOnly: true, disabled: !!c.clockLink || e.epoch(worldNow) === 0 });
     button(worldActions, 'Avançar um dia no mundo', this.run(() => this.plugin.advance(1)), { icon: 'skip-forward', iconOnly: true,
-      disabled: e.epoch(worldNow) + 1 === e.yearStart(MAX_YEAR + 1) });
+      disabled: !!c.clockLink || e.epoch(worldNow) + 1 === e.yearStart(MAX_YEAR + 1) });
 
     const tabs = el(root, 'nav', 'brpg-tabs');
     tabs.setAttribute('aria-label', 'Visualização');
     for (const [key, title, icon] of [['month', 'Calendário', 'calendar-days'], ['timeline', 'Cronologia', 'list-ordered'], ['sky', 'Céu', 'sun'], ['weather', 'Clima', 'cloud-sun']]) {
       const b = button(tabs, title, () => { this.mode = key; this.render(); }, { icon });
-      b.setAttribute('aria-pressed', String(this.mode === key));
+      b.setAttribute('aria-pressed', String((key === 'month' ? ['month', 'year', 'agenda'].includes(this.mode) : this.mode === key)));
     }
 
     const nav = el(root, 'div', 'brpg-navigation');
     const monthMode = this.mode === 'month', skyMode = this.mode === 'sky', weatherMode = this.mode === 'weather';
-    const dayMode = skyMode || weatherMode;
+    const agendaMode = this.mode === 'agenda', yearMode = this.mode === 'year';
+    const dayMode = skyMode || weatherMode || agendaMode;
     nav.classList.add(dayMode ? 'brpg-nav-day' : monthMode ? 'brpg-nav-month' : 'brpg-nav-year');
-    const ordinal = (this.selected.year - 1) * c.months.length + e.monthIndex(this.selected.month);
-    const epoch = e.epoch(this.selected);
+    const epoch = e.epoch(this.selected), monthStart = epoch - this.selected.day + 1;
+    const nextYearDate = (year) => {
+      const month = e.monthLength(year, this.selected.month) ? this.selected.month : e.activeMonths(year)[0].id;
+      return { ...this.selected, year, month, day: Math.min(this.selected.day, e.monthLength(year, month)) };
+    };
     const navigate = (dir) => () => {
       this.detailOpen = false;
       if (monthMode) return this.choose(e.monthShift(this.selected, dir));
       if (dayMode) return this.choose(e.shift(this.selected, dir));
       const year = this.selected.year + dir;
-      this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
+      this.choose(nextYearDate(year));
     };
     button(nav, monthMode ? 'Mês anterior' : dayMode ? 'Dia anterior' : 'Ano anterior', navigate(-1),
-      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? ordinal === 0 : dayMode ? epoch === 0 : this.selected.year === 1 });
+      { icon: 'chevron-left', iconOnly: true, disabled: monthMode ? monthStart === 0 : dayMode ? epoch === 0 : this.selected.year === e.firstYear });
     if (dayMode) {
       const d = el(nav, 'input', 'brpg-input brpg-day-input');
       d.type = 'number'; d.min = '1'; d.max = e.monthLength(this.selected.year, this.selected.month);
       d.value = this.selected.day; d.setAttribute('aria-label', 'Dia em exibição');
       d.addEventListener('change', () => this.choose({ ...this.selected, day: validNumber(d, 1, Number(d.max), this.selected.day) }));
     }
-    if (monthMode || dayMode) select(nav, c.months.map((m) => [m.id, m.name]), this.selected.month,
+    if (monthMode || dayMode) select(nav, e.activeMonths(this.selected.year).map((m) => [m.id, m.name]), this.selected.month,
       (month) => { this.detailOpen = false; this.choose({ year: this.selected.year, month, day: 1 }); }, 'Mês em exibição');
-    const y = el(nav, 'input', 'brpg-input brpg-year'); y.type = 'number'; y.min = '1'; y.max = String(MAX_YEAR);
+    const y = el(nav, 'input', 'brpg-input brpg-year'); y.type = 'number'; y.min = String(e.firstYear); y.max = String(MAX_YEAR);
     y.value = this.selected.year; y.setAttribute('aria-label', 'Ano em exibição');
     y.addEventListener('change', () => {
-      const year = validNumber(y, 1, MAX_YEAR, this.selected.year);
-      this.choose({ ...this.selected, year, day: Math.min(this.selected.day, e.monthLength(year, this.selected.month)) });
+      const year = validNumber(y, e.firstYear, MAX_YEAR, this.selected.year);
+      this.choose(nextYearDate(year));
     });
     button(nav, monthMode ? 'Próximo mês' : dayMode ? 'Próximo dia' : 'Próximo ano', navigate(1),
-      { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? ordinal + 1 === MAX_YEAR * c.months.length :
+      { icon: 'chevron-right', iconOnly: true, disabled: monthMode ? monthStart + e.monthLength(this.selected.year, this.selected.month) === e.yearStart(MAX_YEAR + 1) :
         dayMode ? epoch + 1 === e.yearStart(MAX_YEAR + 1) : this.selected.year === MAX_YEAR });
     button(nav, 'Hoje', () => {
       this.skyFollowing = true;
@@ -188,20 +196,25 @@ class CalendarView extends ItemView {
     }
     const tools = el(root, 'div', 'brpg-calendar-tools');
     const toolOptions = el(tools, 'details', 'brpg-disclosure brpg-view-filters');
-    let filterLabel = monthMode ? 'Exibição e filtros' : 'Filtros';
-    if (!c.months.some((m) => m.id === this.timelineMonth)) this.timelineMonth = '';
+    let filterLabel = (monthMode || yearMode || agendaMode) ? 'Exibição e filtros' : 'Filtros';
+    if (!e.activeMonths(this.selected.year).some((m) => m.id === this.timelineMonth)) this.timelineMonth = '';
     if (this.category || this.showHidden || (!monthMode && this.timelineMonth)) filterLabel += ' · ativos';
     summary(toolOptions, filterLabel, 'sliders-horizontal');
     const filters = el(toolOptions, 'div', 'brpg-toolbar');
+    const views = el(filters, 'div', 'brpg-toolbar brpg-calendar-subviews');
+    for (const [view, title, icon] of [['month', 'Mês', 'calendar'], ['year', 'Ano', 'calendar-range'], ['agenda', 'Agenda', 'list']]) {
+      const b = button(views, title, () => { this.mode = view; this.render(); }, { icon });
+      b.setAttribute('aria-pressed', String(this.mode === view));
+    }
     if (monthMode) select(filters, [['auto', 'Automático'], ['grid', 'Grade'], ['list', 'Lista']], this.layout,
       (value) => { this.layout = value; this.render(); }, 'Formato do mês');
-    else select(filters, [['', 'Todos os meses'], ...c.months.map((m) => [m.id, m.name])], this.timelineMonth,
+    else if (this.mode === 'timeline') select(filters, [['', 'Todos os meses'], ...e.activeMonths(this.selected.year).map((m) => [m.id, m.name])], this.timelineMonth,
       (value) => { this.timelineMonth = value; this.render(); }, 'Mês na cronologia');
-    const cats = [...new Set(c.events.map((x) => x.category).filter(Boolean))].sort();
+    const cats = [...new Set(e.events.map((x) => x.category).filter(Boolean))].sort();
     if (!cats.includes(this.category)) this.category = '';
     if (cats.length) select(filters, [['', 'Todas as categorias'], ...cats.map((cat) => [cat, cat])], this.category,
       (v) => { this.category = v; this.render(); }, 'Categoria de evento');
-    if (c.events.some((event) => event.hidden)) {
+    if (e.events.some((event) => !this.plugin.isPublicEvent(c, event))) {
       const toggle = button(filters, this.showHidden ? 'Ocultar reservados' : 'Mostrar reservados', () => {
         this.showHidden = !this.showHidden; this.render();
       }, { icon: this.showHidden ? 'eye-off' : 'eye' });
@@ -217,6 +230,8 @@ class CalendarView extends ItemView {
     },
       { icon: 'plus', className: 'brpg-button mod-cta' });
     if (this.mode === 'timeline') this.renderTimeline(root, c, e);
+    else if (yearMode) this.renderYear(root, c, e);
+    else if (agendaMode) this.renderAgenda(root, c, e);
     else this.renderMonth(root, c, e);
   }
 
@@ -226,7 +241,9 @@ class CalendarView extends ItemView {
     const title = el(heading, 'div');
     el(title, 'h3', 'brpg-section-title', 'Céu do dia');
     el(title, 'div', 'brpg-hint', e.format(this.selected));
-    button(heading, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'settings', iconOnly: true });
+    const settings = el(heading, 'div', 'brpg-toolbar');
+    button(settings, 'Configurar sóis', () => new CalendarEditor(this.plugin, c, false, 'sois').open(), { icon: 'sun', iconOnly: true });
+    button(settings, 'Configurar luas', () => new CalendarEditor(this.plugin, c, false, 'luas').open(), { icon: 'moon', iconOnly: true });
     const weather = weatherDay(c, e, this.selected, MAX_YEAR);
     if (weather) weatherShortcut(pane, c, weather, () => this.showWeather('forecast'), true);
 
@@ -270,9 +287,12 @@ class CalendarView extends ItemView {
 
     const overview = el(pane, 'div', 'brpg-celestial-overview');
     const at = e.epoch(date);
-    const suns = solarPositions(c.sky, at, c.clock, initial);
-    const paintBodies = skyOverview(overview, suns, e.moons(date, initial / day));
-    const updateEclipses = this.renderEclipses(pane, c, e, at, day);
+    const local = observatory(c, at), moonsAt = (minute) => local.moons(e.moons(date, minute / day), minute);
+    if (local.name) el(title, 'div', 'brpg-hint', 'Horizonte de ' + local.name);
+    const suns = local.suns(initial);
+    const paintBodies = skyOverview(overview, suns, moonsAt(initial), (body) => horizonLabel(body, c.clock));
+    const change = el(controls, 'div', 'brpg-hint brpg-horizon-next');
+    const updateEclipses = this.renderEclipses(pane, { ...c, sky: observer(c).sky }, e, at, day);
     const details = el(pane, 'details', 'brpg-disclosure brpg-sun-details');
     summary(details, 'Horários e órbitas dos sóis', 'orbit');
     const cards = el(details, 'div', 'brpg-solar-cards');
@@ -291,8 +311,15 @@ class CalendarView extends ItemView {
       previous.disabled = this.skyMinute === 0;
       next.disabled = this.skyMinute === day - 1;
       updateEclipses(this.skyMinute);
-      const currentSuns = solarPositions(c.sky, at, c.clock, this.skyMinute);
-      paintBodies(currentSuns, e.moons(date, this.skyMinute / day));
+      const currentSuns = local.suns(this.skyMinute), currentMoons = moonsAt(this.skyMinute);
+      paintBodies(currentSuns, currentMoons);
+      const at = [...currentSuns, ...currentMoons].flatMap((b) => [
+        ...b.rises.map((t) => [t, b.name + ' nasce']), ...b.sets.map((t) => [t, b.name + ' se põe']),
+      ]).filter(([t]) => Math.round(t) > this.skyMinute && Math.round(t) < day).sort(([a], [b]) => a - b)[0];
+      const times = at ? at[1] + ' às ' + formatTime(at[0], c.clock) : 'Sem outra mudança no horizonte hoje';
+      change.textContent = (local.offset ? 'Hora local ' + formatTime(this.skyMinute + local.offset, c.clock) + ' · ' : '') + times;
+      change.title = 'As viradas de horizonte usam a hora do mundo.';
+
       paintOrbits.forEach((paint, i) => paint(currentSuns[i], this.skyMinute));
     };
     slider.addEventListener('input', () => go(Number(slider.value)));
@@ -397,10 +424,7 @@ class CalendarView extends ItemView {
     const marker = el(track, 'span', 'brpg-sun-marker');
     const marks = el(card, 'div', 'brpg-sun-marks');
     const n = (num) => num.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
-    if (sun.horizon === 'normal') {
-      el(marks, 'span', '', `Nascer ${formatTime(sun.from, clock)}`);
-      el(marks, 'span', '', `Pôr ${formatTime(sun.to, clock)}`);
-    }
+    el(marks, 'span', '', horizonLabel(sun, clock));
     const altitude = el(marks, 'span');
     el(marks, 'span', '', `Ciclo de ${n(sun.period)} dias`);
     el(marks, 'span', '', `Tamanho ×${n(sun.size)}`);
@@ -412,7 +436,7 @@ class CalendarView extends ItemView {
     };
   }
   renderMonth(root, c, e) {
-    const { year, month } = this.selected, m = c.months[e.monthIndex(month)];
+    const { year, month } = this.selected, m = c.months[e.monthIndex(month)], weekDays = e.weekdays(month);
     const content = el(root, 'div', 'brpg-calendar-content');
     const busy = new Map();
     const len = e.monthLength(year, month);
@@ -433,13 +457,13 @@ class CalendarView extends ItemView {
       if (layout === 'grid') gridIcon(el(b, 'span', 'brpg-icon'));
       b.setAttribute('aria-pressed', String(this.layout === layout));
     }
-    const group = el(body, 'div', `brpg-layout brpg-layout-${this.layout}${c.week.length > 8 ? ' brpg-long-week' : ''}`);
+    const group = el(body, 'div', `brpg-layout brpg-layout-${this.layout}${weekDays.length > 8 ? ' brpg-long-week' : ''}`);
     // Render one layout in explicit modes. CSS selects the responsive default in auto.
     if (this.layout !== 'list') {
       const grid = el(group, 'div', 'brpg-grid');
-      grid.style.setProperty('--brpg-week', String(c.week.length));
-      if (!m.intercalary) for (const [i, label] of shortWeek(c.week).entries()) {
-        const w = c.week[i];
+      grid.style.setProperty('--brpg-week', String(weekDays.length));
+      if (!m.intercalary) for (const [i, label] of shortWeek(weekDays).entries()) {
+        const w = weekDays[i];
         const header = el(grid, 'div', 'brpg-weekday', label);
         header.setAttribute('title', w);
         header.setAttribute('aria-label', w);
@@ -521,10 +545,11 @@ class CalendarView extends ItemView {
         { icon: 'leaf', className: 'brpg-button brpg-season-shortcut' });
       chip.style.setProperty('--brpg-season-color', season.color);
     }
+    for (const cycle of e.cyclesOn(d)) el(bits, 'span', 'brpg-chip', cycle.name + ' · ' + cycle.label);
     const weather = weatherDay(c, e, d, MAX_YEAR);
     if (weather) weatherShortcut(bits, c, weather, () => this.showWeather('forecast'));
-    const sky = (minute) => solarPositions(c.sky, e.epoch(d), c.clock, minute);
-    const moonPhases = (minute) => e.moons(d, minute / (c.clock.hours * c.clock.minutes));
+    const local = observatory(c, e.epoch(d)), sky = local.suns;
+    const moonPhases = (minute) => local.moons(e.moons(d, minute / (c.clock.hours * c.clock.minutes)), minute);
     const paint = focusSky(section, sky(0), moonPhases(0), () => this.openSkyFromFocus());
     const phases = (world) => {
       const minute = this.defaultSkyMinute(c, d, world);
@@ -541,11 +566,46 @@ class CalendarView extends ItemView {
       events.forEach((event) => this.eventCard(details, c, e, event, d));
     } else info(section, 'Nenhum evento para este dia.');
   }
+  renderYear(root, c, e) {
+    const year = this.selected.year;
+    const panel = el(root, 'section', 'brpg-year-panel');
+    el(panel, 'h3', 'brpg-section-title', 'Ano ' + e.yearLabel(year));
+    const months = e.activeMonths(year);
+    info(panel, e.yearInfo(year).total + ' dias · ' + months.length + ' meses');
+    const grid = el(panel, 'div', 'brpg-year-grid');
+    for (const month of months) {
+      const b = button(grid, 'Abrir ' + month.name, () => { this.mode = 'month'; this.choose({ year, month: month.id, day: 1 }); },
+        { className: 'brpg-button brpg-year-month', iconOnly: true });
+      el(b, 'strong', '', month.name);
+      el(b, 'small', '', e.monthLength(year, month.id) + ' dias');
+      if (year === this.savedToday.year && month.id === this.savedToday.month) b.setAttribute('aria-current', 'date');
+    }
+  }
+  renderAgenda(root, c, e) {
+    const agenda = el(root, 'section', 'brpg-timeline brpg-agenda');
+    el(agenda, 'h3', 'brpg-section-title', 'Agenda');
+    info(agenda, 'Próximos 30 dias a partir de ' + e.format(this.selected));
+    const start = e.epoch(this.selected), end = Math.min(e.yearStart(MAX_YEAR + 1), start + 30);
+    let count = 0;
+    for (let at = start; at < end && count < 200; at++) {
+      const d = e.fromEpoch(at), events = this.filtered(e.eventsOn(d));
+      if (!events.length) continue;
+      el(agenda, 'h4', 'brpg-timeline-month-title', e.format(d));
+      for (const event of events.slice(0, 200 - count)) { this.eventCard(agenda, c, e, event, d, true); count++; }
+    }
+    if (!count) info(agenda, 'Nenhum evento neste período.');
+    if (count >= 200) info(agenda, 'Exibindo até 200 ocorrências. Use os filtros para refinar.');
+    const undated = this.filtered(e.events.filter((v) => v.repeat === 'undated'));
+    if (undated.length) {
+      el(agenda, 'h4', 'brpg-timeline-month-title', 'Sem data');
+      for (const event of undated.slice(0, 100)) this.eventCard(agenda, c, e, event, this.selected, true);
+    }
+  }
   renderTimeline(root, c, e) {
     const year = this.selected.year;
     const section = el(root, 'section', 'brpg-timeline');
     el(section, 'h3', 'brpg-section-title', `Cronologia · ano ${e.yearLabel(year)}`);
-    const occurrences = this.filtered(c.events).map((event) => ({ event, d: e.firstOccurrenceInYear(event, year) }))
+    const occurrences = this.filtered(e.events).map((event) => ({ event, d: e.firstOccurrenceInYear(event, year) }))
       .filter(({ d }) => d && (!this.timelineMonth || d.month === this.timelineMonth))
       .map((item) => ({ ...item, epoch: e.epoch(item.d) }))
       .sort((a, b) => a.epoch - b.epoch || a.event.title.localeCompare(b.event.title, 'pt-BR'));
@@ -582,7 +642,9 @@ class CalendarView extends ItemView {
     const card = el(root, compact ? 'details' : 'article', compact ? 'brpg-timeline-event' : 'brpg-event');
     const details = [];
     if (event.category) details.push(event.category);
+    if (event.autoNote) details.push('Evento da nota');
     if (event.repeat === 'year') details.push('Anual');
+    if (event.repeat === 'pattern') details.push('Recorrente');
     if (event.repeat === 'season') details.push('Início de estação');
     if (event.end && event.repeat === 'none') details.push(`Até ${e.format(event.end)}`);
     let body = card;
@@ -606,6 +668,7 @@ class CalendarView extends ItemView {
     if (event.description) el(body, 'p', 'brpg-event-description', event.description);
     const actions = el(body, 'div', 'brpg-toolbar');
     if (event.note) button(actions, 'Abrir nota', this.run(() => this.plugin.openNote(event.note)), { icon: 'file-text' });
+    if (event.autoNote) return;
     button(actions, 'Editar evento', () => new EventEditor(this.plugin, c, d, event).open(), { icon: 'pencil', iconOnly: true });
     button(actions, 'Remover evento', () => new Confirm(this.app, `Remover “${event.title}” deste calendário?`,
       () => this.plugin.editCalendar(c.id, (updated) => { updated.events = updated.events.filter((x) => x.id !== event.id); })).open(), { icon: 'trash-2', iconOnly: true });

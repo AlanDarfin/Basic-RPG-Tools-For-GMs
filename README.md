@@ -15,7 +15,10 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Navegar pela cronologia de um ano, agrupada por mês e dia, com filtros de mês, categoria e eventos reservados. Toque na data para abrir o dia no calendário, ou no evento para ver os detalhes e ações. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
 - Acompanhar a estação atual, o progresso e a próxima virada. Marcar inícios de estação no calendário e comparar o clima de cada trecho do ciclo.
 - Simular temperatura, vento, rajadas, neblina, umidade, cobertura de nuvens e precipitação em diferentes regiões e estações.
-- Importar JSON do Fantasy Calendar e salvar backups próprios do calendário ativo dentro do cofre.
+- Consultar o ano, a agenda dos próximos 30 dias e os eventos sem data.
+- Criar recorrências por intervalo e condições, com prévia de ocorrências e categorias padrão.
+- Gerar eventos das notas, inserir a data do mundo e mostrar calendário, agenda ou clima em blocos Markdown.
+- Importar calendários do Fantasy Calendar e do Calendarium, exportar JSON compatível com o Fantasy Calendar e salvar backups nativos ou um resumo para jogadores.
 
 ## Primeiro uso
 
@@ -23,13 +26,13 @@ Abra o ícone de calendário do Basic RPG na faixa lateral ou use a paleta de co
 
 O preset **Arkanis** vem pronto, começando em **1 de Arkanis, ano 1, às 00:00**. Ele tem 26 meses, incluindo Skaryel, semanas de 12 dias, quatro estações, três luas, três sóis e o relógio de 32 horas por dia, com 64 minutos por hora. Os botões de avançar e voltar mudam a data do mundo. As setas próximas ao seletor de mês só navegam pela visualização.
 
-Para criar outro calendário, use **Novo calendário** na barra ou **Configurações → Basic RPG → Novo calendário**. O editor visual tem seções para semana e relógio, meses, dias especiais, luas, sóis, estações, clima e eras. Dias especiais entram ao final de um mês e podem ficar fora da contagem semanal. Para um dia que ocorre a cada quatro anos, exceto nos múltiplos de 100 e restaurado nos múltiplos de 400, informe **4**, **100** e **400** na regra. A contagem começa no ano 1.
+Para criar outro calendário, use **Novo calendário** na barra ou **Configurações → Basic RPG → Novo calendário**. O editor visual tem seções para semana e relógio, meses, dias especiais, luas, sóis, estações, clima e eras. Você pode dar uma semana própria a um mês, fazer um mês aparecer só em alguns anos ou inserir dias especiais em qualquer posição. Dias intercalados não consomem a semana. Para um dia que ocorre a cada quatro anos, exceto nos múltiplos de 100 e restaurado nos múltiplos de 400, informe **4**, **100** e **400** na regra. A contagem começa no ano 1.
 
 Para um evento de sessão, selecione a data e clique em **Novo evento**. Escolha uma nota existente para abrir a sessão diretamente pelo calendário. Eventos marcados como reservados somem da visualização padrão, mas continuam no cofre e no backup. Isso é um filtro de interface, não uma permissão de acesso.
 
 ## Relógio em tempo real
 
-Ao abrir pela primeira vez, ou ao atualizar um calendário que ainda não tem uma configuração de relógio, o Basic RPG ativa **Tempo real** usando a data e a hora que já estavam salvas. Cada **24 horas reais equivalem a um dia completo do mundo**, seja qual for a duração do dia fictício.
+Ao abrir pela primeira vez, ou ao atualizar um calendário que ainda não tem uma configuração de relógio, o Basic RPG ativa **Tempo real** usando a data e a hora que já estavam salvas. Por padrão, **24 horas reais equivalem a um dia completo do mundo**. Altere a proporção em **Editar calendário → Geral → Relógio do mundo**. Nessa mesma seção, você pode fazer um calendário acompanhar outro com uma diferença em dias. O calendário vinculado avança junto à referência e preserva a data ao ser desvinculado.
 
 O plugin guarda o horário real de referência. Fechar o Obsidian não congela a campanha. Ao reabrir, o Basic RPG calcula quantos dias e minutos passaram, sem serviços externos e sem executar nada em segundo plano. Os eventos salvos continuam na mesma data.
 
@@ -44,6 +47,14 @@ No dia atual, **Hora do mundo** acompanha o relógio. Arraste a barra, use **−
 O preset Arkanis usa **Innart, Dinart e Reart**. Reart é a referência, chega ao ponto mais alto às **16:00** e nasce em todos os dias. Há dias em que Innart ou Dinart não nascem e dias com sobreposição. O cálculo usa órbitas circulares independentes, com período proporcional ao semieixo elevado a 3/2. É uma aproximação para um céu fictício, sem interação gravitacional entre as três estrelas. [Referência de órbitas e gravidade](https://science.nasa.gov/learn/basics-of-space-flight/chapter3-3/).
 
 Em **Céu → Configurar sóis**, edite a latitude, o período da órbita de referência e os parâmetros de cada sol. A latitude e a inclinação do sol de referência precisam permitir que ele nasça em qualquer dia. Calendários antigos com o preset Arkanis ganham o modelo solar sem perder datas nem eventos. Outros mundos começam com o céu vazio.
+
+## Nascer e pôr
+
+A aba **Céu** mostra os horários de cada sol e lua, se estão acima do horizonte na hora observada e a próxima mudança antes da virada do dia. Em **Configurar sóis** ou **Configurar luas → Nascer e pôr**, escolha horários automáticos pela órbita, ajustes de cada horário em minutos ou um par fixo `HH:MM`. A opção fixa pode atravessar a meia-noite, por exemplo, **27:00 → 02:00** no relógio de Arkanis.
+
+O cálculo automático usa a data e a latitude. À medida que o dia avança, mudam a visibilidade e a próxima virada. Os horários automáticos são recalculados na troca de data e o plugin recupera o relógio na reabertura do Obsidian. Horários fixos modificam a visibilidade exibida, não a órbita, a fase da lua nem a geometria dos eclipses.
+
+Em **Editar calendário → Clima → Regiões → Horizonte regional**, escolha latitude, fuso e regras individuais dos astros. A escala principal e as viradas da previsão usam o relógio do mundo. O painel mostra também a hora local quando há fuso configurado.
 
 ## Eclipses
 
@@ -73,13 +84,42 @@ Em **Ajustes climáticos da estação**, use valores positivos ou negativos para
 
 A previsão faz a transição de um perfil para o próximo aos poucos. O atraso configurado no clima desloca essa transição sem mover a estação no calendário. Em Arkanis, o atraso inicial é de **64 dias do mundo**.
 
-## Importação e backup
+## Eventos, agenda e notas
 
-Em **Configurações → Basic RPG**, use **Importar JSON**. Cada importação vira um novo calendário, sem sobrescrever os existentes.
+Em **Exibição e filtros**, alterne entre **Mês**, **Ano** e **Agenda**. A agenda lista ocorrências nos próximos 30 dias e separa os eventos sem data. A cronologia anual mostra a primeira ocorrência de cada evento no ano. Em **Editar calendário → Notas e eventos**, você pode configurar categorias padrão e avisos de eventos ao virar o dia com o Obsidian aberto.
 
-O importador aceita a estrutura usada pelo calendário de Arkanis e configurações semelhantes do Fantasy Calendar, com meses anuais, semana global, dias especiais no fim do mês, estações, luas e eventos pontuais ou de início de estação. Quando encontra uma regra avançada de evento que não consegue representar, lista o evento não importado. Se a regra incompatível altera a estrutura de datas, o importador rejeita o arquivo em vez de mover as datas silenciosamente. Quando o JSON inclui o clima do Fantasy Calendar, a importação preserva as regiões personalizadas, o perfil sazonal de temperatura e precipitação, a semente e o deslocamento. Os presets do site, curvas de ruído, fusos e horários de sol por região não são importados. O Basic RPG calcula sua própria previsão a partir dos parâmetros importados, que não precisa coincidir com a do site. O Fantasy Calendar não carrega o modelo solar do Basic RPG. O importador aplica o céu padrão se reconhecer o calendário de Arkanis. O JSON exportado é um backup no formato **Basic RPG**, não um arquivo de exportação do Fantasy Calendar nem um backup nativo do Calendarium.
+Em **Novo evento → Recorrência → Intervalo ou condições**, informe uma data de referência e um intervalo em dias, semanas, meses ou anos. Combine condições de mês, dia, semana, fase lunar, estação ou dias depois de um evento simples. Para consultar só as condições, use intervalo de um dia. Condições lunares são verificadas ao meio-dia. **Prévia de ocorrências** busca até dez resultados nos primeiros 5.000 dias após a data inicial.
 
-A função **Salvar JSON no cofre** gera um novo arquivo, incluindo os sóis, as órbitas lunares e os perfis de clima, sem substituir backups anteriores. Os eventos armazenados também podem ser sincronizados como dados do plugin pelo mecanismo de sincronização do cofre, quando configurado no Obsidian.
+Para alimentar o calendário com as notas, ative **Criar eventos a partir das notas** em **Notas e eventos**. Você pode limitar a busca à pasta da campanha. Use `fc-date` em formato ano-mês-dia ou com as propriedades `year`, `month` e `day`. Em objetos de data, omitir o ano permite repetir anualmente e omitir o mês permite repetir mensalmente. Há suporte também a `fc-calendar`, `fc-end`, `fc-category`, `fc-display-name` e `fc-hidden`. As opções extras leem datas no início dos títulos ou linhas como `brpg: 1-01-07 | Encontro na praça`. Alterações nas notas atualizam a Agenda sem reescrever as notas nem duplicar eventos no `data.json`. O comando **Atualizar eventos das notas** refaz a leitura.
+
+O comando **Inserir data do mundo na nota** usa o formato definido em **Ciclos e datas**. Essa seção também permite dar nomes a anos e criar ciclos independentes por dia, mês ou ano. Para mundos que começam antes do ano 1, escolha o primeiro ano em **Geral**. Alterar esse primeiro ano muda a origem da contagem e, portanto, pode deslocar ciclos e previsões.
+
+### Blocos Markdown
+
+````md
+```basic-rpg-calendar
+calendar: Arkanis
+view: agenda
+```
+
+```basic-rpg-weather
+calendar: Arkanis
+date: 1-01-07
+```
+````
+
+Omitir `view` mostra o mês. Omitir `date` acompanha a data do mundo. Os blocos não mostram eventos reservados.
+
+A API de leitura para plugins companheiros fica na instância do Basic RPG, acessível por `app.plugins.plugins["basic-rpg"].api`. Ela oferece `calendars()`, `current(nome)` e `day(nome, data)`, incluindo os horários dos astros em minutos do relógio do mundo.
+
+## Importação, exportação e compartilhamento
+
+Em **Configurações → Basic RPG → Biblioteca e backup**, **Importar JSON** cria outro calendário. O Basic RPG lê seu próprio backup e estruturas compatíveis do Fantasy Calendar e do Calendarium. Regras de eventos sem equivalente geram avisos. Regras estruturais incompatíveis são rejeitadas em vez de deslocar datas silenciosamente. O motor climático próprio não reproduz os resultados exatos de outras plataformas.
+
+- **Salvar JSON no cofre** guarda a configuração completa do Basic RPG. Eventos derivados de notas continuam nos arquivos Markdown.
+- **Exportar para Fantasy Calendar** salva um JSON com a estrutura, a data, as luas, os perfis climáticos equivalentes e os eventos suportados. Os detalhes do céu multissolar, eclipses, vínculos, ajustes locais sem equivalente e algumas condições não passam para o outro formato. As diferenças aparecem junto do caminho do arquivo.
+- **Gerar resumo para jogadores** salva uma nota com a data e os eventos públicos do dia, sem caminhos para notas reservadas. É um arquivo para compartilhar manualmente, não uma publicação online ou um sistema de permissões.
+- **Preset Arkanis** e **Preset Gregoriano** criam calendários novos sem sobrescrever os que já existem.
 
 ## Instalação manual
 

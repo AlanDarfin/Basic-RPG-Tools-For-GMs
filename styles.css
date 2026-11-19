@@ -549,3 +549,19 @@
   text-underline-offset: 3px; text-decoration-thickness: 2px;
 }
 .brpg .brpg-list-day.brpg-season-start .brpg-list-info { flex-wrap: wrap; }
+
+.brpg-horizon-settings { margin-block: 6px; }
+.brpg-horizon-settings .brpg-form-row { margin-top: 5px; }
+.brpg-celestial-tile > .brpg-horizon-time { font-variant-numeric: tabular-nums; margin: 3px 2px 0; color: var(--brpg-ink); }
+.brpg-calendar-subviews { width: 100%; }
+.brpg-calendar-subviews .brpg-button[aria-pressed="true"], .brpg-year-month[aria-current="date"], .brpg-embed-days button[aria-current="date"] {
+  border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface));
+}
+.brpg-year-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: 6px; }
+.brpg .brpg-year-grid .brpg-year-month { min-height: 49px; align-items: start; flex-direction: column; padding: 6px; text-align: start; overflow-wrap: anywhere; }
+.brpg-year-month small { color: var(--brpg-muted); }
+.brpg-agenda .brpg-timeline-month-title { margin-top: 10px; }
+.brpg-embed-frame { border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); background: var(--brpg-surface); padding: 8px; }
+.brpg-embed-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(27px, 1fr)); gap: 3px; }
+.brpg .brpg-embed-days .brpg-button { padding: 1px 3px; min-height: 29px; }
+.brpg-embed-agenda { margin-block: 4px; }

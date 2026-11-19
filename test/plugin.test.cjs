@@ -36,7 +36,7 @@ function mock(startingState = null) {
     createElementNS(namespace, tag) { return new Element(document, tag); },
   };
   const notices = [], app = {}, files = new Map(), leaves = [];
-  const factories = new Map();
+  const factories = new Map(), processors = new Map(), cacheListeners = new Map();
   let modal, settings, rename, opened, rejectSave = false;
   function workLeaf(main) {
     const item = { getRoot: () => main ? app.workspace.rootSplit : {},
@@ -49,9 +49,10 @@ function mock(startingState = null) {
   app.workspace = { rootSplit: {}, getLeavesOfType: (v) => leaves.filter((l) => l.type === v), getRightLeaf: () => workLeaf(false),
     getLeaf: () => workLeaf(true), revealLeaf: async () => {}, onLayoutReady: (fn) => fn(),
   };
-  class TFile { constructor(name) { this.path = name; } }
+  class TFile { constructor(name) { this.path = name; this.basename = name.split('/').at(-1).replace(/\.md$/, ''); } }
+  app.metadataCache = { on: (key, fn) => { cacheListeners.set(key, fn); return {}; }, getFileCache: (f) => ({ frontmatter: f.fm }) };
   app.vault = { getAbstractFileByPath: (name) => files.get(name), create: async (p, c) => { files.set(p, new TFile(p)); files.get(p).body = c; },
-    on: (_, fn) => { rename = fn; return {}; }, getMarkdownFiles: () => [...files.values()],
+    on: (_, fn) => { rename = fn; return {}; }, getMarkdownFiles: () => [...files.values()], cachedRead: async (f) => f.body || '',
   };
   class Plugin {
     constructor() { this.app = app; this.commands = []; }
@@ -62,6 +63,7 @@ function mock(startingState = null) {
     addSettingTab(tab) { settings = tab; }
     addCommand(cmd) { this.commands.push(cmd); }
     registerEvent() {}
+    registerMarkdownCodeBlockProcessor(name, fn) { processors.set(name, fn); }
   }
   class Modal {
     constructor() { this.app = app; this.modalEl = document.createElement('div'); this.contentEl = document.createElement('div'); }
@@ -69,7 +71,7 @@ function mock(startingState = null) {
     close() { this.onClose?.(); modal = null; }
   }
   const obsidian = {
-    Plugin, Modal, FuzzySuggestModal: class extends Modal { setPlaceholder() {} }, TFile, normalizePath: (p) => p,
+    Plugin, Modal, MarkdownRenderChild: class {}, parseYaml: (s) => Object.fromEntries(s.split('\n').map((x) => x.split(/:\s*/, 2))), FuzzySuggestModal: class extends Modal { setPlaceholder() {} }, TFile, normalizePath: (p) => p,
     PluginSettingTab: class { constructor() { this.containerEl = document.createElement('div'); } },
     ItemView: class { constructor(l) { this.leaf = l; this.app = app; this.contentEl = document.createElement('div'); } },
     Notice: class { constructor(m) { notices.push(m); } }, setIcon() {},
@@ -78,7 +80,16 @@ function mock(startingState = null) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
     { module: mod, require: (id) => { assert.equal(id, 'obsidian'); return obsidian; } });
   return { p: new mod.exports(), files, TFile, leaves, notices, opened: () => opened, modal: () => modal,
-    settings: () => settings, rename: (f, p) => rename(f, p), stopSaves: () => { rejectSave = true; } };
+    settings: () => settings,
+    noteChange: (file) => cacheListeners.get('changed')(file, file.body || '', { frontmatter: file.fm }),
+    noteDelete: (file) => cacheListeners.get('deleted')(file),
+    renderBlock: (name, source) => {
+      const host = document.createElement('div');
+      let view;
+      processors.get(name)(source, host, { addChild(child) { view = child; child.onload(); } });
+      return { host, view };
+    },
+    rename: (f, p) => rename(f, p), stopSaves: () => { rejectSave = true; } };
 }
 const plain = (x) => JSON.parse(JSON.stringify(x));
 function pickButton(root, label) { return root.all((x) => x.tag === 'button' && x.attributes['aria-label'] === label)[0]; }
@@ -90,7 +101,7 @@ async function type(root, label, value) { const x = labelInput(root, label); x.v
 test('ciclo de vida abre calendário, navega sem mudar data, avança e grava', async () => {
   const { p, leaves } = mock();
   await p.onload();
-  assert.equal(p.commands.length, 9);
+  assert.equal(p.commands.length, 13);
   await p.open(false);
   const view = leaves[0].view, root = view.contentEl;
   assert.match(root.textContent, /1 de Arkanis, ano 1 · 00:00/);
@@ -496,4 +507,85 @@ test('estações agrupam atual e próxima, abrem detalhes sob demanda e preserva
   const editor = m.modal().contentEl;
   assert.equal(labelInput(editor, 'Região para editar').value, 'nortus');
   assert.equal(labelInput(editor, 'Perfil a editar').value, 'estacao-2');
+});
+
+test('notas mudam na Agenda sem salvar eventos derivados no data.json e sem vazar reservados', async () => {
+  const m = mock();
+  const now = 1800000000000;
+  m.p.clockNow = () => now;
+  await m.p.onload(); await m.p.open(false);
+  const c = plain(m.p.active());
+  c.noteSources = { enabled: true, folder: 'Campanha', parseTitle: false, inline: true };
+  const f = new m.TFile('Campanha/Teste.md');
+  f.fm = { 'fc-date': '1-01-01', 'fc-display-name': 'Encontro do mapa' };
+  m.files.set(f.path, f);
+  await m.p.putCalendar(c, false);
+  const root = m.leaves[0].view.contentEl;
+  await m.p.commands.find((cmd) => cmd.id === 'open-agenda').callback();
+  assert.match(root.querySelector('.brpg-agenda').textContent, /Encontro do mapa/);
+  assert.equal(m.p.saved.calendars[0].events.length, 8);
+  f.fm['fc-display-name'] = 'Novo encontro';
+  f.fm['fc-hidden'] = true;
+  await m.noteChange(f);
+  assert.doesNotMatch(root.querySelector('.brpg-agenda').textContent, /Encontro do mapa|Novo encontro/);
+  await pickButton(root, 'Mostrar reservados').click();
+  assert.match(root.querySelector('.brpg-agenda').textContent, /Novo encontro/);
+  const name = await m.p.exportPlayer(m.p.active());
+  assert.doesNotMatch(m.files.get(name).body, /Novo encontro|Campanha\/Teste/);
+  m.noteDelete(f);
+  assert.doesNotMatch(root.querySelector('.brpg-agenda').textContent, /Novo encontro/);
+});
+
+test('blocos de calendário e clima se atualizam e a API não altera a campanha', async () => {
+  const m = mock();
+  let now = 1800000000000;
+  m.p.clockNow = () => now;
+  await m.p.onload();
+  const { host, view } = m.renderBlock('basic-rpg-weather', '');
+  assert.match(host.textContent, /Clima · Arkanis.*1 de Arkanis.*Centrus/);
+  now += 86400000; m.p.tickClock();
+  assert.match(host.textContent, /2 de Arkanis/);
+  const calendar = m.renderBlock('basic-rpg-calendar', 'view: agenda\ndate: 1-01-01');
+  assert.match(calendar.host.textContent, /Arkas, A Criação/);
+  const snapshot = m.p.api.day('Arkanis', '1-01-02');
+  assert.deepEqual(plain(snapshot.suns.map((s) => s.name)), ['Innart', 'Dinart', 'Reart']);
+  assert.equal(snapshot.moons.length, 3);
+  snapshot.date.day = 19;
+  assert.equal(m.p.api.current('Arkanis').day, 2);
+  view.onunload(); calendar.view.onunload();
+  assert.equal(m.p.embeds.size, 0);
+});
+
+test('usuário pode definir nascer e pôr de uma lua no editor do céu', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Céu').click();
+  await pickButton(root, 'Configurar luas').click();
+  const form = m.modal().contentEl, option = labelInput(form, 'Horários de Verika');
+  option.value = 'fixed'; await option.emit('change');
+  await type(form, 'Nasce (HH:MM)', '27:00');
+  await type(form, 'Põe-se (HH:MM)', '02:00');
+  await pickButton(form, 'Salvar calendário').click();
+  assert.equal(m.modal(), null);
+  assert.match(root.querySelector('.brpg-sky').textContent, /Verika.*Nasce 27:00 · Põe-se 02:00/);
+  assert.ok(m.p.saved.calendars[0].moons[0].riseSet);
+});
+
+test('calendário vinculado segue a referência e mantém hora visível ao desvincular', async () => {
+  const m = mock();
+  m.p.clockNow = () => 1800000000000;
+  await m.p.onload();
+  const parent = m.p.active();
+  await m.p.advance(3);
+  const child = require('../src/calendar.js').newCalendar('Calendário alternativo');
+  child.clockLink = { id: parent.id, offset: 2 };
+  await m.p.putCalendar(child, true, { clockMode: 'manual' });
+  assert.equal(m.p.worldNow(m.p.active()).day, 6);
+  await assert.rejects(m.p.advance(1), /referência/);
+  await assert.rejects(m.p.removeCalendar(parent.id), /Desvincule/);
+  const independent = plain(m.p.active());
+  delete independent.clockLink;
+  await m.p.putCalendar(independent, false);
+  assert.equal(m.p.worldNow(m.p.active()).day, 6);
 });

@@ -1,4 +1,5 @@
 'use strict';
+const { validateHorizon, wrapWindow, applyHorizon, horizonAt } = require('./horizon');
 
 // Same circular-orbit model and constants as the Arkanis Discord project.
 const TAU = Math.PI * 2;
@@ -46,6 +47,7 @@ function validateSky(sky) {
     bound(sun.tilt, -89, 89, 'Inclinação orbital');
     bound(sun.phase, -360, 360, 'Fase inicial');
     bound(sun.size, .05, 4, 'Tamanho relativo');
+    validateHorizon(sun.riseSet, sun.name);
   }
   const reference = sky.suns.find((s) => s.id === sky.referenceId);
   if (sky.suns.length) {
@@ -75,17 +77,20 @@ function solarPositions(sky, epoch, clock, now) {
     const angle = mod(TAU * (now - transit) / total + Math.PI, TAU) - Math.PI;
     const altitude = Math.asin(clamp(base + amplitude * Math.cos(angle))) / RAD;
     const horizon = base + amplitude <= 0 ? 'never' : base - amplitude >= 0 ? 'always' : 'normal';
-    const visibleNow = horizon === 'always' || (horizon === 'normal' && altitude >= 0);
+
     let from = null, to = null, intervals = [];
     if (horizon === 'always') intervals = [[0, total]];
     if (horizon === 'normal') {
       const half = Math.acos(clamp(-base / amplitude)) * total / TAU;
       from = mod(transit - half, total); to = mod(transit + half, total);
-      intervals = from <= to ? [[from, to]] : [[0, to], [from, total]];
+      intervals = wrapWindow(from, to, total);
     }
-    const label = horizon === 'never' ? 'Não nasce neste dia' : horizon === 'always' ? 'Acima do horizonte o dia todo' :
-      !visibleNow ? 'Abaixo do horizonte' : Math.abs(angle) < TAU / 40 ? 'No ponto mais alto' : angle < 0 ? 'Subindo' : 'Descendo';
-    return { ...sun, period: eq.period, altitude, transit, horizon, from, to, intervals, visibleToday: horizon !== 'never', visibleNow, label,
+    const local = applyHorizon(sun.riseSet, { horizon, from, to, intervals, rises: from === null ? [] : [from], sets: to === null ? [] : [to] }, total);
+    const visibleNow = local.configured ? horizonAt(local, now) : horizon === 'always' || (horizon === 'normal' && altitude >= 0);
+    const label = local.horizon === 'never' ? 'Não nasce neste dia' : local.horizon === 'always' ? 'Acima do horizonte o dia todo' :
+      !visibleNow ? 'Abaixo do horizonte' : local.configured ? 'No céu pelo horário configurado' :
+        Math.abs(angle) < TAU / 40 ? 'No ponto mais alto' : angle < 0 ? 'Subindo' : 'Descendo';
+    return { ...sun, period: eq.period, altitude, transit, ...local, visibleToday: local.horizon !== 'never', visibleNow, label,
       reference: sun.id === sky.referenceId };
   });
 }

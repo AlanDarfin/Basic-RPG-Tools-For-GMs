@@ -40,7 +40,7 @@ function sunDisc(parent, sun) {
 }
 const lightPercent = (moon) => `${Math.round(moon.illumination * 100)}%`;
 const sunLabel = (sun) => sun.visibleNow ? 'No céu' : sun.visibleToday ? 'Abaixo do horizonte' : 'Não nasce';
-function overviewGroup(parent, name, bodies, type) {
+function overviewGroup(parent, name, bodies, type, horizonLabel) {
   if (!bodies.length) return [];
   const group = el(parent, 'section', 'brpg-celestial-group');
   el(group, 'h3', 'brpg-section-title', name);
@@ -51,10 +51,11 @@ function overviewGroup(parent, name, bodies, type) {
     el(tile, 'strong', '', body.name);
     const label = el(tile, 'small', 'brpg-celestial-state');
     const light = type === 'moon' ? el(tile, 'small', 'brpg-celestial-illumination') : null;
+    if (horizonLabel) el(tile, 'small', 'brpg-horizon-time', horizonLabel(body));
     return (next) => {
       paint(next);
       label.textContent = type === 'sun' ? sunLabel(next) : next.phase;
-      if (light) light.textContent = lightPercent(next);
+      if (light) light.textContent = lightPercent(next) + ' · ' + (next.visibleNow ? 'No céu' : 'Abaixo');
       else {
         tile.title = next.label;
         tile.classList.toggle('is-above', next.visibleNow);
@@ -62,9 +63,9 @@ function overviewGroup(parent, name, bodies, type) {
     };
   });
 }
-function skyOverview(parent, suns, moons) {
-  const solar = overviewGroup(parent, 'Sóis', suns, 'sun');
-  const lunar = overviewGroup(parent, 'Luas', moons, 'moon');
+function skyOverview(parent, suns, moons, horizonLabel) {
+  const solar = overviewGroup(parent, 'Sóis', suns, 'sun', horizonLabel);
+  const lunar = overviewGroup(parent, 'Luas', moons, 'moon', horizonLabel);
   if (!suns.length && !moons.length) info(parent, 'Nenhum sol ou lua visível configurado.');
   return (nextSuns, nextMoons) => {
     solar.forEach((paint, i) => paint(nextSuns[i]));
@@ -86,7 +87,7 @@ function focusSky(parent, suns, moons, open) {
       const paint = type === 'suns' ? sunDisc(holder, body) : moonDisc(holder);
       return (next) => {
         paint(next);
-        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada'}`;
+        return holder.title = `${next.name} · ${type === 'suns' ? sunLabel(next) : next.phase + ', ' + lightPercent(next) + ' iluminada' + (next.visibleNow ? ', no céu' : ', abaixo do horizonte')}`;
       };
     });
     return (next) => {

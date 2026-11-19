@@ -1,7 +1,8 @@
 'use strict';
-const { assert, copy, validateCalendar, CalendarEngine } = require('./calendar');
+const { assert, copy, validateCalendar, CalendarEngine, MAX_YEAR } = require('./calendar');
 const { ensureSky } = require('./sky');
 const { ensureEclipseOrbits } = require('./eclipse');
+const { calendarium } = require('./interchange');
 const { MAX_REGIONS, MAX_OFFSET, defaultWeather, region, ensureWeather } = require('./weather');
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
@@ -50,6 +51,11 @@ function importFantasyWeather(cal, seasonData, dynamic, warnings) {
     if (seen.has(key)) { skipped++; continue; }
     seen.add(key);
     const r = region('fc-regiao-' + (i + 1), name);
+    const zone = loc?.settings?.timezone;
+    if (zone) {
+      const offset = (Number(zone.hour || 0) * cal.clock.minutes + Number(zone.minute || 0)) / (cal.clock.hours * cal.clock.minutes);
+      if (Number.isFinite(offset) && Math.abs(offset) <= .5 && offset) r.timeOffset = offset;
+    }
     for (const [j, s] of cal.seasons.entries()) {
       const data = loc?.seasons?.[j]?.weather;
       if (!data) continue;
@@ -69,7 +75,7 @@ function importFantasyWeather(cal, seasonData, dynamic, warnings) {
   cal.weather = settings;
   if (g.enable_weather) {
     if (!imported.length || dynamic.custom_location === false) warnings.push('Presets de localização do Fantasy Calendar não são importados. Selecione ou configure uma região no Basic RPG.');
-    if (imported.length) warnings.push('Temperaturas, precipitação e regiões personalizadas importadas. A previsão usa o motor do Basic RPG, sem as curvas de ruído, horários do sol ou fusos das regiões do Fantasy Calendar.');
+    if (imported.length) warnings.push('Temperaturas, precipitação e regiões personalizadas importadas. A previsão usa o motor do Basic RPG, sem as curvas de ruído ou a programação sazonal de nascer e pôr do Fantasy Calendar.');
   }
   if (locations.length > MAX_REGIONS || skipped) warnings.push('Algumas regiões foram omitidas por exceder o limite ou repetir um nome.');
   if (invalidProfile) warnings.push('Perfis sazonais de clima inválidos não foram importados. Essas estações usarão o perfil-base.');
@@ -77,19 +83,19 @@ function importFantasyWeather(cal, seasonData, dynamic, warnings) {
 function importFantasy(raw) {
   const s = raw.static_data, y = s?.year_data, d = raw.dynamic_data;
   assert(y && d && Array.isArray(y.timespans) && Array.isArray(y.global_week), 'Esse não parece um arquivo do Fantasy Calendar.');
-  assert(!s.settings?.year_zero_exists, 'Calendários com ano zero ainda não podem ser importados.');
+
   const warnings = [];
   const months = y.timespans.map((m, i) => {
-    assert(Number(m.interval ?? 1) === 1 && !m.week?.length, `O mês ${m.name} usa recorrência ou semana própria, ainda não suportada.`);
-    return { id: `mes-${i+1}`, name: m.name, length: Number(m.length), intercalary: m.type === 'intercalary' };
+    return { id: `mes-${i+1}`, name: m.name, length: Number(m.length), intercalary: m.type === 'intercalary', ...(m.week?.length ? { week: m.week } : {}),
+      ...(Number(m.interval ?? 1) !== 1 ? { every: Number(m.interval), offset: Number(m.offset || 0) } : {}) };
   });
   const date = (a) => ({ year: Number(a[0]), month: months[Number(a[1])]?.id, day: Number(a[2]) });
   const leapDays = (y.leap_days || []).map((l, i) => {
     const m = months[l.timespan];
-    assert(m && !l.adds_week_day && !l.not_numbered && (!l.intercalary || Number(l.day) === m.length),
+    assert(m && !l.adds_week_day && !l.not_numbered,
       `O dia especial ${l.name} usa uma posição ou regra de numeração ainda não suportada.`);
     return { id: `extra-${i+1}`, name: l.name, month: m.id, intercalary: !!l.intercalary,
-      ...parseInterval(l.interval), offset: Number(l.offset ?? 0) };
+      ...parseInterval(l.interval), offset: Number(l.offset ?? 0), ...(l.intercalary && l.day !== undefined ? { after: Number(l.day) } : {}) };
   });
   const periodic = !!s.seasons?.global_settings?.periodic_seasons;
   const seasons = (s.seasons?.data || []).map((v, i) => ({
@@ -99,41 +105,70 @@ function importFantasy(raw) {
   }));
   const eras = (s.eras || []).map((e) => {
     const ed = e.date;
-    assert(ed && !e.settings?.ends_year && !e.settings?.starting_era && Number(ed.timespan) === 0 && Number(ed.day) === 1,
-      `A era ${e.name} usa uma transição dentro do ano ou um ano inicial especial.`);
-    return { name: e.name, start: Number(ed.year), reset: !!e.settings?.restart };
+    assert(ed && !e.settings?.ends_year && !e.settings?.starting_era && months[Number(ed.timespan)],
+      `A era ${e.name} encurta um ano ou usa um ano inicial especial.`);
+    return { name: e.name, start: Number(ed.year), reset: !!e.settings?.restart,
+      ...(Number(ed.timespan) !== 0 || Number(ed.day) !== 1 ? { month: months[Number(ed.timespan)].id, day: Number(ed.day) } : {}) };
   });
-  const events = [];
+  const allYears = [Number(d.year), ...eras.map((era) => era.start)];
+  for (const event of raw.events || []) {
+    for (const term of event.data?.conditions || []) {
+      if (term[0] === 'Date' || term[0] === 'Year' && ['0', '2'].includes(String(term[1]))) allYears.push(Number(term[2]?.[0]));
+    }
+  }
+  const firstYear = s.settings?.year_zero_exists ? Math.min(0, ...allYears.filter(Number.isSafeInteger)) : 1;
+  const events = [], structure = new CalendarEngine({ months, leapDays, events, firstYear });
+  const origin = firstYear <= 0 ? structure.yearStart(0) : 0;
+  const shifted = (offset, span) => origin && span > 0 ? ((offset + origin) % span + span) % span : offset;
   for (const [i, v] of (raw.events || []).entries()) {
     const rules = v.data?.conditions || [];
     const category = (raw.categories || []).find((x) => x.id === v.event_category_id)?.name;
     const common = { id: `evento-${i+1}`, title: text(v.name, 140) || `Evento ${i+1}`,
       description: plainDescription(v.description), note: '', category: text(category, 60), color: DEFAULT_COLOR,
       hidden: !!(v.settings?.hide || v.settings?.hide_full), repeat: 'none', end: null };
-    if (rules.length === 1 && rules[0][0] === 'Date' && String(rules[0][1]) === '0' && rules[0][2]?.length === 3 && !v.data?.has_duration) {
-      events.push({ ...common, start: date(rules[0][2]) });
+    if (rules.length === 1 && rules[0][0] === 'Date' && String(rules[0][1]) === '0' && rules[0][2]?.length === 3) {
+      const start = date(rules[0][2]), span = v.data?.has_duration ? Number(v.data.duration) : 1;
+      assert(Number.isSafeInteger(span) && span > 0, 'Duração de evento inválida: ' + common.title);
+      events.push({ ...common, start, end: span === 1 ? null : structure.shift(start, span - 1) });
     } else if (rules.length === 3 && rules[0][0] === 'Season' && String(rules[0][1]) === '0'
       && rules[1][0] === '&&' && rules[2][0] === 'Season' && String(rules[2][1]) === '8'
       && Number(rules[2][2]?.[0]) === 1 && seasons[Number(rules[0][2]?.[0])] && !v.data?.has_duration) {
       events.push({ ...common, repeat: 'season', seasonId: seasons[Number(rules[0][2][0])].id, start: null });
+    } else if (rules.length === 5 && rules[0][0] === 'Month' && String(rules[0][1]) === '0' && rules[1][0] === '&&' &&
+      rules[2][0] === 'Day' && String(rules[2][1]) === '0' && rules[3][0] === '&&' &&
+      rules[4][0] === 'Year' && String(rules[4][1]) === '2' && !v.data?.has_duration && !v.data?.limited_repeat) {
+      events.push({ ...common, repeat: 'year', start: date([rules[4][2][0], rules[0][2][0], rules[2][2][0]]) });
+    } else if (rules[0]?.[0] === 'Date' && String(rules[0][1]) === '2' && rules[0][2]?.length === 3 && !v.data?.limited_repeat &&
+      rules.every((r, j) => j === 0 || (j % 2 ? r[0] === '&&' : ['Day', 'Month', 'Weekday', 'Season'].includes(r[0]) && String(r[1]) === '0'))) {
+      const duration = v.data?.has_duration ? Number(v.data.duration) : 1;
+      const mapped = rules.slice(1).filter((_, j) => j % 2).map(([type, , [a]]) => ({
+        type: type.toLowerCase(), value: type === 'Month' ? months[Number(a)]?.id : type === 'Season' ? seasons[Number(a)]?.id :
+          type === 'Day' ? Number(a) : a,
+      }));
+      if (duration >= 1 && duration <= 366 && mapped.length <= 12) events.push({ ...common, repeat: 'pattern', start: date(rules[0][2]),
+        pattern: { unit: 'day', every: 1, duration, match: 'all', rules: mapped } });
+      else warnings.push('Padrão de evento não suportado: ' + common.title);
     } else {
       warnings.push(`Evento com regra não suportada: ${common.title}`);
     }
   }
   const cal = {
     id: 'importado', name: text(raw.name, 100) || 'Calendário importado', description: '',
-    week: y.global_week.slice(), firstWeekday: Number(y.first_day ?? 1) - 1, weekOverflow: y.overflow !== false,
-    months, leapDays,
-    moons: (s.moons || []).map((m, i) => ({ id: `lua-${i+1}`, name: m.name, period: Number(m.cycle), offset: Number(m.shift ?? 0),
+    week: y.global_week.slice(), firstWeekday: (() => {
+      const n = y.global_week.length, normal = Number(y.first_day ?? 1) - 1 - (origin && y.overflow !== false ? structure.yearStart(0, true) : 0);
+      return ((normal % n) + n) % n;
+    })(), weekOverflow: y.overflow !== false,
+    months, leapDays, ...(firstYear !== 1 ? { firstYear } : {}),
+    moons: (s.moons || []).map((m, i) => ({ id: `lua-${i+1}`, name: m.name, period: Number(m.cycle), offset: shifted(Number(m.shift ?? 0), Number(m.cycle)),
       granularity: Number(m.granularity ?? 8), rounding: m.cycle_rounding || 'round', hidden: !!m.hidden })),
-    seasons, seasonMode: periodic ? 'periodic' : 'date', seasonOffset: Number(s.seasons?.global_settings?.season_offset ?? 0), eras,
+    seasons, seasonMode: periodic ? 'periodic' : 'date', seasonOffset: shifted(Number(s.seasons?.global_settings?.season_offset ?? 0), periodic ? seasons.reduce((n, entry) => n + entry.duration, 0) : 0), eras,
     clock: { hours: Number(s.clock?.hours || 24), minutes: Number(s.clock?.minutes || 60) },
     current: { ...date([d.year, d.timespan, d.day]), hour: Number(d.hour || 0), minute: Number(d.minute || 0) },
     events,
   };
   importFantasyWeather(cal, s.seasons, d, warnings);
   validateCalendar(cal);
-  ensureSky(cal, new CalendarEngine(cal).yearStart(2));
+  ensureSky(cal, new CalendarEngine(cal).yearInfo(1).total);
   ensureEclipseOrbits(cal);
   return { calendar: validateCalendar(cal), warnings };
 }
@@ -143,13 +178,18 @@ function decodeImport(raw) {
   if (raw.format === NATIVE_FORMAT) {
     assert(raw.version === FORMAT_VERSION, 'Versão do backup não suportada.');
     const calendar = validateCalendar(copy(raw.calendar));
-    ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
+    ensureSky(calendar, new CalendarEngine(calendar).yearInfo(1).total);
     ensureEclipseOrbits(calendar);
     ensureWeather(calendar);
     return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
-  throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
+  if (Array.isArray(raw.static?.months) && Array.isArray(raw.static?.weekdays) && raw.current) {
+    const result = calendarium(raw, parseInterval), c = validateCalendar(result.calendar);
+    ensureSky(c, new CalendarEngine(c).yearInfo(1).total); ensureEclipseOrbits(c); ensureWeather(c);
+    return result;
+  }
+  throw new Error('Formato não reconhecido. Use um JSON do Basic RPG, do Calendarium ou do Fantasy Calendar.');
 }
 function encodeExport(calendar) {
   const snapshot = ensureEclipseOrbits(copy(validateCalendar(calendar)));

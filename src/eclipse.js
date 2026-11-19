@@ -144,4 +144,4 @@ function nextEclipse(calendar, afterEpoch, days = 366, maxEpoch = Infinity) {
   }
   return null;
 }
-module.exports = { eclipseDefaults, ensureEclipseOrbits, validateEclipseOrbit, solarType, lunarType, overlapFraction, contacts, eclipsesForDay, nextEclipse };
+module.exports = { moonOrbit, position, localAltitude, eclipseDefaults, ensureEclipseOrbits, validateEclipseOrbit, solarType, lunarType, overlapFraction, contacts, eclipsesForDay, nextEclipse };

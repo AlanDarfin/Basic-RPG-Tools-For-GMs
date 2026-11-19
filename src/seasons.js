@@ -46,7 +46,7 @@ function seasonSchedule(c, engine, date, maxYear) {
 
   const sorted = c.seasons.slice().sort((a, b) => engine.monthIndex(a.month) - engine.monthIndex(b.month) || a.day - b.day);
   const points = [];
-  for (let year = Math.max(1, date.year - 1); year <= Math.min(maxYear + 1, date.year + 2); year++) {
+  for (let year = Math.max(engine.firstYear, date.year - 1); year <= Math.min(maxYear + 1, date.year + 2); year++) {
     for (const season of sorted) {
       const sourceYear = Math.min(year, maxYear);
       const month = engine.yearInfo(sourceYear).months[engine.monthIndex(season.month)];

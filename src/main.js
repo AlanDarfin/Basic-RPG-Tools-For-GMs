@@ -1,14 +1,19 @@
 'use strict';
 const { ensureWeather } = require('./weather');
 const { Plugin, PluginSettingTab, Notice, TFile, normalizePath } = require('obsidian');
-const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = require('./calendar');
+const { CalendarEngine, MAX_YEAR, sameDate, fold, assert, copy, newCalendar, uid, validateCalendar } = require('./calendar');
 const { decodeImport, encodeExport } = require('./imports');
 const { VIEW, CalendarView } = require('./view');
 const { ensureSky } = require('./sky');
 const { ensureEclipseOrbits } = require('./eclipse');
-const { worldDate, mode: clockMode, anchor, ensureClock, transferDate } = require('./world-clock');
+const { worldDate, linkedDate, mode: clockMode, anchor, ensureClock, transferDate } = require('./world-clock');
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const arkanis = require('./arkanis.json');
+const { NoteIndex, parseDate } = require('./note-events');
+const { registerEmbeds } = require('./embeds');
+const { observatory } = require('./observatory');
+const { weatherDay } = require('./weather');
+const { fantasyExport, gregorian } = require('./interchange');
 
 class Settings extends PluginSettingTab {
   constructor(plugin) { super(plugin.app, plugin); this.plugin = plugin; }
@@ -53,6 +58,9 @@ class Settings extends PluginSettingTab {
       const preset = copy(arkanis); ensureWeather(preset); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
     }), { icon: 'sparkles' });
+    button(buttons, 'Preset Gregoriano', () => p.attempt(async () => {
+      await p.putCalendar(gregorian(new Date(p.clockNow())), true); this.display();
+    }), { icon: 'globe' });
     const upload = el(importBox, 'input');
     upload.type = 'file'; upload.accept = '.json,application/json'; upload.hidden = true;
     const output = el(importBox, 'div', 'brpg-import-results');
@@ -65,6 +73,10 @@ class Settings extends PluginSettingTab {
         assert(file.size <= 5_000_000, 'O JSON precisa ter até 5 MB.');
         const { calendar, warnings } = decodeImport(JSON.parse(await file.text()));
         calendar.id = uid('cal');
+        if (calendar.clockLink && !p.state.calendars.some((x) => x.id === calendar.clockLink.id && !x.clockLink)) {
+          delete calendar.clockLink;
+          warnings.push('Calendário de referência não encontrado. O relógio foi importado de forma independente.');
+        }
         await p.putCalendar(calendar, true);
         this.display();
         const result = this.containerEl.querySelector('.brpg-import-results');
@@ -78,7 +90,7 @@ class Settings extends PluginSettingTab {
         output.textContent = error.message || String(error);
       }
     });
-    info(importBox, 'Aceita um backup do Basic RPG ou um JSON do Fantasy Calendar. Regras não compatíveis são sinalizadas na importação.');
+    info(importBox, 'Aceita um backup do Basic RPG, do Calendarium ou do Fantasy Calendar. Regras não compatíveis são sinalizadas na importação.');
     button(buttons, 'Salvar JSON no cofre', () => p.attempt(async () => {
       const path = await p.exportCalendar(c);
       new Notice(`Backup salvo em ${path}`);
@@ -90,6 +102,9 @@ class Settings extends PluginSettingTab {
 class BasicRPG extends Plugin {
   async onload() {
     this.pending = Promise.resolve();
+    this.noteIndex = new NoteIndex(this);
+    this.embeds = new Set();
+    this.notified = new Map();
     this.readOnly = false;
     let saveMigration = false;
     try {
@@ -103,12 +118,13 @@ class BasicRPG extends Plugin {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
           validateCalendar(c);
-          ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c);
+          ensureSky(c, new CalendarEngine(c).yearInfo(1).total); ensureEclipseOrbits(c);
           const migratedClock = ensureClock(c, this.clockNow());
           if (ensureWeather(c) || migratedClock) saveMigration = true;
           validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
+        this.checkLinks(saved);
         this.state = saved;
       }
     } catch {
@@ -149,11 +165,38 @@ class BasicRPG extends Plugin {
     this.addCommand({ id: 'set-world-date', name: 'Definir data e hora do mundo', callback: () => {
       const cal = this.active(); new WorldDateEditor(this, cal, {}).open();
     } });
+    for (const [id, name, mode] of [['open-year', 'Abrir visão anual', 'year'], ['open-agenda', 'Abrir agenda', 'agenda']]) {
+      this.addCommand({ id, name, callback: () => this.attempt(async () => { const view = await this.open(false); view.mode = mode; view.render(); }) });
+    }
+    this.addCommand({ id: 'insert-world-date', name: 'Inserir data do mundo na nota', editorCallback: (editor) => {
+      const c = this.active(); editor.replaceSelection(new CalendarEngine(c).format(this.worldNow(c)));
+    } });
+    this.addCommand({ id: 'rescan-note-events', name: 'Atualizar eventos das notas', callback: () => this.attempt(async () => {
+      await this.noteIndex.rebuild(); this.redraw();
+    }) });
+    registerEmbeds(this);
+    // Stable, read-only access for companions such as Basic.
+    this.api = Object.freeze({
+      version: 1,
+      calendars: () => this.state.calendars.map(({ id, name }) => ({ id, name })),
+      current: (name) => this.worldNow(this.resolveCalendar(name)),
+      day: (name, date) => this.daySnapshot(this.resolveCalendar(name), date),
+    });
     this.onLayoutReady();
   }
   onLayoutReady() {
     this.app.workspace.onLayoutReady(() => {
+      const cache = this.app.metadataCache;
+      if (cache) {
+        this.registerEvent(cache.on('changed', (file, data, info) => this.attempt(async () => {
+          if (await this.noteIndex.update(file, info, data)) this.redraw();
+        })));
+        this.registerEvent(cache.on('deleted', (file) => { if (this.noteIndex.forget(file.path)) this.redraw(); }));
+        this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
+      }
       this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+        if (cache && this.state.calendars.some((c) => c.noteSources?.enabled))
+          this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
         if (!this.state.calendars.some((c) => c.events.some((e) => e.note === oldPath || e.note.startsWith(oldPath + '/')))) return;
         this.attempt(() => this.change((state) => {
           for (const c of state.calendars) for (const e of c.events) {
@@ -163,14 +206,63 @@ class BasicRPG extends Plugin {
       }));
     });
   }
+  resolveCalendar(name) {
+    if (name == null || name === '') return this.active();
+    const result = this.state.calendars.find((c) => c.id === name || (typeof name === 'string' && fold(c.name) === fold(name)));
+    assert(result, 'Calendário não encontrado.');
+    return result;
+  }
+  isPublicEvent(c, event) {
+    return !event.hidden && !c.eventCategories?.some((x) => x.hidden && fold(x.name) === fold(event.category));
+  }
+  daySnapshot(c, value) {
+    const e = new CalendarEngine(c, this.noteIndex.forCalendar(c.id)), world = this.worldNow(c, e);
+    const date = value == null ? world : parseDate(c, value).date;
+    const t = sameDate(world, date) ? world.hour * c.clock.minutes + world.minute : Math.floor(c.clock.hours * c.clock.minutes / 2);
+    const o = observatory(c, e.epoch(date)), w = weatherDay(c, e, date, MAX_YEAR);
+    return { date: { ...date }, label: e.format(date), season: e.season(date)?.name || null,
+      events: e.eventsOn(date).filter((x) => this.isPublicEvent(c, x)).map(({ title, category }) => ({ title, category })),
+      suns: o.suns(t).map(({ name, visibleNow, rises, sets }) => ({ name, visibleNow, rises, sets })),
+      moons: o.moons(e.moons(date, t / (c.clock.hours * c.clock.minutes)), t)
+        .map(({ name, visibleNow, rises, sets, phase, illumination }) => ({ name, visibleNow, rises, sets, phase, illumination })),
+      weather: w ? { region: w.region, low: w.low, high: w.high, wind: w.wind, ...w.at(t / (c.clock.hours * c.clock.minutes)) } : null };
+  }
+  async openDate(id, date) {
+    this.resolveCalendar(id);
+    if (id !== this.state.activeId) await this.setActive(id);
+    const view = await this.open(false); view.mode = 'month'; view.detailOpen = true; view.choose(date);
+  }
+
   active() { return this.state.calendars.find((c) => c.id === this.state.activeId) || this.state.calendars[0]; }
   clockNow() { return Date.now(); }
-  worldNow(c, engine) { return worldDate(c, this.clockNow(), engine); }
+  worldNow(c, engine) {
+    const parent = c.clockLink && this.state.calendars.find((x) => x.id === c.clockLink.id);
+    return parent ? linkedDate(c, parent, this.clockNow(), engine) : worldDate(c, this.clockNow(), engine);
+  }
+  checkLinks(state) {
+    for (const c of state.calendars) if (c.clockLink) {
+      const parent = state.calendars.find((x) => x.id === c.clockLink.id);
+      assert(parent && parent.id !== c.id && !parent.clockLink, 'O calendário de referência precisa existir e ter relógio próprio.');
+    }
+  }
   tickClock() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.clockTick();
+    for (const view of this.embeds) view.tick();
+    for (const c of this.state.calendars) if (c.dayNotices) {
+      const e = new CalendarEngine(c, this.noteIndex.forCalendar(c.id)), d = this.worldNow(c, e), today = e.epoch(d);
+      const previous = this.notified.get(c.id);
+      this.notified.set(c.id, today);
+      if (previous === undefined || today <= previous) continue;
+      const events = e.eventsOn(d).filter((v) => this.isPublicEvent(c, v));
+      if (events.length) new Notice(c.name + ' · ' + e.format(d) + '\n' + events.slice(0, 5).map((v) => v.title).join(' · ')
+        + (events.length > 5 ? ' · mais ' + (events.length - 5) : ''), 8000);
+    }
   }
   setWorldDate(id, date, selectedMode) {
-    return this.editCalendar(id, (cal) => anchor(cal, date, selectedMode || clockMode(cal), this.clockNow()));
+    return this.editCalendar(id, (cal) => {
+      assert(!cal.clockLink, 'Altere a data no calendário de referência ou desvincule o relógio.');
+      anchor(cal, date, selectedMode || clockMode(cal), this.clockNow());
+    });
   }
   attempt(fn) {
     return Promise.resolve().then(fn).catch((error) => {
@@ -179,14 +271,17 @@ class BasicRPG extends Plugin {
   }
   redraw() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.render();
+    for (const view of this.embeds) view.draw();
   }
-  change(fn) {
+  change(fn, rebuildNotes = false) {
     const next = this.pending.then(async () => {
       assert(!this.readOnly, 'Dados do Basic RPG em modo de segurança. Nada foi sobrescrito.');
       const draft = copy(this.state);
       const value = fn(draft);
+      this.checkLinks(draft);
       await this.saveData(draft);
       this.state = draft;
+      if (rebuildNotes) await this.noteIndex.rebuild();
       this.redraw();
       return value;
     });
@@ -219,10 +314,11 @@ class BasicRPG extends Plugin {
         // Active editing must anchor to the live time at save, not to the old stored base date.
         const now = this.clockNow();
         const requestedMode = options.clockMode || clockMode(old);
-        const clockChanged = old.clock.hours !== draft.clock.hours || old.clock.minutes !== draft.clock.minutes;
-        const structureChanged = JSON.stringify(old.months) !== JSON.stringify(draft.months) || JSON.stringify(old.leapDays) !== JSON.stringify(draft.leapDays);
+        const clockChanged = old.clock.hours !== draft.clock.hours || old.clock.minutes !== draft.clock.minutes ||
+          old.realDayHours !== draft.realDayHours || JSON.stringify(old.clockLink) !== JSON.stringify(draft.clockLink);
+        const structureChanged = JSON.stringify(old.months) !== JSON.stringify(draft.months) || JSON.stringify(old.leapDays) !== JSON.stringify(draft.leapDays) || old.firstYear !== draft.firstYear;
         if (options.explicitDate || clockChanged || structureChanged || requestedMode !== clockMode(old)) {
-          const value = options.explicitDate ? draft.current : transferDate(old, draft, worldDate(old, now));
+          const value = options.explicitDate ? draft.current : transferDate(old, draft, this.worldNow(old));
           anchor(draft, value, requestedMode, now);
         } else {
           draft.current = old.current;
@@ -232,16 +328,18 @@ class BasicRPG extends Plugin {
         validateCalendar(draft);
         s.calendars[idx] = draft;
       }
-    });
+    }, true);
   }
   removeCalendar(id) { return this.change((s) => {
     assert(s.calendars.length > 1, 'Mantenha pelo menos um calendário.');
+    assert(!s.calendars.some((c) => c.clockLink?.id === id), 'Desvincule os calendários dependentes antes de remover a referência.');
     s.calendars = s.calendars.filter((c) => c.id !== id);
     if (s.activeId === id) s.activeId = s.calendars[0].id;
   }); }
   newCalendar() { new CalendarEditor(this, newCalendar(), true).open(); }
   async advance(amount) {
     await this.editCalendar(this.active().id, (c) => {
+      assert(!c.clockLink, 'Avance a data no calendário de referência.');
       const now = this.clockNow(), engine = new CalendarEngine(c);
       const current = worldDate(c, now, engine);
       anchor(c, { ...current, ...engine.shift(current, amount) }, clockMode(c), now);
@@ -265,14 +363,32 @@ class BasicRPG extends Plugin {
     assert(file instanceof TFile, 'Nota vinculada não encontrada no cofre.');
     await this.app.workspace.getLeaf('tab').openFile(file);
   }
-  async exportCalendar(c) {
+  async writeExport(c, prefix, ext, content) {
     const clean = c.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'calendario';
-    let path = `Basic-RPG-${clean}.json`;
-    for (let count = 2; this.app.vault.getAbstractFileByPath(path); count++) path = `Basic-RPG-${clean}-${count}.json`;
-    const output = copy(c), now = this.clockNow();
-    anchor(output, worldDate(c, now), clockMode(c), now);
-    await this.app.vault.create(path, JSON.stringify(encodeExport(output), null, 2) + '\n');
+    let path = `${prefix}-${clean}.${ext}`;
+    for (let count = 2; this.app.vault.getAbstractFileByPath(path); count++) path = `${prefix}-${clean}-${count}.${ext}`;
+    await this.app.vault.create(path, content);
     return path;
+  }
+  snapshot(c) {
+    const output = copy(c), now = this.clockNow();
+    anchor(output, this.worldNow(c), clockMode(c), now);
+    return output;
+  }
+  exportCalendar(c) {
+    return this.writeExport(c, 'Basic-RPG', 'json', JSON.stringify(encodeExport(this.snapshot(c)), null, 2) + '\n');
+  }
+  async exportFantasy(c) {
+    const output = this.snapshot(c), result = fantasyExport(output, [...c.events, ...this.noteIndex.forCalendar(c.id)]);
+    return { path: await this.writeExport(c, 'Fantasy-Calendar', 'json', JSON.stringify(result.data, null, 2) + '\n'), warnings: result.warnings };
+  }
+  exportPlayer(c) {
+    const { label, season, events } = this.daySnapshot(c), escape = (v) => String(v).replace(/[\r\n]+/g, ' ')
+      .replace(/[&<>]/g, (x) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[x])
+      .replace(/[\\`*_#|!\[\]()]/g, (x) => '\\' + x);
+    const body = ['# ' + escape(c.name), '', escape(label), ...(season ? ['', 'Estação · ' + escape(season)] : []), '',
+      '## Eventos do dia', '', ...(events.length ? events.map((v) => '- ' + escape(v.title)) : ['Sem eventos públicos.'])].join('\n');
+    return this.writeExport(c, 'Jogadores', 'md', body + '\n');
   }
 }
 

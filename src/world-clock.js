@@ -12,11 +12,20 @@ function worldDate(c, now, engine = new CalendarEngine(c)) {
   if (mode(c) !== 'real') return { ...base };
   const total = totalMinutes(c);
   const elapsed = Math.max(0, now - c.clockSync.since);
-  const days = Math.floor(elapsed / REAL_DAY_MS);
-  const delta = days * total + Math.floor((elapsed - days * REAL_DAY_MS) * total / REAL_DAY_MS);
+  const dayMs = c.realDayHours === undefined ? REAL_DAY_MS : c.realDayHours * 3600000;
+  const days = Math.floor(elapsed / dayMs);
+  const delta = days * total + Math.floor((elapsed - days * dayMs) * total / dayMs);
   if (!delta) return { ...base };
   const minute = Math.min(engine.yearStart(MAX_YEAR + 1) * total - 1, engine.epoch(base) * total + readMinute(c, base) + delta);
   return { ...engine.fromEpoch(Math.floor(minute / total)), ...splitMinute(c, minute % total) };
+}
+function linkedDate(c, parent, now, engine = new CalendarEngine(c)) {
+  const source = new CalendarEngine(parent), d = worldDate(parent, now, source);
+  const sourceDay = source.epoch(d);
+  const total = totalMinutes(c);
+  const minute = Math.floor((sourceDay + c.clockLink.offset) * total + readMinute(parent, d) * total / totalMinutes(parent));
+  const bounded = Math.max(0, Math.min(engine.yearStart(MAX_YEAR + 1) * total - 1, minute));
+  return { ...engine.fromEpoch(Math.floor(bounded / total)), ...splitMinute(c, bounded % total) };
 }
 function anchor(c, date, clockMode, now) {
   c.current = { year: date.year, month: date.month, day: date.day, hour: date.hour, minute: date.minute };
@@ -37,4 +46,4 @@ function alignLocal(c, date, now) {
   const localTime = ((real.getHours() * 60 + real.getMinutes()) * 60 + real.getSeconds()) * 1000 + real.getMilliseconds();
   return { ...date, ...splitMinute(c, Math.floor(localTime * totalMinutes(c) / REAL_DAY_MS)) };
 }
-module.exports = { REAL_DAY_MS, totalMinutes, readMinute, splitMinute, mode, worldDate, anchor, ensureClock, transferDate, alignLocal };
+module.exports = { REAL_DAY_MS, totalMinutes, readMinute, splitMinute, mode, worldDate, linkedDate, anchor, ensureClock, transferDate, alignLocal };

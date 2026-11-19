@@ -1,6 +1,7 @@
 'use strict';
 
 const { periodicPhase } = require('./seasons');
+const { validateHorizon } = require('./horizon');
 
 // Fictional weather. Units in the model are Celsius, km/h, percent and km.
 const MAX_REGIONS = 32, MAX_OFFSET = 100000;
@@ -27,6 +28,9 @@ const BIOMES = [
   ['arid', 'Árido', [14, 35, 7, 30, 29, 23, 3]],
   ['cold', 'Frio', [-14, 1, 40, 55, 72, 23, 30]],
   ['coast', 'Costa úmida', [11, 21, 54, 55, 84, 21, 64]],
+  ['monsoon', 'Monções', [23, 34, 72, 84, 85, 21, 30]],
+  ['savanna', 'Savana', [18, 34, 27, 66, 52, 18, 14]],
+  ['polar', 'Polar', [-33, -12, 32, 42, 65, 37, 34]],
 ];
 const profile = (values) => Object.fromEntries(PROFILE_FIELDS.map(([key], i) => [key, values[i]]));
 function biome(key = 'temperate') { return profile((BIOMES.find((x) => x[0] === key) || BIOMES[0])[2]); }
@@ -86,6 +90,20 @@ function validateWeather(w, seasons) {
     const name = r.name.normalize('NFKD').replace(/\p{Diacritic}/gu, '').trim().toLowerCase();
     requireWeather(!ids.has(r.id) && !names.has(name), 'Clima: as regiões precisam ter IDs e nomes diferentes.');
     ids.add(r.id); names.add(name);
+    if (r.latitude !== undefined) requireWeather(Number.isFinite(r.latitude) && Math.abs(r.latitude) <= 89, 'A latitude da região deve ficar entre −89 e 89°.');
+    if (r.timeOffset !== undefined) requireWeather(Number.isFinite(r.timeOffset) && Math.abs(r.timeOffset) <= .5, 'Fuso regional inválido.');
+    if (r.variability !== undefined) requireWeather(Number.isFinite(r.variability) && r.variability >= 0 && r.variability <= 3, 'Variação diária inválida.');
+    if (r.horizons !== undefined) {
+      requireWeather(Array.isArray(r.horizons) && r.horizons.length <= 33, 'Horários dos astros da região inválidos.');
+      const horizons = new Set();
+      for (const entry of r.horizons) {
+        const key = entry?.kind + ':' + entry?.id;
+        requireWeather(entry && ['sun', 'moon'].includes(entry.kind) && validText(entry.id, 100) && !horizons.has(key) && entry.riseSet,
+          'Horário regional de astro inválido.');
+        horizons.add(key);
+        validateHorizon(entry.riseSet, r.name);
+      }
+    }
     validProfile(r.base, r.name);
     requireWeather(Array.isArray(r.seasons) && r.seasons.length <= seasonIds.size, 'Clima: perfis sazonais inválidos.');
     const used = new Set();
@@ -130,11 +148,11 @@ function climatePhase(c, e, day, maxYear) {
   } else {
     const limit = e.yearStart(maxYear + 1);
     const year = e.fromEpoch(clamp(day, 0, limit - 1)).year;
-    const yearOf = (y) => y === 0 ? 1 : y === maxYear + 1 ? maxYear : y;
+    const yearOf = (y) => clamp(y, e.firstYear, maxYear);
     const points = [];
     for (const y of [year - 1, year, year + 1]) {
       const sourceYear = yearOf(y);
-      const origin = y === 0 ? -e.yearInfo(1).total : e.yearStart(y);
+      const origin = y < e.firstYear ? -e.yearInfo(e.firstYear).total : e.yearStart(y);
       for (const s of c.seasons) points.push({ s, at: origin + e.yearInfo(sourceYear).months[e.monthIndex(s.month)].start + s.day - 1 });
     }
     points.sort((a, b) => a.at - b.at);
@@ -160,7 +178,7 @@ function seasonalProfile(c, engine, r, epoch, maxYear) {
   let shifted = epoch - c.weather.offset;
   if (c.seasonMode === 'date' && c.seasons.length) {
     const limit = engine.yearStart(maxYear + 1);
-    if (shifted < 0) shifted = mod(shifted, engine.yearInfo(1).total) - engine.yearInfo(1).total;
+    if (shifted < 0) shifted = mod(shifted, engine.yearInfo(engine.firstYear).total) - engine.yearInfo(engine.firstYear).total;
     else if (shifted >= limit) shifted = limit + mod(shifted - limit, engine.yearInfo(maxYear).total);
   }
   const { from, to, mix } = climatePhase(c, engine, shifted, maxYear);
@@ -187,7 +205,7 @@ function weatherDay(c, engine, date, maxYear, id = c.weather?.activeId) {
   // A slow-moving front clusters wet days without changing the mean chance.
   const wet = p.intensity > 0 && daily < chance + (front - .5) * 1.4 * Math.min(chance, 1 - chance);
   const severity = wet ? clamp(p.intensity / 100 * (.38 + random(seed, day, 3) * .98), .03, 1) : 0;
-  const spread = (noise(seed, day, 4, 4) - .5) * 8 + (random(seed, day, 5) - .5) * 3;
+  const spread = ((noise(seed, day, 4, 4) - .5) * 8 + (random(seed, day, 5) - .5) * 3) * (r.variability ?? 1);
   const low = Math.round(p.low + spread);
   const high = Math.max(low, Math.round(p.high + spread - severity * Math.min(4, (p.high - p.low) / 4)));
   const humidity = Math.round(clamp(p.humidity + (front - .5) * 23 + severity * 21, 0, 100));
