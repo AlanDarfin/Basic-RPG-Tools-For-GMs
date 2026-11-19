@@ -3,6 +3,7 @@ const { ItemView, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, sameDate, clockText } = require('./calendar');
 const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const { solarPositions, formatTime } = require('./sky');
+const { eclipsesForDay, nextEclipse } = require('./eclipse');
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -184,13 +185,15 @@ class CalendarView extends ItemView {
     button(shortcuts, 'Meio-dia', () => update(middle), { icon: 'sun' });
     const summaryBox = el(pane, 'div', 'brpg-sky-summary');
     summaryBox.setAttribute('aria-live', 'polite');
-    const cards = el(pane, 'div', 'brpg-solar-cards');
     const at = e.epoch(this.selected);
+    const updateEclipses = this.renderEclipses(pane, c, e, at, day);
+    const cards = el(pane, 'div', 'brpg-solar-cards');
     const update = (minute) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
       time.value = formatTime(this.skyMinute, c.clock);
       slider.value = String(this.skyMinute);
       slider.setAttribute('aria-valuetext', time.value);
+      updateEclipses(this.skyMinute);
       replaceEl(summaryBox); replaceEl(cards);
       const p = solarPositions(c.sky, at, c.clock, this.skyMinute);
       if (!p.length) {
@@ -224,6 +227,69 @@ class CalendarView extends ItemView {
       const list = el(group, 'div', 'brpg-metadata');
       moons.forEach((m) => el(list, 'span', 'brpg-chip', `${m.icon} ${m.name} · ${m.phase}`));
     }
+  }
+
+  renderEclipses(parent, c, engine, epoch, total) {
+    const section = el(parent, 'section', 'brpg-eclipses');
+    const head = el(section, 'div', 'brpg-toolbar brpg-eclipse-header');
+    el(head, 'h3', 'brpg-section-title', 'Eclipses');
+    const output = el(section, 'div', 'brpg-eclipse-results');
+    output.setAttribute('aria-live', 'polite');
+    const available = c.sky.suns.length && c.moons.some((moon) => !moon.hidden);
+    if (!available) {
+      info(section, 'Configure ao menos um sol e uma lua visível para calcular eclipses.');
+      return () => {};
+    }
+    const entries = eclipsesForDay(c, epoch);
+    button(head, 'Próximo eclipse', () => {
+      replaceEl(output);
+      const next = nextEclipse(c, epoch, 366, engine.yearStart(MAX_YEAR + 1) - 1);
+      if (!next) { info(output, 'Nenhum pico encontrado nos próximos 366 dias do mundo.'); return; }
+      const date = engine.fromEpoch(next.epoch);
+      const first = next.events[0];
+      info(output, `${engine.format(date)} · ${first.label.toLowerCase()} · ${formatTime(first.peak * total, c.clock, true)} · ${first.aboveHorizon ? 'pico acima' : 'pico abaixo'} do horizonte`);
+      button(output, 'Abrir dia do eclipse', () => {
+        this.skyMinute = Math.min(total - 1, Math.round(first.peak * total));
+        this.choose(date);
+      }, { icon: 'arrow-right' });
+    }, { icon: 'search' });
+    if (!entries.length) {
+      info(section, 'Nenhum eclipse calculado para este dia.');
+      return () => {};
+    }
+    const list = el(section, 'div', 'brpg-eclipse-list');
+    const markerStatus = [];
+    for (const event of entries) {
+      const card = el(list, 'article', 'brpg-eclipse-card');
+      const top = el(card, 'div', 'brpg-eclipse-item-head');
+      const name = el(top, 'div', 'brpg-eclipse-name');
+      el(name, 'strong', '', event.label);
+      el(name, 'span', '', event.kind === 'solar' ? `${event.moon} passa na frente de ${event.sun}` : `${event.moon} entra na sombra do mundo em relação a ${event.sun}`);
+      const status = el(top, 'span', '');
+      const axis = el(card, 'div', 'brpg-eclipse-times');
+      const time = (t) => formatTime(t * total, c.clock, true);
+      el(axis, 'span', '', event.beginsBefore ? 'Já em curso às 00:00' : `Começa ${time(event.start)}`);
+      el(axis, 'span', '', `${event.peakInDay ? 'Pico' : 'Máximo do trecho'} ${time(event.peak)}`);
+      el(axis, 'span', '', event.endsAfter ? 'Continua no dia seguinte' : `Termina ${time(event.end)}`);
+      const metrics = el(card, 'div', 'brpg-eclipse-metrics');
+      el(metrics, 'span', 'brpg-chip', event.aboveHorizon ? 'Acima do horizonte no máximo' : 'Abaixo do horizonte no máximo');
+      if (event.type !== 'penumbral') {
+        const part = event.kind === 'solar' ? 'do disco coberto' : 'do disco na umbra';
+        el(metrics, 'span', 'brpg-chip', `${Math.round(event.coverage * 100)}% ${part}`);
+      }
+      markerStatus.push({ event, card, status });
+    }
+    if (entries.some((item) => item.kind === 'lunar') && c.sky.suns.length > 1)
+      info(section, 'Um eclipse lunar é calculado em relação a um sol. Outros sóis ainda podem iluminar a lua.');
+    return (minute) => {
+      const t = minute / total;
+      for (const { event, card, status } of markerStatus) {
+        const live = t >= event.start && t <= event.end;
+        card.classList.toggle('is-in-progress', live);
+        status.textContent = live ? 'Em curso na simulação' : '';
+        status.className = live ? 'brpg-chip brpg-eclipse-live' : '';
+      }
+    };
   }
 
   solarCard(root, sun, clock, minute, total) {

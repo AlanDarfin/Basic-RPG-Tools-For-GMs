@@ -226,7 +226,13 @@
       "offset": 12,
       "granularity": 16,
       "rounding": "round",
-      "hidden": false
+      "hidden": false,
+      "eclipse": {
+        "inclination": 5.1,
+        "node": 42,
+        "radius": 0.43,
+        "shadow": 0.88
+      }
     },
     {
       "id": "lua-2",
@@ -235,7 +241,13 @@
       "offset": 12,
       "granularity": 8,
       "rounding": "round",
-      "hidden": false
+      "hidden": false,
+      "eclipse": {
+        "inclination": 9,
+        "node": 138,
+        "radius": 0.23,
+        "shadow": 0.82
+      }
     },
     {
       "id": "lua-3",
@@ -244,7 +256,13 @@
       "offset": 12,
       "granularity": 8,
       "rounding": "round",
-      "hidden": false
+      "hidden": false,
+      "eclipse": {
+        "inclination": 7.2,
+        "node": 223,
+        "radius": 0.53,
+        "shadow": 0.97
+      }
     }
   ],
   "seasons": [

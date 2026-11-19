@@ -9,6 +9,7 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Criar eras com numeração própria, estações por data ou duração, luas com ciclos independentes e relógios fictícios.
 - Configurar até oito sóis por mundo, com tamanho, cor, órbita, inclinação, fase inicial e latitude do observador. Simular o céu de qualquer data e horário.
 - Consultar os dias em grade ou lista e ver o dia selecionado sem chegar ao fim do mês. Navegar na previsão sem mover o relógio da campanha e avançar ou voltar a data atual quando quiser.
+- Calcular eclipses solares e lunares e encontrar o próximo pico no calendário.
 - Criar eventos pontuais, de vários dias, anuais ou ligados ao início de uma estação. Vincular notas de sessão, colorir, categorizar e marcar eventos como reservados.
 - Navegar pela cronologia de um ano com filtros de categoria e de eventos reservados. Para eventos de vários dias, a lista mostra a primeira data no ano em exibição.
 - Importar JSON do Fantasy Calendar e salvar backups próprios do calendário ativo dentro do cofre.
@@ -31,13 +32,21 @@ O preset Arkanis usa **Innart, Dinart e Reart**. Reart é a referência, chega a
 
 Em **Céu → Configurar sóis**, edite a latitude, o período da órbita de referência e os parâmetros de cada sol. A latitude e a inclinação do sol de referência precisam permitir que ele nasça em qualquer dia. Calendários antigos com o preset Arkanis ganham o modelo solar sem perder datas nem eventos. Outros mundos começam com o céu vazio.
 
+## Eclipses
+
+Abra **Céu → Eclipses**. O painel mostra quando começa, o máximo, o fim e como está o horizonte no máximo. O controle de hora marca quando o alinhamento está em curso na simulação, mesmo se ele ocorrer abaixo do horizonte. A previsão indica também quando o evento continua no dia seguinte. **Próximo eclipse** procura o próximo pico após a data selecionada, até 366 dias, e abre a previsão na hora daquele pico. A consulta não muda a data da campanha e não cria eventos no cofre.
+
+O Basic RPG diferencia eclipses solares **totais**, **parciais** e **anulares** e lunares **totais**, **parciais** e **penumbrais**. Eclipses solares são calculados para cada par lua–sol. Um eclipse lunar representa a sombra do planeta em relação a um dos sóis. Se houver outros, ainda podem iluminar a lua.
+
+Em **Editar calendário → Luas → Órbita e eclipses**, você pode ajustar a inclinação, o nó ascendente, o raio aparente da lua e o raio da sombra. Luas ocultas não entram na previsão. O modelo usa discos angulares e um plano lunar circular, com a direção solar fixa ao longo de cada dia. Não simula paralaxe, mapas de sombra nem a interação gravitacional entre os corpos. É uma previsão para mundos fictícios. [Referência de geometria dos eclipses](https://science.nasa.gov/eclipses/geometry/).
+
 ## Importação e backup
 
 Em **Configurações → Basic RPG**, use **Importar JSON**. Cada importação vira um novo calendário, sem sobrescrever os existentes.
 
 O importador aceita a estrutura usada pelo calendário de Arkanis e configurações semelhantes do Fantasy Calendar, com meses anuais, semana global, dias especiais no fim do mês, estações, luas e eventos pontuais ou de início de estação. Quando encontra uma regra avançada de evento que não consegue representar, lista o evento não importado. Se a regra incompatível altera a estrutura de datas, o importador rejeita o arquivo em vez de mover as datas silenciosamente. Clima e dados de localização não são importados. O Fantasy Calendar não carrega o modelo solar do Basic RPG. O importador aplica o céu padrão se reconhecer o calendário de Arkanis. O JSON exportado é um backup no formato **Basic RPG**, não um arquivo de exportação do Fantasy Calendar nem um backup nativo do Calendarium.
 
-A função **Salvar JSON no cofre** gera um novo arquivo, incluindo os sóis, sem substituir backups anteriores. Os eventos armazenados também podem ser sincronizados como dados do plugin pelo mecanismo de sincronização do cofre, quando configurado no Obsidian.
+A função **Salvar JSON no cofre** gera um novo arquivo, incluindo os sóis e as órbitas lunares editadas, sem substituir backups anteriores. Os eventos armazenados também podem ser sincronizados como dados do plugin pelo mecanismo de sincronização do cofre, quando configurado no Obsidian.
 
 ## Instalação manual
 

@@ -9,6 +9,7 @@ const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = loa
 const { decodeImport, encodeExport } = load("imports.js");
 const { VIEW, CalendarView } = load("view.js");
 const { ensureSky } = load("sky.js");
+const { ensureEclipseOrbits } = load("eclipse.js");
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const arkanis = load("arkanis.json");
 
@@ -99,7 +100,7 @@ class BasicRPG extends Plugin {
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
-          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); validateCalendar(c);
+          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c); validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;
@@ -232,6 +233,7 @@ module.exports = BasicRPG;
 'use strict';
 
 const { emptySky, validateSky } = load("sky.js");
+const { validateEclipseOrbit } = load("eclipse.js");
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -499,6 +501,7 @@ function validateCalendar(c) {
     number(m.period, 1, MAX_YEAR, 'Período lunar'); number(m.offset, -MAX_YEAR, MAX_YEAR, 'Deslocamento lunar');
     assert([4, 8, 16, 24, 32, 40, 48, 56, 64].includes(m.granularity || 8), 'Granularidade lunar inválida.');
     assert(['round', 'floor', 'ceil'].includes(m.rounding || 'round'), 'Arredondamento lunar inválido.');
+    validateEclipseOrbit(m.eclipse);
   });
   unique(c.moons.map((m) => m.id), 'IDs lunares');
   const e = new CalendarEngine(c);
@@ -607,7 +610,7 @@ function equatorial(sky, sun, epoch) {
   const p = period(sky, sun);
   const lon = TAU * (mod(epoch, p) / p) + sun.phase * RAD;
   const tilt = sun.tilt * RAD;
-  return { ra: Math.atan2(Math.sin(lon) * Math.cos(tilt), Math.cos(lon)), dec: Math.asin(clamp(Math.sin(lon) * Math.sin(tilt))), period: p };
+  return { longitude: lon, ra: Math.atan2(Math.sin(lon) * Math.cos(tilt), Math.cos(lon)), dec: Math.asin(clamp(Math.sin(lon) * Math.sin(tilt))), period: p };
 }
 function solarPositions(sky, epoch, clock, now) {
   if (!sky?.suns.length) return [];
@@ -643,13 +646,164 @@ function formatTime(value, clock, allowEnd = false) {
   return [Math.floor(minutes / clock.minutes), minutes % clock.minutes].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
-module.exports = { MAX_SUNS, defaultArkanisSky, emptySky, ensureSky, validateSky, period, solarPositions, formatTime };
+module.exports = { MAX_SUNS, defaultArkanisSky, emptySky, ensureSky, validateSky, period, equatorial, solarPositions, formatTime };
+
+    },
+    "eclipse.js": function (module, exports, load, require) {
+'use strict';
+// Geometry for a fictional multi-sun sky. All input angle fields are degrees.
+const { equatorial } = load("sky.js");
+
+const RAD = Math.PI / 180, TAU = Math.PI * 2, EPS = 1e-10;
+const DEFAULT_MOONS = new Map([
+  ['verika', { inclination: 5.1, node: 42, radius: .43, shadow: .88 }],
+  ['neurika', { inclination: 9, node: 138, radius: .23, shadow: .82 }],
+  ['menrika', { inclination: 7.2, node: 223, radius: .53, shadow: .97 }],
+]);
+const mod = (n, t) => ((n % t) + t) % t;
+const clamp = (n) => Math.max(-1, Math.min(1, n));
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const TYPE_LABELS = Object.freeze({
+  solar: { total: 'Solar total', annular: 'Solar anular', partial: 'Solar parcial' },
+  lunar: { total: 'Lunar total', partial: 'Lunar parcial', penumbral: 'Lunar penumbral' },
+});
+
+function eclipseDefaults(moon, index = 0) {
+  return { ...(DEFAULT_MOONS.get(moon.name?.trim().toLowerCase()) || {
+    inclination: 5, node: mod(index * 137.5, 360), radius: .4, shadow: .9,
+  }) };
+}
+function ensureEclipseOrbits(calendar) {
+  calendar.moons.forEach((m, i) => { if (m.eclipse === undefined) m.eclipse = eclipseDefaults(m, i); });
+  return calendar;
+}
+function validateEclipseOrbit(orbit) {
+  if (orbit === undefined) return;
+  const fields = [['inclination', -89, 89, 'Inclinação da lua'], ['node', -360, 360, 'Nó da órbita'],
+    ['radius', .02, 4, 'Raio aparente da lua'], ['shadow', .02, 6, 'Raio da sombra']];
+  for (const [key, lo, hi, name] of fields) {
+    if (!Number.isFinite(orbit?.[key]) || orbit[key] < lo || orbit[key] > hi) {
+      throw new Error(`${name}: use um número de ${lo} a ${hi}.`);
+    }
+  }
+}
+function vector(ra, dec) {
+  const c = Math.cos(dec);
+  return [c * Math.cos(ra), c * Math.sin(ra), Math.sin(dec)];
+}
+function moonOrbit(moon, epoch, reference, ref, i) {
+  const param = moon.eclipse || eclipseDefaults(moon, i);
+  const node = param.node * RAD, incl = param.inclination * RAD, obliquity = reference.tilt * RAD;
+  const rotate = ([x, y, z]) => [x, y * Math.cos(obliquity) - z * Math.sin(obliquity), y * Math.sin(obliquity) + z * Math.cos(obliquity)];
+  const p = rotate([Math.cos(node), Math.sin(node), 0]);
+  const q = rotate([-Math.sin(node) * Math.cos(incl), Math.cos(node) * Math.cos(incl), Math.sin(incl)]);
+  const start = mod(ref.longitude + TAU * mod(epoch - moon.offset, moon.period) / moon.period - node, TAU);
+  return { ...param, p, q, start, speed: TAU / moon.period };
+}
+function position(orbit, t) {
+  const phase = orbit.start + t * orbit.speed;
+  const c = Math.cos(phase), s = Math.sin(phase);
+  return orbit.p.map((n, i) => n * c + orbit.q[i] * s);
+}
+
+// The dot product against a fixed disk is A·cos(theta)+B·sin(theta).
+// Solving its threshold analytically finds even eclipses much shorter than a minute.
+function contacts(orbit, target, maxAngle) {
+  const a = dot(orbit.p, target), b = dot(orbit.q, target), length = Math.hypot(a, b);
+  if (length < Math.cos(maxAngle * RAD)) return [];
+  const half = Math.acos(clamp(Math.cos(maxAngle * RAD) / length));
+  const center = Math.atan2(b, a);
+  const k0 = Math.ceil((orbit.start - center - half) / TAU - EPS);
+  const k1 = Math.floor((orbit.start + orbit.speed - center + half) / TAU + EPS);
+  const result = [];
+  for (let k = k0; k <= k1; k++) {
+    const fullPeak = (center + TAU * k - orbit.start) / orbit.speed;
+    const radius = half / orbit.speed;
+    const lo = fullPeak - radius, hi = fullPeak + radius;
+    const start = Math.max(0, lo), end = Math.min(1, hi);
+    if (end - start <= EPS) continue;
+    const peak = Math.min(end, Math.max(start, fullPeak));
+    const distance = Math.acos(clamp(dot(position(orbit, peak), target))) / RAD;
+    result.push({ start, end, peak, beginsBefore: lo < -EPS, endsAfter: hi > 1 + EPS, peakInDay: fullPeak >= 0 && fullPeak < 1, distance });
+  }
+  return result;
+}
+
+function overlapFraction(distance, target, blocker) {
+  if (distance >= target + blocker) return 0;
+  if (distance <= Math.abs(target - blocker)) return Math.min(1, blocker ** 2 / target ** 2);
+  const t2 = target ** 2, b2 = blocker ** 2, d2 = distance ** 2;
+  const a = t2 * Math.acos(clamp((d2 + t2 - b2) / (2 * distance * target)));
+  const b = b2 * Math.acos(clamp((d2 + b2 - t2) / (2 * distance * blocker)));
+  const c = .5 * Math.sqrt(Math.max(0, (-distance + target + blocker) * (distance + target - blocker) *
+    (distance - target + blocker) * (distance + target + blocker)));
+  return Math.min(1, Math.max(0, (a + b - c) / (Math.PI * t2)));
+}
+function solarType(distance, radiusSun, radiusMoon) {
+  if (distance >= radiusSun + radiusMoon) return null;
+  if (distance + radiusSun <= radiusMoon) return 'total';
+  if (distance + radiusMoon <= radiusSun) return 'annular';
+  return 'partial';
+}
+function lunarType(distance, radiusMoon, umbra, penumbra) {
+  if (distance >= radiusMoon + penumbra) return null;
+  if (distance + radiusMoon <= umbra) return 'total';
+  if (distance < radiusMoon + umbra) return 'partial';
+  return 'penumbral';
+}
+function localAltitude(target, refRA, latitude, fraction) {
+  return Math.asin(clamp(dot(vector(refRA + TAU * (fraction - .5), latitude * RAD), target))) / RAD;
+}
+
+function eclipsesForDay(calendar, epoch) {
+  const sky = calendar.sky;
+  const reference = sky?.suns.find((s) => s.id === sky.referenceId);
+  if (!reference || !calendar.moons.length) return [];
+  const ref = equatorial(sky, reference, epoch);
+  const bodies = sky.suns.map((sun) => {
+    const pos = equatorial(sky, sun, epoch);
+    const sunVector = vector(pos.ra, pos.dec);
+    return { sun, r: .4 * sun.size, sunVector, shadowVector: sunVector.map((n) => -n) };
+  });
+  const found = [];
+  for (const [i, moon] of calendar.moons.entries()) {
+    if (moon.hidden) continue;
+    const orbit = moonOrbit(moon, epoch, reference, ref, i);
+    for (const b of bodies) {
+      const penumbra = orbit.shadow + 2 * b.r;
+      for (const c of contacts(orbit, b.sunVector, b.r + orbit.radius)) {
+        const type = solarType(c.distance, b.r, orbit.radius);
+        if (!type) continue;
+        const altitude = localAltitude(b.sunVector, ref.ra, sky.latitude, c.peak);
+        found.push({ ...c, kind: 'solar', type, label: TYPE_LABELS.solar[type], sun: b.sun.name, moon: moon.name,
+          altitude, aboveHorizon: altitude >= 0, coverage: overlapFraction(c.distance, b.r, orbit.radius) });
+      }
+      for (const c of contacts(orbit, b.shadowVector, penumbra + orbit.radius)) {
+        const type = lunarType(c.distance, orbit.radius, orbit.shadow, penumbra);
+        if (!type) continue;
+        const altitude = localAltitude(position(orbit, c.peak), ref.ra, sky.latitude, c.peak);
+        found.push({ ...c, kind: 'lunar', type, label: TYPE_LABELS.lunar[type], sun: b.sun.name, moon: moon.name,
+          altitude, aboveHorizon: altitude >= 0, coverage: overlapFraction(c.distance, orbit.radius, orbit.shadow) });
+      }
+    }
+  }
+  return found.sort((a, b) => a.peak - b.peak || a.sun.localeCompare(b.sun) || a.moon.localeCompare(b.moon));
+}
+function nextEclipse(calendar, afterEpoch, days = 366, maxEpoch = Infinity) {
+  for (let e = afterEpoch + 1; e <= Math.min(afterEpoch + days, maxEpoch); e++) {
+    const events = eclipsesForDay(calendar, e).filter((x) => x.peakInDay);
+    if (events.length) return { epoch: e, events };
+  }
+  return null;
+}
+module.exports = { eclipseDefaults, ensureEclipseOrbits, validateEclipseOrbit, solarType, lunarType, overlapFraction, contacts, eclipsesForDay, nextEclipse };
 
     },
     "imports.js": function (module, exports, load, require) {
 'use strict';
 const { assert, copy, validateCalendar, CalendarEngine } = load("calendar.js");
 const { ensureSky } = load("sky.js");
+const { ensureEclipseOrbits } = load("eclipse.js");
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -730,6 +884,7 @@ function importFantasy(raw) {
   if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
   validateCalendar(cal);
   ensureSky(cal, new CalendarEngine(cal).yearStart(2));
+  ensureEclipseOrbits(cal);
   return { calendar: validateCalendar(cal), warnings };
 }
 
@@ -739,12 +894,13 @@ function decodeImport(raw) {
     assert(raw.version === FORMAT_VERSION, 'Versão do backup não suportada.');
     const calendar = validateCalendar(copy(raw.calendar));
     ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
+    ensureEclipseOrbits(calendar);
     return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
 }
-function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: copy(validateCalendar(calendar)) }; }
+function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: ensureEclipseOrbits(copy(validateCalendar(calendar))) }; }
 module.exports = { decodeImport, encodeExport, importFantasy, parseInterval, DEFAULT_COLOR };
 
     },
@@ -754,6 +910,7 @@ const { ItemView, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, sameDate, clockText } = load("calendar.js");
 const { el, button, select, info, replaceEl, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const { solarPositions, formatTime } = load("sky.js");
+const { eclipsesForDay, nextEclipse } = load("eclipse.js");
 
 const VIEW = 'basic-rpg-calendar';
 const pct = (n, total) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
@@ -935,13 +1092,15 @@ class CalendarView extends ItemView {
     button(shortcuts, 'Meio-dia', () => update(middle), { icon: 'sun' });
     const summaryBox = el(pane, 'div', 'brpg-sky-summary');
     summaryBox.setAttribute('aria-live', 'polite');
-    const cards = el(pane, 'div', 'brpg-solar-cards');
     const at = e.epoch(this.selected);
+    const updateEclipses = this.renderEclipses(pane, c, e, at, day);
+    const cards = el(pane, 'div', 'brpg-solar-cards');
     const update = (minute) => {
       this.skyMinute = Math.max(0, Math.min(day - 1, minute));
       time.value = formatTime(this.skyMinute, c.clock);
       slider.value = String(this.skyMinute);
       slider.setAttribute('aria-valuetext', time.value);
+      updateEclipses(this.skyMinute);
       replaceEl(summaryBox); replaceEl(cards);
       const p = solarPositions(c.sky, at, c.clock, this.skyMinute);
       if (!p.length) {
@@ -975,6 +1134,69 @@ class CalendarView extends ItemView {
       const list = el(group, 'div', 'brpg-metadata');
       moons.forEach((m) => el(list, 'span', 'brpg-chip', `${m.icon} ${m.name} · ${m.phase}`));
     }
+  }
+
+  renderEclipses(parent, c, engine, epoch, total) {
+    const section = el(parent, 'section', 'brpg-eclipses');
+    const head = el(section, 'div', 'brpg-toolbar brpg-eclipse-header');
+    el(head, 'h3', 'brpg-section-title', 'Eclipses');
+    const output = el(section, 'div', 'brpg-eclipse-results');
+    output.setAttribute('aria-live', 'polite');
+    const available = c.sky.suns.length && c.moons.some((moon) => !moon.hidden);
+    if (!available) {
+      info(section, 'Configure ao menos um sol e uma lua visível para calcular eclipses.');
+      return () => {};
+    }
+    const entries = eclipsesForDay(c, epoch);
+    button(head, 'Próximo eclipse', () => {
+      replaceEl(output);
+      const next = nextEclipse(c, epoch, 366, engine.yearStart(MAX_YEAR + 1) - 1);
+      if (!next) { info(output, 'Nenhum pico encontrado nos próximos 366 dias do mundo.'); return; }
+      const date = engine.fromEpoch(next.epoch);
+      const first = next.events[0];
+      info(output, `${engine.format(date)} · ${first.label.toLowerCase()} · ${formatTime(first.peak * total, c.clock, true)} · ${first.aboveHorizon ? 'pico acima' : 'pico abaixo'} do horizonte`);
+      button(output, 'Abrir dia do eclipse', () => {
+        this.skyMinute = Math.min(total - 1, Math.round(first.peak * total));
+        this.choose(date);
+      }, { icon: 'arrow-right' });
+    }, { icon: 'search' });
+    if (!entries.length) {
+      info(section, 'Nenhum eclipse calculado para este dia.');
+      return () => {};
+    }
+    const list = el(section, 'div', 'brpg-eclipse-list');
+    const markerStatus = [];
+    for (const event of entries) {
+      const card = el(list, 'article', 'brpg-eclipse-card');
+      const top = el(card, 'div', 'brpg-eclipse-item-head');
+      const name = el(top, 'div', 'brpg-eclipse-name');
+      el(name, 'strong', '', event.label);
+      el(name, 'span', '', event.kind === 'solar' ? `${event.moon} passa na frente de ${event.sun}` : `${event.moon} entra na sombra do mundo em relação a ${event.sun}`);
+      const status = el(top, 'span', '');
+      const axis = el(card, 'div', 'brpg-eclipse-times');
+      const time = (t) => formatTime(t * total, c.clock, true);
+      el(axis, 'span', '', event.beginsBefore ? 'Já em curso às 00:00' : `Começa ${time(event.start)}`);
+      el(axis, 'span', '', `${event.peakInDay ? 'Pico' : 'Máximo do trecho'} ${time(event.peak)}`);
+      el(axis, 'span', '', event.endsAfter ? 'Continua no dia seguinte' : `Termina ${time(event.end)}`);
+      const metrics = el(card, 'div', 'brpg-eclipse-metrics');
+      el(metrics, 'span', 'brpg-chip', event.aboveHorizon ? 'Acima do horizonte no máximo' : 'Abaixo do horizonte no máximo');
+      if (event.type !== 'penumbral') {
+        const part = event.kind === 'solar' ? 'do disco coberto' : 'do disco na umbra';
+        el(metrics, 'span', 'brpg-chip', `${Math.round(event.coverage * 100)}% ${part}`);
+      }
+      markerStatus.push({ event, card, status });
+    }
+    if (entries.some((item) => item.kind === 'lunar') && c.sky.suns.length > 1)
+      info(section, 'Um eclipse lunar é calculado em relação a um sol. Outros sóis ainda podem iluminar a lua.');
+    return (minute) => {
+      const t = minute / total;
+      for (const { event, card, status } of markerStatus) {
+        const live = t >= event.start && t <= event.end;
+        card.classList.toggle('is-in-progress', live);
+        status.textContent = live ? 'Em curso na simulação' : '';
+        status.className = live ? 'brpg-chip brpg-eclipse-live' : '';
+      }
+    };
   }
 
   solarCard(root, sun, clock, minute, total) {
@@ -1140,6 +1362,7 @@ const { Modal, FuzzySuggestModal, setIcon } = require('obsidian');
 const { CalendarEngine, MAX_YEAR, copy, uid, validateCalendar } = load("calendar.js");
 const { DEFAULT_COLOR } = load("imports.js");
 const { MAX_SUNS, emptySky } = load("sky.js");
+const { eclipseDefaults } = load("eclipse.js");
 
 function el(parent, tag, classes = '', content) {
   const child = parent.ownerDocument.createElement(tag);
@@ -1348,12 +1571,20 @@ class CalendarEditor extends RPGModal {
     } else if (this.tab === 'luas') {
       const root = this.group('Luas', 'Cada lua tem um ciclo independente. Use um deslocamento para alinhar sua lua nova a uma data.');
       c.moons.forEach((m, i) => {
+        const eclipse = m.eclipse ||= eclipseDefaults(m, i);
         const card = el(root, 'div', 'brpg-edit-card');
         const row = el(card, 'div', 'brpg-form-row');
         input(row, 'Nome', m.name, (v) => { m.name = v; }, { maxLength: 60 });
         inlineNumber(row, 'Ciclo em dias', m.period, (v) => { m.period = v; }, 1, MAX_YEAR, 'any');
         inlineNumber(row, 'Deslocamento', m.offset, (v) => { m.offset = v; }, -MAX_YEAR, MAX_YEAR, 'any');
         check(card, 'Ocultar no calendário', m.hidden, (v) => { m.hidden = v; });
+        const orbit = el(card, 'details', 'brpg-disclosure brpg-eclipse-settings');
+        el(orbit, 'summary', 'brpg-summary', 'Órbita e eclipses');
+        const fields = el(orbit, 'div', 'brpg-form-row');
+        inlineNumber(fields, 'Inclinação orbital (°)', eclipse.inclination, (v) => { eclipse.inclination = v; }, -89, 89, 'any');
+        inlineNumber(fields, 'Nó ascendente (°)', eclipse.node, (v) => { eclipse.node = v; }, -360, 360, 'any');
+        inlineNumber(fields, 'Raio aparente (°)', eclipse.radius, (v) => { eclipse.radius = v; }, .02, 4, 'any');
+        inlineNumber(fields, 'Raio da umbra (°)', eclipse.shadow, (v) => { eclipse.shadow = v; }, .02, 6, 'any');
         button(card, 'Remover lua', () => { c.moons.splice(i, 1); this.section(); }, { icon: 'trash-2' });
       });
       button(root, 'Adicionar lua', () => {
@@ -1510,7 +1741,7 @@ module.exports = { el, button, select, input, info, inlineNumber, replaceEl, Cal
 
     },
     "arkanis.json": function (module, exports, load, require) {
-module.exports = {"id":"arkanis-preset","name":"Arkanis","description":"26 meses, semanas de 12 dias, três sóis, três luas e o relógio de Arkanis.","week":["Synlurge","Derlurge","Prelurge","Prolurge","Caplurge","Prylurge","Interlurge","Epylurge","Poslurge","Exlurge","Soblurge","Aplurge"],"firstWeekday":0,"weekOverflow":true,"months":[{"id":"mes-1","name":"Arkanis","length":36,"intercalary":false},{"id":"mes-2","name":"Barvesk","length":31,"intercalary":false},{"id":"mes-3","name":"Cyranark","length":31,"intercalary":false},{"id":"mes-4","name":"Darfryn","length":38,"intercalary":false},{"id":"mes-5","name":"Elyriz","length":43,"intercalary":false},{"id":"mes-6","name":"Faymort","length":39,"intercalary":false},{"id":"mes-7","name":"Gharvek","length":30,"intercalary":false},{"id":"mes-8","name":"Hysteria","length":36,"intercalary":false},{"id":"mes-9","name":"Inforty","length":37,"intercalary":false},{"id":"mes-10","name":"Jinxy","length":40,"intercalary":false},{"id":"mes-11","name":"Khaos","length":54,"intercalary":false},{"id":"mes-12","name":"Luary","length":39,"intercalary":false},{"id":"mes-13","name":"Myrian","length":46,"intercalary":false},{"id":"mes-14","name":"Northuz","length":33,"intercalary":false},{"id":"mes-15","name":"Orkan","length":30,"intercalary":false},{"id":"mes-16","name":"Pheraxy","length":45,"intercalary":false},{"id":"mes-17","name":"Quaryn","length":33,"intercalary":false},{"id":"mes-18","name":"Ravelyn","length":39,"intercalary":false},{"id":"mes-19","name":"Skaryel","length":42,"intercalary":false},{"id":"mes-20","name":"Termyna","length":30,"intercalary":false},{"id":"mes-21","name":"Umbrya","length":36,"intercalary":false},{"id":"mes-22","name":"Vektory","length":52,"intercalary":false},{"id":"mes-23","name":"Westeryuz","length":42,"intercalary":false},{"id":"mes-24","name":"Xiangyou","length":44,"intercalary":false},{"id":"mes-25","name":"Ydraven","length":33,"intercalary":false},{"id":"mes-26","name":"Zarknor","length":45,"intercalary":false}],"leapDays":[{"id":"extra-1","name":"Krusada Druor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-2","name":"Vryant Kor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-3","name":"Cynfur Alkov","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-4","name":"Khorq Dryart","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0}],"moons":[{"id":"lua-1","name":"Verika","period":48,"offset":12,"granularity":16,"rounding":"round","hidden":false},{"id":"lua-2","name":"Neurika","period":36,"offset":12,"granularity":8,"rounding":"round","hidden":false},{"id":"lua-3","name":"Menrika","period":24,"offset":12,"granularity":8,"rounding":"round","hidden":false}],"seasons":[{"id":"estacao-1","name":"Velanthir","color":"#852220","month":"mes-1","day":1,"duration":252},{"id":"estacao-2","name":"Solanarê","color":"#3f1601","month":"mes-1","day":1,"duration":252},{"id":"estacao-3","name":"Drosmy","color":"#ecad78","month":"mes-1","day":1,"duration":252},{"id":"estacao-4","name":"Kealyth","color":"#d75013","month":"mes-1","day":1,"duration":252}],"seasonMode":"periodic","seasonOffset":0,"eras":[],"clock":{"hours":32,"minutes":64},"current":{"year":1,"month":"mes-1","day":1,"hour":0,"minute":0},"events":[{"id":"evento-1","title":"Velanthir","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-1","start":null},{"id":"evento-2","title":"Solanarê","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-2","start":null},{"id":"evento-3","title":"Drosmy","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-3","start":null},{"id":"evento-4","title":"Kealyth","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-4","start":null},{"id":"evento-5","title":"Arkas, A Criação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":1}},{"id":"evento-6","title":"Bereal, O Contexto","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":2}},{"id":"evento-7","title":"Cyrius, A Ideia","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":3}},{"id":"evento-8","title":"Dognar, A Ação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":4}}],"sky":{"latitude":48,"unitPeriod":1008,"referenceId":"reart","suns":[{"id":"innart","name":"Innart","orbit":0.36,"tilt":62,"phase":245,"size":0.42,"color":"#f4ce87"},{"id":"dinart","name":"Dinart","orbit":0.65,"tilt":55,"phase":105,"size":0.72,"color":"#f4a963"},{"id":"reart","name":"Reart","orbit":1,"tilt":19,"phase":0,"size":1,"color":"#f08163"}]}};
+module.exports = {"id":"arkanis-preset","name":"Arkanis","description":"26 meses, semanas de 12 dias, três sóis, três luas e o relógio de Arkanis.","week":["Synlurge","Derlurge","Prelurge","Prolurge","Caplurge","Prylurge","Interlurge","Epylurge","Poslurge","Exlurge","Soblurge","Aplurge"],"firstWeekday":0,"weekOverflow":true,"months":[{"id":"mes-1","name":"Arkanis","length":36,"intercalary":false},{"id":"mes-2","name":"Barvesk","length":31,"intercalary":false},{"id":"mes-3","name":"Cyranark","length":31,"intercalary":false},{"id":"mes-4","name":"Darfryn","length":38,"intercalary":false},{"id":"mes-5","name":"Elyriz","length":43,"intercalary":false},{"id":"mes-6","name":"Faymort","length":39,"intercalary":false},{"id":"mes-7","name":"Gharvek","length":30,"intercalary":false},{"id":"mes-8","name":"Hysteria","length":36,"intercalary":false},{"id":"mes-9","name":"Inforty","length":37,"intercalary":false},{"id":"mes-10","name":"Jinxy","length":40,"intercalary":false},{"id":"mes-11","name":"Khaos","length":54,"intercalary":false},{"id":"mes-12","name":"Luary","length":39,"intercalary":false},{"id":"mes-13","name":"Myrian","length":46,"intercalary":false},{"id":"mes-14","name":"Northuz","length":33,"intercalary":false},{"id":"mes-15","name":"Orkan","length":30,"intercalary":false},{"id":"mes-16","name":"Pheraxy","length":45,"intercalary":false},{"id":"mes-17","name":"Quaryn","length":33,"intercalary":false},{"id":"mes-18","name":"Ravelyn","length":39,"intercalary":false},{"id":"mes-19","name":"Skaryel","length":42,"intercalary":false},{"id":"mes-20","name":"Termyna","length":30,"intercalary":false},{"id":"mes-21","name":"Umbrya","length":36,"intercalary":false},{"id":"mes-22","name":"Vektory","length":52,"intercalary":false},{"id":"mes-23","name":"Westeryuz","length":42,"intercalary":false},{"id":"mes-24","name":"Xiangyou","length":44,"intercalary":false},{"id":"mes-25","name":"Ydraven","length":33,"intercalary":false},{"id":"mes-26","name":"Zarknor","length":45,"intercalary":false}],"leapDays":[{"id":"extra-1","name":"Krusada Druor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-2","name":"Vryant Kor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-3","name":"Cynfur Alkov","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-4","name":"Khorq Dryart","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0}],"moons":[{"id":"lua-1","name":"Verika","period":48,"offset":12,"granularity":16,"rounding":"round","hidden":false,"eclipse":{"inclination":5.1,"node":42,"radius":0.43,"shadow":0.88}},{"id":"lua-2","name":"Neurika","period":36,"offset":12,"granularity":8,"rounding":"round","hidden":false,"eclipse":{"inclination":9,"node":138,"radius":0.23,"shadow":0.82}},{"id":"lua-3","name":"Menrika","period":24,"offset":12,"granularity":8,"rounding":"round","hidden":false,"eclipse":{"inclination":7.2,"node":223,"radius":0.53,"shadow":0.97}}],"seasons":[{"id":"estacao-1","name":"Velanthir","color":"#852220","month":"mes-1","day":1,"duration":252},{"id":"estacao-2","name":"Solanarê","color":"#3f1601","month":"mes-1","day":1,"duration":252},{"id":"estacao-3","name":"Drosmy","color":"#ecad78","month":"mes-1","day":1,"duration":252},{"id":"estacao-4","name":"Kealyth","color":"#d75013","month":"mes-1","day":1,"duration":252}],"seasonMode":"periodic","seasonOffset":0,"eras":[],"clock":{"hours":32,"minutes":64},"current":{"year":1,"month":"mes-1","day":1,"hour":0,"minute":0},"events":[{"id":"evento-1","title":"Velanthir","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-1","start":null},{"id":"evento-2","title":"Solanarê","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-2","start":null},{"id":"evento-3","title":"Drosmy","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-3","start":null},{"id":"evento-4","title":"Kealyth","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-4","start":null},{"id":"evento-5","title":"Arkas, A Criação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":1}},{"id":"evento-6","title":"Bereal, O Contexto","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":2}},{"id":"evento-7","title":"Cyrius, A Ideia","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":3}},{"id":"evento-8","title":"Dognar, A Ação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":4}}],"sky":{"latitude":48,"unitPeriod":1008,"referenceId":"reart","suns":[{"id":"innart","name":"Innart","orbit":0.36,"tilt":62,"phase":245,"size":0.42,"color":"#f4ce87"},{"id":"dinart","name":"Dinart","orbit":0.65,"tilt":55,"phase":105,"size":0.72,"color":"#f4a963"},{"id":"reart","name":"Reart","orbit":1,"tilt":19,"phase":0,"size":1,"color":"#f08163"}]}};
     }
   };
   const cache = Object.create(null);

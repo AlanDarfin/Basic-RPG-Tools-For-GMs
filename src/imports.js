@@ -1,6 +1,7 @@
 'use strict';
 const { assert, copy, validateCalendar, CalendarEngine } = require('./calendar');
 const { ensureSky } = require('./sky');
+const { ensureEclipseOrbits } = require('./eclipse');
 const NATIVE_FORMAT = 'basic-rpg/calendar';
 const FORMAT_VERSION = 1;
 const DEFAULT_COLOR = '#7866b3';
@@ -81,6 +82,7 @@ function importFantasy(raw) {
   if (s.seasons?.global_settings?.enable_weather) warnings.push('O clima e os dados de localização não são importados.');
   validateCalendar(cal);
   ensureSky(cal, new CalendarEngine(cal).yearStart(2));
+  ensureEclipseOrbits(cal);
   return { calendar: validateCalendar(cal), warnings };
 }
 
@@ -90,10 +92,11 @@ function decodeImport(raw) {
     assert(raw.version === FORMAT_VERSION, 'Versão do backup não suportada.');
     const calendar = validateCalendar(copy(raw.calendar));
     ensureSky(calendar, new CalendarEngine(calendar).yearStart(2));
+    ensureEclipseOrbits(calendar);
     return { calendar: validateCalendar(calendar), warnings: [] };
   }
   if (raw.static_data?.year_data) return importFantasy(raw);
   throw new Error('Formato não reconhecido. Use um JSON do Basic RPG ou do Fantasy Calendar.');
 }
-function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: copy(validateCalendar(calendar)) }; }
+function encodeExport(calendar) { return { format: NATIVE_FORMAT, version: FORMAT_VERSION, calendar: ensureEclipseOrbits(copy(validateCalendar(calendar))) }; }
 module.exports = { decodeImport, encodeExport, importFantasy, parseInterval, DEFAULT_COLOR };

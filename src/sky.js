@@ -59,7 +59,7 @@ function equatorial(sky, sun, epoch) {
   const p = period(sky, sun);
   const lon = TAU * (mod(epoch, p) / p) + sun.phase * RAD;
   const tilt = sun.tilt * RAD;
-  return { ra: Math.atan2(Math.sin(lon) * Math.cos(tilt), Math.cos(lon)), dec: Math.asin(clamp(Math.sin(lon) * Math.sin(tilt))), period: p };
+  return { longitude: lon, ra: Math.atan2(Math.sin(lon) * Math.cos(tilt), Math.cos(lon)), dec: Math.asin(clamp(Math.sin(lon) * Math.sin(tilt))), period: p };
 }
 function solarPositions(sky, epoch, clock, now) {
   if (!sky?.suns.length) return [];
@@ -95,4 +95,4 @@ function formatTime(value, clock, allowEnd = false) {
   return [Math.floor(minutes / clock.minutes), minutes % clock.minutes].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
-module.exports = { MAX_SUNS, defaultArkanisSky, emptySky, ensureSky, validateSky, period, solarPositions, formatTime };
+module.exports = { MAX_SUNS, defaultArkanisSky, emptySky, ensureSky, validateSky, period, equatorial, solarPositions, formatTime };

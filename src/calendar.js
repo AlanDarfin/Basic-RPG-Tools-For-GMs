@@ -1,6 +1,7 @@
 'use strict';
 
 const { emptySky, validateSky } = require('./sky');
+const { validateEclipseOrbit } = require('./eclipse');
 
 const MAX_YEAR = 100000;
 const DAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
@@ -268,6 +269,7 @@ function validateCalendar(c) {
     number(m.period, 1, MAX_YEAR, 'Período lunar'); number(m.offset, -MAX_YEAR, MAX_YEAR, 'Deslocamento lunar');
     assert([4, 8, 16, 24, 32, 40, 48, 56, 64].includes(m.granularity || 8), 'Granularidade lunar inválida.');
     assert(['round', 'floor', 'ceil'].includes(m.rounding || 'round'), 'Arredondamento lunar inválido.');
+    validateEclipseOrbit(m.eclipse);
   });
   unique(c.moons.map((m) => m.id), 'IDs lunares');
   const e = new CalendarEngine(c);

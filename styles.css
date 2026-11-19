@@ -205,3 +205,20 @@
 .is-mobile .brpg .brpg-button, .is-mobile .brpg .brpg-input, .is-mobile .brpg .brpg-summary { min-height: 38px; border-radius: 7px; }
 .is-mobile .brpg .brpg-day { border-radius: 6px; }
 .is-mobile .brpg .brpg-list-day { border-radius: 0; min-height: 38px; }
+
+.brpg-eclipses { padding: 8px; border: 1px solid var(--brpg-border); border-radius: var(--brpg-radius); }
+.brpg-eclipse-header { justify-content: space-between; }
+.brpg-eclipse-header h3 { flex: 1; min-width: 4rem; }
+.brpg-eclipse-results:empty, .brpg-eclipse-card .brpg-chip:empty { display: none; }
+.brpg-eclipse-results { padding: 4px 0; }
+.brpg-eclipse-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 6px; margin-top: 6px; }
+.brpg-eclipse-card { min-width: 0; border: 1px solid var(--brpg-border); border-radius: 7px; background: var(--brpg-surface); padding: 6px; }
+.brpg-eclipse-card.is-in-progress { border-inline-start: 3px solid var(--brpg-accent); }
+.brpg-eclipse-item-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 4px; }
+.brpg-eclipse-name { min-width: 0; flex: 1 1 8rem; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.brpg-eclipse-name > span, .brpg-eclipse-times { color: var(--brpg-muted); font-size: .78em; }
+.brpg-eclipse-times, .brpg-eclipse-metrics { display: flex; flex-wrap: wrap; gap: 3px 7px; margin-top: 5px; }
+.brpg-eclipse-times { font-variant-numeric: tabular-nums; }
+.brpg-eclipse-live { border-color: var(--brpg-accent); color: var(--brpg-ink); }
+.brpg-eclipse-settings { margin-bottom: 6px; }
+.brpg-eclipse-settings .brpg-form-row { margin-top: 5px; }

@@ -4,6 +4,7 @@ const { CalendarEngine, assert, copy, newCalendar, uid, validateCalendar } = req
 const { decodeImport, encodeExport } = require('./imports');
 const { VIEW, CalendarView } = require('./view');
 const { ensureSky } = require('./sky');
+const { ensureEclipseOrbits } = require('./eclipse');
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const arkanis = require('./arkanis.json');
 
@@ -94,7 +95,7 @@ class BasicRPG extends Plugin {
       } else {
         assert(saved.version === 1 && Array.isArray(saved.calendars) && saved.calendars.length > 0, 'Dados salvos não reconhecidos.');
         saved.calendars.forEach((c) => {
-          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); validateCalendar(c);
+          validateCalendar(c); ensureSky(c, new CalendarEngine(c).yearStart(2)); ensureEclipseOrbits(c); validateCalendar(c);
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.state = saved;

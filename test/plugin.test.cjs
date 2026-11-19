@@ -9,7 +9,14 @@ class Element {
   constructor(document, tag) { this.ownerDocument = document; this.tag = tag; this.children = []; this.attributes = {};
     this.listeners = {}; this.className = ''; this.value = ''; this.text = ''; this.offsetParent = true;
     this.style = { setProperty() {} };
-    this.classList = { add: (...parts) => { this.className += ' ' + parts.join(' '); } }; }
+    this.classList = {
+      add: (...parts) => { this.className += ' ' + parts.join(' '); },
+      toggle: (part, on) => {
+        const items = this.className.split(' ').filter((x) => x && x !== part);
+        if (on) items.push(part);
+        this.className = items.join(' ');
+      },
+    }; }
   appendChild(c) { this.children.push(c); return c; }
   replaceChildren() { this.children = []; this.text = ''; }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -179,11 +186,29 @@ test('céu distingue hora simulada da data do mundo e permite editar um sol', as
 test('a versão anterior atualiza Arkanis e mantém data e eventos já salvos', async () => {
   const c=plain(require('../src/arkanis.json'));
   delete c.sky;
+  for (const moon of c.moons) delete moon.eclipse;
   c.current.day=13;
   c.events[0].title='Evento preservado';
   const {p}=mock({version:1,activeId:c.id,calendars:[c]});
   await p.onload();
   assert.equal(p.active().sky.suns.length,3);
+  assert.equal(p.active().moons[0].eclipse.node,42);
   assert.equal(p.active().current.day,13);
   assert.equal(p.active().events[0].title,'Evento preservado');
+});
+
+test('painel lista eclipses e abre o próximo pico sem avançar o mundo', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const view = m.leaves[0].view, root = view.contentEl;
+  await pickButton(root,'Céu').click();
+  await pickButton(root,'Próximo eclipse').click();
+  assert.ok(pickButton(root,'Abrir dia do eclipse'));
+  await pickButton(root,'Abrir dia do eclipse').click();
+  assert.ok(root.querySelector('.brpg-eclipse-card'));
+  assert.ok(view.selected.month!=='mes-1' || view.selected.day>1);
+  assert.equal(m.p.active().current.day,1);
+  assert.equal(m.p.active().current.hour,0);
+  const time=root.all((x)=>x.attributes['aria-label']==='Hora simulada (HH:MM)')[0];
+  assert.match(time.value, /^\d\d:\d\d$/);
 });
