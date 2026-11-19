@@ -1,0 +1,416 @@
+{
+  "id": "arkanis-preset",
+  "name": "Arkanis",
+  "description": "26 meses, semanas de 12 dias, três luas e o relógio de Arkanis.",
+  "week": [
+    "Synlurge",
+    "Derlurge",
+    "Prelurge",
+    "Prolurge",
+    "Caplurge",
+    "Prylurge",
+    "Interlurge",
+    "Epylurge",
+    "Poslurge",
+    "Exlurge",
+    "Soblurge",
+    "Aplurge"
+  ],
+  "firstWeekday": 0,
+  "weekOverflow": true,
+  "months": [
+    {
+      "id": "mes-1",
+      "name": "Arkanis",
+      "length": 36,
+      "intercalary": false
+    },
+    {
+      "id": "mes-2",
+      "name": "Barvesk",
+      "length": 31,
+      "intercalary": false
+    },
+    {
+      "id": "mes-3",
+      "name": "Cyranark",
+      "length": 31,
+      "intercalary": false
+    },
+    {
+      "id": "mes-4",
+      "name": "Darfryn",
+      "length": 38,
+      "intercalary": false
+    },
+    {
+      "id": "mes-5",
+      "name": "Elyriz",
+      "length": 43,
+      "intercalary": false
+    },
+    {
+      "id": "mes-6",
+      "name": "Faymort",
+      "length": 39,
+      "intercalary": false
+    },
+    {
+      "id": "mes-7",
+      "name": "Gharvek",
+      "length": 30,
+      "intercalary": false
+    },
+    {
+      "id": "mes-8",
+      "name": "Hysteria",
+      "length": 36,
+      "intercalary": false
+    },
+    {
+      "id": "mes-9",
+      "name": "Inforty",
+      "length": 37,
+      "intercalary": false
+    },
+    {
+      "id": "mes-10",
+      "name": "Jinxy",
+      "length": 40,
+      "intercalary": false
+    },
+    {
+      "id": "mes-11",
+      "name": "Khaos",
+      "length": 54,
+      "intercalary": false
+    },
+    {
+      "id": "mes-12",
+      "name": "Luary",
+      "length": 39,
+      "intercalary": false
+    },
+    {
+      "id": "mes-13",
+      "name": "Myrian",
+      "length": 46,
+      "intercalary": false
+    },
+    {
+      "id": "mes-14",
+      "name": "Northuz",
+      "length": 33,
+      "intercalary": false
+    },
+    {
+      "id": "mes-15",
+      "name": "Orkan",
+      "length": 30,
+      "intercalary": false
+    },
+    {
+      "id": "mes-16",
+      "name": "Pheraxy",
+      "length": 45,
+      "intercalary": false
+    },
+    {
+      "id": "mes-17",
+      "name": "Quaryn",
+      "length": 33,
+      "intercalary": false
+    },
+    {
+      "id": "mes-18",
+      "name": "Ravelyn",
+      "length": 39,
+      "intercalary": false
+    },
+    {
+      "id": "mes-19",
+      "name": "Skaryel",
+      "length": 42,
+      "intercalary": false
+    },
+    {
+      "id": "mes-20",
+      "name": "Termyna",
+      "length": 30,
+      "intercalary": false
+    },
+    {
+      "id": "mes-21",
+      "name": "Umbrya",
+      "length": 36,
+      "intercalary": false
+    },
+    {
+      "id": "mes-22",
+      "name": "Vektory",
+      "length": 52,
+      "intercalary": false
+    },
+    {
+      "id": "mes-23",
+      "name": "Westeryuz",
+      "length": 42,
+      "intercalary": false
+    },
+    {
+      "id": "mes-24",
+      "name": "Xiangyou",
+      "length": 44,
+      "intercalary": false
+    },
+    {
+      "id": "mes-25",
+      "name": "Ydraven",
+      "length": 33,
+      "intercalary": false
+    },
+    {
+      "id": "mes-26",
+      "name": "Zarknor",
+      "length": 45,
+      "intercalary": false
+    }
+  ],
+  "leapDays": [
+    {
+      "id": "extra-1",
+      "name": "Krusada Druor",
+      "month": "mes-1",
+      "intercalary": false,
+      "every": 1,
+      "except": 0,
+      "also": 0,
+      "offset": 0
+    },
+    {
+      "id": "extra-2",
+      "name": "Vryant Kor",
+      "month": "mes-1",
+      "intercalary": false,
+      "every": 1,
+      "except": 0,
+      "also": 0,
+      "offset": 0
+    },
+    {
+      "id": "extra-3",
+      "name": "Cynfur Alkov",
+      "month": "mes-1",
+      "intercalary": false,
+      "every": 1,
+      "except": 0,
+      "also": 0,
+      "offset": 0
+    },
+    {
+      "id": "extra-4",
+      "name": "Khorq Dryart",
+      "month": "mes-1",
+      "intercalary": false,
+      "every": 1,
+      "except": 0,
+      "also": 0,
+      "offset": 0
+    }
+  ],
+  "moons": [
+    {
+      "id": "lua-1",
+      "name": "Verika",
+      "period": 48,
+      "offset": 12,
+      "granularity": 16,
+      "rounding": "round",
+      "hidden": false
+    },
+    {
+      "id": "lua-2",
+      "name": "Neurika",
+      "period": 36,
+      "offset": 12,
+      "granularity": 8,
+      "rounding": "round",
+      "hidden": false
+    },
+    {
+      "id": "lua-3",
+      "name": "Menrika",
+      "period": 24,
+      "offset": 12,
+      "granularity": 8,
+      "rounding": "round",
+      "hidden": false
+    }
+  ],
+  "seasons": [
+    {
+      "id": "estacao-1",
+      "name": "Velanthir",
+      "color": "#852220",
+      "month": "mes-1",
+      "day": 1,
+      "duration": 252
+    },
+    {
+      "id": "estacao-2",
+      "name": "Solanarê",
+      "color": "#3f1601",
+      "month": "mes-1",
+      "day": 1,
+      "duration": 252
+    },
+    {
+      "id": "estacao-3",
+      "name": "Drosmy",
+      "color": "#ecad78",
+      "month": "mes-1",
+      "day": 1,
+      "duration": 252
+    },
+    {
+      "id": "estacao-4",
+      "name": "Kealyth",
+      "color": "#d75013",
+      "month": "mes-1",
+      "day": 1,
+      "duration": 252
+    }
+  ],
+  "seasonMode": "periodic",
+  "seasonOffset": 0,
+  "eras": [],
+  "clock": {
+    "hours": 32,
+    "minutes": 64
+  },
+  "current": {
+    "year": 1,
+    "month": "mes-1",
+    "day": 1,
+    "hour": 0,
+    "minute": 0
+  },
+  "events": [
+    {
+      "id": "evento-1",
+      "title": "Velanthir",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "season",
+      "end": null,
+      "seasonId": "estacao-1",
+      "start": null
+    },
+    {
+      "id": "evento-2",
+      "title": "Solanarê",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "season",
+      "end": null,
+      "seasonId": "estacao-2",
+      "start": null
+    },
+    {
+      "id": "evento-3",
+      "title": "Drosmy",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "season",
+      "end": null,
+      "seasonId": "estacao-3",
+      "start": null
+    },
+    {
+      "id": "evento-4",
+      "title": "Kealyth",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "season",
+      "end": null,
+      "seasonId": "estacao-4",
+      "start": null
+    },
+    {
+      "id": "evento-5",
+      "title": "Arkas, A Criação",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "none",
+      "end": null,
+      "start": {
+        "year": 1,
+        "month": "mes-1",
+        "day": 1
+      }
+    },
+    {
+      "id": "evento-6",
+      "title": "Bereal, O Contexto",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "none",
+      "end": null,
+      "start": {
+        "year": 1,
+        "month": "mes-1",
+        "day": 2
+      }
+    },
+    {
+      "id": "evento-7",
+      "title": "Cyrius, A Ideia",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "none",
+      "end": null,
+      "start": {
+        "year": 1,
+        "month": "mes-1",
+        "day": 3
+      }
+    },
+    {
+      "id": "evento-8",
+      "title": "Dognar, A Ação",
+      "description": "",
+      "note": "",
+      "category": "",
+      "color": "#7866b3",
+      "hidden": false,
+      "repeat": "none",
+      "end": null,
+      "start": {
+        "year": 1,
+        "month": "mes-1",
+        "day": 4
+      }
+    }
+  ]
+}
