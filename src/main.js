@@ -20,6 +20,7 @@ const { registerSoloInline } = require('./solo-inline');
 const { renameImages } = require('./solo-vault');
 const { blankMesa, checkMesa } = require('./mesa');
 const { setup: setupUltra } = require('./ultra-ui');
+const { ATLAS_VIEW, AtlasView, openAtlas, setupAtlas, renameAtlasNotes } = require('./atlas-view');
 const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = require('./mesa-view');
 
 class Settings extends PluginSettingTab {
@@ -35,6 +36,7 @@ class Settings extends PluginSettingTab {
     info(kit, 'Prepare campanhas, acompanhe encontros ou abra dados, baralhos, oráculos e tabelas.');
     button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
     button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
+    button(kit, 'Abrir Atlas', () => p.attempt(() => p.openAtlas()), { icon: 'map' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
@@ -208,12 +210,14 @@ class BasicRPG extends Plugin {
     registerSoloInline(this);
     registerMesaEmbeds(this);
     setupUltra(this);
+    setupAtlas(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,
       calendars: () => this.state.calendars.map(({ id, name }) => ({ id, name })),
       current: (name) => this.worldNow(this.resolveCalendar(name)),
       day: (name, date) => this.daySnapshot(this.resolveCalendar(name), date),
+      maps: () => (this.mesa().atlas?.maps||[]).map(x=>({id:x.id,name:x.name,campaign:x.campaign,grid:x.grid})),
     });
     this.onLayoutReady();
   }
@@ -223,13 +227,14 @@ class BasicRPG extends Plugin {
       if (cache) {
         this.registerEvent(cache.on('changed', (file, data, info) => this.attempt(async () => {
           if (await this.noteIndex.update(file, info, data)) this.redraw();
+          else this.redrawAtlas();
         })));
         this.registerEvent(cache.on('deleted', (file) => { if (this.noteIndex.forget(file.path)) this.redraw(); }));
         this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
       }
       this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
-        if (this.state.mesa && renameMesaNotes(copy(this.state.mesa), oldPath, file.path))
-          this.attempt(() => this.changeMesa(m => renameMesaNotes(m, oldPath, file.path)));
+        if (this.state.mesa && (renameMesaNotes(copy(this.state.mesa), oldPath, file.path)||renameAtlasNotes(copy(this.state.mesa), oldPath, file.path)))
+          this.attempt(() => this.changeMesa(m => {renameMesaNotes(m, oldPath, file.path);renameAtlasNotes(m, oldPath, file.path);}));
         if (this.state.solo && renameImages(copy(this.state.solo), oldPath, file.path))
           this.attempt(() => this.changeSolo((solo) => renameImages(solo, oldPath, file.path)));
         if (cache && this.state.calendars.some((c) => c.noteSources?.enabled))
@@ -324,11 +329,17 @@ class BasicRPG extends Plugin {
       return result;
     }, false, 'solo');
   }
+  openAtlas(panel='maps',mapId='') { return openAtlas(this,panel,mapId); }
+  redrawAtlas(){
+    for(const leaf of this.app.workspace.getLeavesOfType(ATLAS_VIEW)) if(leaf.view instanceof AtlasView)leaf.view.render();
+    for(const embed of this.atlasEmbeds||[])embed.render();
+  }
   mesa() { return this.state.mesa || this.defaultMesa; }
   openMesa(tab, main = true) { return openMesa(this, tab, main); }
   redrawMesa() {
     for (const leaf of this.app.workspace.getLeavesOfType(MESA_VIEW)) if (leaf.view instanceof MesaView) leaf.view.render();
     for (const view of this.mesaEmbeds) view.render();
+    this.redrawAtlas();
   }
   changeMesa(fn) {
     return this.change(state => {

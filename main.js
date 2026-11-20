@@ -51,6 +51,7 @@ const { registerSoloInline } = load("solo-inline.js");
 const { renameImages } = load("solo-vault.js");
 const { blankMesa, checkMesa } = load("mesa.js");
 const { setup: setupUltra } = load("ultra-ui.js");
+const { ATLAS_VIEW, AtlasView, openAtlas, setupAtlas, renameAtlasNotes } = load("atlas-view.js");
 const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = load("mesa-view.js");
 
 class Settings extends PluginSettingTab {
@@ -66,6 +67,7 @@ class Settings extends PluginSettingTab {
     info(kit, 'Prepare campanhas, acompanhe encontros ou abra dados, baralhos, oráculos e tabelas.');
     button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
     button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
+    button(kit, 'Abrir Atlas', () => p.attempt(() => p.openAtlas()), { icon: 'map' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
@@ -239,12 +241,14 @@ class BasicRPG extends Plugin {
     registerSoloInline(this);
     registerMesaEmbeds(this);
     setupUltra(this);
+    setupAtlas(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,
       calendars: () => this.state.calendars.map(({ id, name }) => ({ id, name })),
       current: (name) => this.worldNow(this.resolveCalendar(name)),
       day: (name, date) => this.daySnapshot(this.resolveCalendar(name), date),
+      maps: () => (this.mesa().atlas?.maps||[]).map(x=>({id:x.id,name:x.name,campaign:x.campaign,grid:x.grid})),
     });
     this.onLayoutReady();
   }
@@ -254,13 +258,14 @@ class BasicRPG extends Plugin {
       if (cache) {
         this.registerEvent(cache.on('changed', (file, data, info) => this.attempt(async () => {
           if (await this.noteIndex.update(file, info, data)) this.redraw();
+          else this.redrawAtlas();
         })));
         this.registerEvent(cache.on('deleted', (file) => { if (this.noteIndex.forget(file.path)) this.redraw(); }));
         this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
       }
       this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
-        if (this.state.mesa && renameMesaNotes(copy(this.state.mesa), oldPath, file.path))
-          this.attempt(() => this.changeMesa(m => renameMesaNotes(m, oldPath, file.path)));
+        if (this.state.mesa && (renameMesaNotes(copy(this.state.mesa), oldPath, file.path)||renameAtlasNotes(copy(this.state.mesa), oldPath, file.path)))
+          this.attempt(() => this.changeMesa(m => {renameMesaNotes(m, oldPath, file.path);renameAtlasNotes(m, oldPath, file.path);}));
         if (this.state.solo && renameImages(copy(this.state.solo), oldPath, file.path))
           this.attempt(() => this.changeSolo((solo) => renameImages(solo, oldPath, file.path)));
         if (cache && this.state.calendars.some((c) => c.noteSources?.enabled))
@@ -355,11 +360,17 @@ class BasicRPG extends Plugin {
       return result;
     }, false, 'solo');
   }
+  openAtlas(panel='maps',mapId='') { return openAtlas(this,panel,mapId); }
+  redrawAtlas(){
+    for(const leaf of this.app.workspace.getLeavesOfType(ATLAS_VIEW)) if(leaf.view instanceof AtlasView)leaf.view.render();
+    for(const embed of this.atlasEmbeds||[])embed.render();
+  }
   mesa() { return this.state.mesa || this.defaultMesa; }
   openMesa(tab, main = true) { return openMesa(this, tab, main); }
   redrawMesa() {
     for (const leaf of this.app.workspace.getLeavesOfType(MESA_VIEW)) if (leaf.view instanceof MesaView) leaf.view.render();
     for (const view of this.mesaEmbeds) view.render();
+    this.redrawAtlas();
   }
   changeMesa(fn) {
     return this.change(state => {
@@ -2185,6 +2196,7 @@ class CalendarView extends ItemView {
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
     button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords' });
+    button(actions, 'Abrir Atlas', this.run(() => this.plugin.openAtlas()), { icon: 'map' });
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
     const live = clockMode(c) === 'real';
@@ -5954,6 +5966,7 @@ function checkEncounter(e) {
 }
 function checkMesa(m) {
   requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
+  if(m.atlas !== undefined)load("atlas.js").checkAtlas(m.atlas,m);
   for (const field of ['campaigns','entries','sheets','encounters']) {
     const a = m[field];
     requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
@@ -6047,6 +6060,271 @@ function changeResource(r, id, i, delta) {
 }
 module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa, newCampaign, newEntry, newSheet, resource, arkanisSheet,
   newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
+
+    },
+    "atlas.js": function (module, exports, load, require) {
+'use strict';
+const { uid } = load("calendar.js");
+const { clean, key } = load("solo.js");
+const TERRAIN=Object.freeze({
+  plains:{name:'Planície',color:'#ac9b63',icon:'·',speed:1},
+  forest:{name:'Floresta',color:'#456e54',icon:'♣',speed:1.5},
+  hills:{name:'Colinas',color:'#92785c',icon:'⌃',speed:1.5},
+  mountain:{name:'Montanha',color:'#655c67',icon:'▲',speed:3},
+  water:{name:'Água',color:'#3a6384',icon:'≈',speed:4},
+  swamp:{name:'Pântano',color:'#66775b',icon:'≋',speed:2},
+  desert:{name:'Deserto',color:'#c49d64',icon:'☼',speed:2},
+  road:{name:'Estrada',color:'#9e866a',icon:'═',speed:.75},
+  wall:{name:'Parede',color:'#514b52',icon:'▧',speed:999},
+  floor:{name:'Piso',color:'#b0a496',icon:'',speed:1}
+});
+const RELATION_TYPES=Object.freeze({
+ ally:'Aliado',enemy:'Inimigo',friend:'Amigo',rival:'Rival',
+ family:'Família',parent:'Progenitor',child:'Filho',spouse:'Cônjuge',
+ mentor:'Mentor',student:'Aprendiz',member:'Membro',leader:'Líder',
+ controls:'Controla',located:'Localizado em',knows:'Conhece',link:'Conexão'
+});
+const RELATION_KEYS=Object.freeze(['ally','enemy','friend','rival','family','parent','child','spouse','mentor','student','member','leader','controls','located','knows']);
+const MAX_MAPS=60,MAX_CELLS=1600,MAX_LINKS=1500;
+const assert=(test,msg)=>{if(!test)throw new Error(msg);};
+const int=(n,a,b)=>Number.isInteger(n)&&n>=a&&n<=b;
+const place=(col,row)=>col+','+row;
+const unpack=(p)=>{const m=/^(\d{1,2}),(\d{1,2})$/.exec(p||'');return m?{col:+m[1],row:+m[2]}:null;};
+const blankAtlas=()=>({maps:[],relations:[]});
+function newMap(campaign='',grid='hex'){
+ return {id:uid('map'),campaign,name:'',grid,width:12,height:10,defaultTerrain:grid==='square'?'wall':'plains',
+  parent:'',parentCell:'',background:'',cells:{},paths:[],tokens:[],playerCell:'',revealed:false};
+}
+function inMap(map,col,row){return int(col,0,map.width-1)&&int(row,0,map.height-1);}
+function getCell(map,col,row){return map.cells[place(col,row)]||{};}
+function setCell(map,col,row,patch){
+ assert(inMap(map,col,row),'Coordenadas fora do mapa.');
+ const code=place(col,row),existing=map.cells[code]||{};
+ const next={...existing,...patch};
+ for(const [k,v] of Object.entries(next))if(v===undefined||v===null||v===''||(k==='fog'&&v===false))delete next[k];
+ if(!Object.keys(next).length)delete map.cells[code];else map.cells[code]=next;
+ return next;
+}
+function axial(col,row){return {q:col-(row-(row&1))/2,r:row};}
+function distance(map,a,b){
+ const x=typeof a==='string'?unpack(a):a,y=typeof b==='string'?unpack(b):b;
+ assert(x&&y,'Coordenadas inválidas.');
+ if(map.grid==='square')return Math.abs(x.col-y.col)+Math.abs(x.row-y.row);
+ const h=axial(x.col,x.row),t=axial(y.col,y.row);
+ return (Math.abs(h.q-t.q)+Math.abs(h.r-t.r)+Math.abs(h.q+h.r-t.q-t.r))/2;
+}
+function around(map,col,row,radius=0){
+ const coords=[];
+ for(let r=Math.max(0,row-radius);r<=Math.min(map.height-1,row+radius);r++)
+  for(let q=Math.max(0,col-radius);q<=Math.min(map.width-1,col+radius);q++)
+   if(map.grid==='square'?Math.max(Math.abs(q-col),Math.abs(r-row))<=radius:distance(map,{col,row},{col:q,row:r})<=radius)
+    coords.push({col:q,row:r});
+ return coords;
+}
+function terrainSeed(map,seed=1234){
+ let state=(Number(seed)>>>0)||1;
+ const random=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
+ const keys=['plains','plains','forest','forest','hills','mountain','water','swamp','desert'];
+ const initial=new Array(map.width*map.height);
+ for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+   const n=Math.max(0,Math.min(8,Math.floor(random()*9)));
+   initial[row*map.width+col]=keys[n];
+ }
+ const next=initial.map((type,i)=>{
+   const row=Math.floor(i/map.width),col=i%map.width;
+   const neighbors=around(map,col,row,1).map(n=>initial[n.row*map.width+n.col]);
+   const count=new Map();
+   for(const x of neighbors)count.set(x,(count.get(x)||0)+1);
+   const common=[...count].sort((a,b)=>b[1]-a[1])[0];
+   return common&&common[1]>=4?common[0]:type;
+ });
+ const cell={};
+ for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+   const type=next[row*map.width+col];
+   if(type!==map.defaultTerrain)cell[place(col,row)]={terrain:type};
+ }
+ return cell;
+}
+function dungeonSeed(map,seed=1234){
+ assert(map.grid==='square','Masmorras usam mapas quadrados.');
+ const cells={}; let state=(Number(seed)>>>0)||1;
+ const rand=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
+ const rooms=[];const count=Math.min(10,Math.max(2,Math.floor(map.width*map.height/45)));
+ for(let i=0;i<count;i++){
+   const w=Math.min(2+Math.floor(rand()*4),map.width-2),h=Math.min(2+Math.floor(rand()*4),map.height-2);
+   if(w<2||h<2)break;
+   const col=1+Math.floor(rand()*Math.max(1,map.width-w-1)),row=1+Math.floor(rand()*Math.max(1,map.height-h-1));
+   for(let r=row;r<row+h;r++)for(let q=col;q<col+w;q++)cells[place(q,r)]={terrain:'floor'};
+   rooms.push({col:Math.floor(col+w/2),row:Math.floor(row+h/2)});
+ }
+ for(let i=1;i<rooms.length;i++){
+   const a=rooms[i-1],b=rooms[i];let q=a.col,r=a.row;
+   while(q!==b.col){cells[place(q,r)]={terrain:'floor'};q+=Math.sign(b.col-q);}
+   while(r!==b.row){cells[place(q,r)]={terrain:'floor'};r+=Math.sign(b.row-r);}
+   cells[place(q,r)]={terrain:'floor'};
+ }
+ if(rooms.length){cells[place(rooms[0].col,rooms[0].row)]={terrain:'floor',label:'Entrada'};
+  const last=rooms.at(-1);cells[place(last.col,last.row)]={terrain:'floor',label:'Saída'};}
+ return cells;
+}
+function mapPathDistance(map,path){
+ if(!Array.isArray(path)||path.length<2)return 0;
+ return path.slice(1).reduce((sum,p,i)=>sum+distance(map,path[i],p),0);
+}
+function routeCost(map,waypoints){
+ if(!waypoints?.length)return 0;
+ let total=0;
+ for(let i=1;i<waypoints.length;i++){
+   const b=unpack(waypoints[i]),a=unpack(waypoints[i-1]);
+   assert(a&&b&&inMap(map,a.col,a.row)&&inMap(map,b.col,b.row),'Rota possui coordenadas inválidas.');
+   const unit=distance(map,a,b),terrain=getCell(map,b.col,b.row).terrain||map.defaultTerrain;
+   total+=unit*(TERRAIN[terrain]?.speed||1);
+ }
+ return Math.round(total*100)/100;
+}
+function safeNote(s){
+ return typeof s==='string'&&s.length<=500&&!s.split('/').includes('..')&&!/[\\\x00-\x1f]/.test(s);
+}
+function checkAtlas(atlas,m){
+ assert(atlas&&Array.isArray(atlas.maps)&&Array.isArray(atlas.relations)&&atlas.maps.length<=MAX_MAPS&&atlas.relations.length<=MAX_LINKS,'Atlas inválido ou cheio.');
+ assert(new Set(atlas.maps.map(x=>x.id)).size===atlas.maps.length,'Mapas duplicados.');
+ const maps=new Map(atlas.maps.map(x=>[x.id,x])),campaigns=new Set(m.campaigns.map(x=>x.id)),
+  entries=new Map(m.entries.map(x=>[x.id,x])),sheets=new Map(m.sheets.map(x=>[x.id,x])),encounters=new Map(m.encounters.map(x=>[x.id,x]));
+ for(const map of atlas.maps){
+   assert(clean(map.id)&&clean(map.name)&&['hex','square'].includes(map.grid)&&int(map.width,3,40)&&int(map.height,3,40)&&map.width*map.height<=MAX_CELLS,'Configuração de mapa inválida.');
+   assert(!map.campaign||campaigns.has(map.campaign),'Campanha do mapa não encontrada.');
+   assert(Object.hasOwn(TERRAIN,map.defaultTerrain),'Terreno padrão inválido.');
+   assert(safeNote(map.background||'')&& (!map.parent||maps.has(map.parent)), 'Vínculo do mapa inválido.');
+   assert(map.parent!==map.id,'Um mapa não pode ser seu próprio submapa.');
+   if(map.parentCell){const parent=maps.get(map.parent),cell=unpack(map.parentCell);assert(parent&&cell&&inMap(parent,cell.col,cell.row),'Coordenadas do mapa pai inválidas.');}
+   if(map.parent)assert(maps.get(map.parent).campaign===map.campaign,'Submapas precisam pertencer à mesma campanha.');
+   assert(map.cells&&typeof map.cells==='object'&&!Array.isArray(map.cells)&&Object.keys(map.cells).length<=MAX_CELLS,'Mapa possui células inválidas.');
+   for(const [pos,cell]of Object.entries(map.cells)){
+     const at=unpack(pos);assert(at&&inMap(map,at.col,at.row)&&cell&&typeof cell==='object'&&!Array.isArray(cell),'Célula fora dos limites.');
+     assert(!cell.terrain||Object.hasOwn(TERRAIN,cell.terrain),'Terreno inválido.');
+     for(const field of ['label','region','faction','text','secret','icon','table'])assert(!cell[field]||(typeof cell[field]==='string'&&cell[field].length<=(field==='text'||field==='secret'?3000:500)), 'Texto de célula inválido.');
+     assert(!cell.note||safeNote(cell.note),'Nota da célula inválida.');
+     assert(!cell.tile||(safeNote(cell.tile)&&/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(cell.tile)), 'Textura da célula inválida.');
+     assert(!cell.entry||entries.get(cell.entry)?.campaign===map.campaign,'Registro da célula pertence a outra campanha.');
+     assert(!cell.sheet||(sheets.has(cell.sheet)&&(!sheets.get(cell.sheet).campaign||sheets.get(cell.sheet).campaign===map.campaign)),'Ficha da célula não encontrada.');
+     assert(!cell.encounter||encounters.get(cell.encounter)?.campaign===map.campaign,'Encontro da célula pertence a outra campanha.');
+     assert(!cell.submap||(maps.has(cell.submap)&&maps.get(cell.submap).campaign===map.campaign&&cell.submap!==map.id),'Submapa da célula inválido.');
+     assert(!cell.fog||typeof cell.fog==='boolean','Névoa inválida.');
+     assert(!cell.secret||typeof cell.secret==='string','Segredo de célula inválido.');
+   }
+   assert(Array.isArray(map.paths)&&map.paths.length<=100&&map.paths.every(x=>Array.isArray(x)&&x.length<=200&&x.every(pos=>{const a=unpack(pos);return a&&inMap(map,a.col,a.row);})), 'Rotas inválidas.');
+   assert(Array.isArray(map.tokens)&&map.tokens.length<=80,'Tokens do mapa inválidos.');
+   for(const token of map.tokens){
+     const at=unpack(token.at);
+     assert(clean(token.id)&&clean(token.name)&&at&&inMap(map,at.col,at.row)&&(!token.sheet||sheets.has(token.sheet)),'Token do mapa inválido.');
+   }
+ }
+ const ids=new Set(atlas.relations.map(x=>x.id));assert(ids.size===atlas.relations.length,'Relações duplicadas.');
+ const validRef=(ref,campaign)=>{
+   if(typeof ref!=='string'||ref.length>600)return false;
+   const i=ref.indexOf(':');if(i<=0)return false;
+   const type=ref.slice(0,i),id=ref.slice(i+1);
+   if(type==='entry')return entries.get(id)?.campaign===campaign;
+   if(type==='sheet')return !!sheets.get(id)&&(!sheets.get(id).campaign||sheets.get(id).campaign===campaign);
+   if(type==='map')return maps.get(id)?.campaign===campaign;
+   if(type==='note')return !!id&&safeNote(id);
+   return false;
+ };
+ for(const edge of atlas.relations)
+   assert(clean(edge.id)&&Object.hasOwn(RELATION_TYPES,edge.type)&&campaigns.has(edge.campaign)&&
+     validRef(edge.from,edge.campaign)&&validRef(edge.to,edge.campaign)&&edge.from!==edge.to,'Relação inválida ou desconectada da campanha.');
+ return atlas;
+}
+const nodeRef=(type,id)=>type+':'+id;
+function allNodes(m,atlas,campaign){
+ const nodes=[];
+ for(const x of m.entries)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('entry',x.id),label:x.name,kind:x.kind,note:x.note,campaign:x.campaign});
+ for(const x of m.sheets)if(!campaign||!x.campaign||x.campaign===campaign)nodes.push({id:nodeRef('sheet',x.id),label:x.name,kind:'sheet',note:x.note,campaign:x.campaign});
+ for(const x of atlas.maps)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('map',x.id),label:x.name,kind:'map',note:'',campaign:x.campaign});
+ return nodes;
+}
+function noteLink(value){
+ if(typeof value!=='string')return '';
+ const match=/!?\[\[([^\]]+)\]\]/.exec(value);
+ return match?match[1].split('|')[0].split('#')[0].trim():'';
+}
+function noteRelations(notes,allowed=RELATION_KEYS){
+ const output=[];
+ for(const note of notes){
+   if(!note?.path||!note.frontmatter)continue;
+   for(const kind of allowed){
+     const v=note.frontmatter[kind],list=Array.isArray(v)?v:v?[v]:[];
+     for(const item of list){
+       const path=noteLink(item);
+       if(path)output.push({from:nodeRef('note',note.path),to:nodeRef('note',path),type:kind,automatic:true});
+     }
+   }
+ }
+ return output;
+}
+function relationGraph(m,atlas,campaign='',notes=[]){
+ const map=new Map(allNodes(m,atlas,campaign).map(x=>[x.id,x]));
+ const edges=[];
+ const noteIndex=new Map(notes.map(x=>[key(x.path.replace(/\.md$/i,'')),x.path]));
+ const getNote=(path)=>{
+   const short=path.replace(/\.md$/i,'');
+   return noteIndex.get(key(short))||noteIndex.get(key(short.split('/').at(-1)))||path;
+ };
+ const add=(from,to,type,automatic=false)=>{
+   if(from===to)return;
+   if(from.startsWith('note:'))from=nodeRef('note',getNote(from.slice(5)));
+   if(to.startsWith('note:'))to=nodeRef('note',getNote(to.slice(5)));
+   for(const id of [from,to])if(!map.has(id)){
+     const [kind,...rest]=id.split(':'),raw=rest.join(':');
+     map.set(id,{id,label:raw.split('/').at(-1).replace(/\.md$/i,''),kind,note:kind==='note'?raw:''});
+   }
+   edges.push({from,to,type,automatic});
+ };
+ for(const x of m.entries){
+   if(campaign&&x.campaign!==campaign)continue;
+   for(const link of x.links||[])if(m.entries.some(e=>e.id===link))
+     add(nodeRef('entry',x.id),nodeRef('entry',link),'link',true);
+   if(x.note)add(nodeRef('entry',x.id),nodeRef('note',x.note),'link',true);
+ }
+ for(const x of m.sheets)if(x.note&&(!campaign||!x.campaign||x.campaign===campaign))
+   add(nodeRef('sheet',x.id),nodeRef('note',x.note),'link',true);
+ for(const x of atlas.maps)if(!campaign||x.campaign===campaign){
+   for(const cell of Object.values(x.cells)){
+     const from=nodeRef('map',x.id);
+     if(cell.entry)add(from,nodeRef('entry',cell.entry),'located',true);
+     if(cell.sheet)add(from,nodeRef('sheet',cell.sheet),'located',true);
+     if(cell.note)add(from,nodeRef('note',cell.note),'located',true);
+   }
+ }
+ for(const r of atlas.relations)if(!campaign||r.campaign===campaign)add(r.from,r.to,r.type,false);
+ const knownNotes=new Set();
+ for(const n of map.values())if(n.note)knownNotes.add(key(n.note.replace(/\.md$/i,'')));
+ for(const edge of noteRelations(notes))if(knownNotes.has(key(edge.from.slice(5).replace(/\.md$/i,'')))||!campaign)
+   add(edge.from,edge.to,edge.type,true);
+ const unique=new Map();
+ for(const e of edges){
+  const code=e.from+'|'+e.to+'|'+e.type;
+  if(!unique.has(code))unique.set(code,e);
+ }
+ return {nodes:[...map.values()],edges:[...unique.values()]};
+}
+function subgraph(graph,focus='',depth=2,filter=[]){
+ const filtered=graph.edges.filter(e=>!filter.length||filter.includes(e.type));
+ if(!focus)return {nodes:graph.nodes.filter(n=>filtered.some(e=>e.from===n.id||e.to===n.id)).slice(0,80),
+  edges:filtered.slice(0,200)};
+ const seen=new Set([focus]),frontier=[focus];
+ for(let i=0;i<Math.min(5,Math.max(1,depth));i++){
+   const next=[];
+   for(const e of filtered)if(seen.has(e.from)&&!seen.has(e.to)){next.push(e.to);seen.add(e.to);}
+     else if(seen.has(e.to)&&!seen.has(e.from)){next.push(e.from);seen.add(e.from);}
+   frontier.push(...next);
+   if(!next.length)break;
+ }
+ const nodes=graph.nodes.filter(n=>seen.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
+ return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
+}
+module.exports={TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,axial,distance,around,
+ terrainSeed,dungeonSeed,mapPathDistance,routeCost,safeNote,checkAtlas,nodeRef,allNodes,noteLink,noteRelations,relationGraph,subgraph};
 
     },
     "ultra-ui.js": function (module, exports, load, require) {
@@ -6169,6 +6447,7 @@ function renderAssetLibrary(view,root){
   labelled(box,'Tipo',[['all','Tudo'],['image','Imagens e tokens'],['audio','Áudio'],['note','Notas']],s.assetType||'all',
     v=>{s.assetType=v;paint();});
   const cloud=row(box);
+  button(cloud,'Abrir Atlas',run(plugin,()=>plugin.openAtlas()),{icon:'map'});
   const commands=plugin.app.commands?.listCommands?.()||[];
   const moulinette=commands.find(cmd=>/moulinette/i.test(cmd.id)&&/browser|browse|open/i.test(cmd.id))
     ||commands.find(cmd=>/moulinette/i.test(cmd.id));
@@ -6494,6 +6773,713 @@ module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restRes
   executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
 
     },
+    "atlas-view.js": function (module, exports, load, require) {
+'use strict';
+const { ItemView,Modal,MarkdownRenderChild,parseYaml,TFile,normalizePath }=require('obsidian');
+const { el,button,input,select,info,Confirm }=load("ui.js");
+const { copy,uid }=load("calendar.js");
+const { key,clean }=load("solo.js");
+const { newEntry,find,requireMesa,buildRunning }=load("mesa.js");
+const { randomContent }=load("ultra.js");
+const { parseTable,tableEngine }=load("solo-tables.js");
+const {
+  TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,around,
+  terrainSeed,dungeonSeed,routeCost,relationGraph,subgraph,nodeRef,safeNote
+}=load("atlas.js");
+const { svgEl,renderMapCanvas }=load("atlas-canvas.js");
+const ATLAS_VIEW='basic-rpg-atlas',PANELS=[['maps','Mapas','map'],['relations','Relações','network']];
+function row(parent){return el(parent,'div','brpg-toolbar brpg-atlas-row');}
+function panel(parent,title,hint=''){
+ const box=el(parent,'section','brpg-atlas-panel');
+ el(box,'h3','brpg-section-title',title);
+ if(hint)info(box,hint);
+ return box;
+}
+function labelled(parent,label,options,current,change){
+ const box=el(parent,'label','brpg-field');
+ el(box,'span','brpg-label',label);
+ return select(box,options,current,change,label);
+}
+function checkbox(parent,title,initial,onChange){
+ const box=el(parent,'label','brpg-atlas-checkbox');
+ const input=el(box,'input');input.type='checkbox';input.checked=!!initial;
+ el(box,'span','',title);input.addEventListener('change',()=>onChange(input.checked));return input;
+}
+function action(plugin,fn){return ()=>plugin.attempt(fn);}
+function trim(s,n=120){return clean(String(s??''),n);}
+function modal(view,title,draft,draw,save){
+ class Editor extends Modal{
+   constructor(){super(view.plugin.app);this.data=copy(draft);this.busy=false;}
+   onOpen(){this.modalEl.addClass('brpg-atlas-modal');this.paint();}
+   paint(){
+     this.contentEl.replaceChildren();
+     const root=el(this.contentEl,'div','brpg brpg-atlas-editor');
+     el(root,'h2','brpg-heading',title);
+     const error=el(root,'p','brpg-atlas-error');error.setAttribute('role','status');
+     draw(root,this.data,()=>this.paint());
+     const buttons=row(root);
+     button(buttons,'Cancelar',()=>this.close());
+     button(buttons,'Salvar',action(view.plugin,async()=>{
+       if(this.busy)return;this.busy=true;
+       try {await save(this.data);this.close();}
+       catch(e){error.textContent=e.message||String(e);}
+       finally{this.busy=false;}
+     }),{icon:'check',className:'brpg-button mod-cta'});
+   }
+ }
+ new Editor().open();
+}
+const opts=(items,empty='Nenhum')=>[['',empty],...items.map(x=>[x.id,x.name])];
+const svgClick=(el,fn)=>{el.setAttribute('tabindex','0');el.setAttribute('role','button');
+ el.addEventListener('click',fn);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fn();}});};
+function mapNotes(plugin){
+ const files=plugin.app.vault.getMarkdownFiles?.()||[];
+ return files.slice(0,1800).map(file=>({path:file.path,frontmatter:plugin.app.metadataCache?.getFileCache?.(file)?.frontmatter||null}));
+}
+function idFolder(name){
+ return name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48)||'Mapa';
+}
+async function ensureFolder(vault,path){
+ const parts=path.split('/'), current=[];
+ for(const part of parts){current.push(part);const p=current.join('/');
+   if(!vault.getAbstractFileByPath(p))await vault.createFolder(p);
+ }
+}
+async function makeHexNote(plugin,map,at){
+ const pos=unpack(at),cell=getCell(map,pos.col,pos.row);
+ if(cell.note){
+   const old=plugin.app.vault.getAbstractFileByPath(cell.note);
+   if(old instanceof TFile){await plugin.openNote(cell.note);return cell.note;}
+ }
+ const root='Basic RPG/Mapas/'+idFolder(map.name);
+ await ensureFolder(plugin.app.vault,root);
+ let path=root+'/Celula-'+pos.col+'-'+pos.row+'.md',n=2;
+ while(plugin.app.vault.getAbstractFileByPath(path))path=root+'/Celula-'+pos.col+'-'+pos.row+'-'+n++ +'.md';
+ const escaped=s=>String(s||'').replace(/[\\[\]]/g,'').replace(/\r?\n/g,' ');
+ const body=['---','basic-rpg-map: '+map.id,'basic-rpg-cell: "'+at+'"','terrain: '+(cell.terrain||map.defaultTerrain),'---','',
+  '# '+(escaped(cell.label)||'Célula '+at),'',
+  'Mapa: '+map.name,'Coordenadas: '+at,
+  '', '## Descrição','',cell.text||'','',
+  '## Rumores e segredos','',cell.secret||'',''].join('\n');
+ await plugin.app.vault.create(path,body);
+ await plugin.changeMesa(m=>{
+   const data=m.atlas.maps.find(x=>x.id===map.id);
+   requireMesa(!!data,'Mapa não encontrado.');
+   setCell(data,pos.col,pos.row,{note:path});
+ });
+ await plugin.openNote(path);return path;
+}
+function showEntity(plugin,view,kind,id){
+ if(kind==='note')return plugin.openNote(id);
+ if(kind==='entry')return plugin.openMesa('campaigns').then(v=>{v.campaign=plugin.mesa().entries.find(x=>x.id===id)?.campaign||'';v.focusEntry=id;v.render();});
+ if(kind==='sheet')return plugin.openMesa('sheets').then(v=>{v.filter=plugin.mesa().sheets.find(x=>x.id===id)?.name||'';v.render();});
+ if(kind==='map'){view.panel='maps';view.mapId=id;view.selected='';view.render();return Promise.resolve();}
+ return Promise.resolve();
+}
+function getNode(ref){
+ const i=ref.indexOf(':');return i<0?['','']:[ref.slice(0,i),ref.slice(i+1)];
+}
+class AtlasView extends ItemView{
+ constructor(leaf,plugin){
+   super(leaf);this.plugin=plugin;this.panel='maps';this.campaign='';this.mapId='';this.selected='';
+   this.mode='inspect';this.terrain='forest';this.tile='';this.brush=0;this.zoom=1;this.gm=true;this.regions=true;this.factions=true;
+   this.route=[];this.token='';this.focus='';this.relationType='';this.depth=2;this.graphStyle='radial';
+ }
+ getViewType(){return ATLAS_VIEW;}
+ getDisplayText(){return 'Basic RPG · Atlas';}
+ getIcon(){return 'map';}
+ async onOpen(){this.render();}
+ async onClose(){this.closed=true;}
+ get atlas(){return this.plugin.mesa().atlas||blankAtlas();}
+ get m(){return this.plugin.mesa();}
+ get current(){return this.atlas.maps.find(x=>x.id===this.mapId);}
+ chooseMap(mapId){
+   this.mapId=mapId;this.selected='';this.route=[];this.mode='inspect';this.render();
+ }
+ show(panel){if(PANELS.some(x=>x[0]===panel))this.panel=panel;this.render();}
+ save(change){return this.plugin.changeMesa(m=>{m.atlas ||= blankAtlas();return change(m.atlas,m);});}
+ render(){
+   if(this.closed)return;
+   const root=this.contentEl,top=root.scrollTop;
+   root.classList.add('brpg','brpg-view','brpg-atlas');root.replaceChildren();
+   const head=el(root,'header','brpg-header brpg-atlas-header'),title=el(head,'div');
+   el(title,'p','brpg-eyebrow','BASIC RPG');
+   el(title,'h2','brpg-heading','Atlas');
+   const nav=row(head);
+   button(nav,'Abrir Mesa',action(this.plugin,()=>this.plugin.openMesa()),{icon:'swords',iconOnly:true});
+   button(nav,'Abrir calendário',action(this.plugin,()=>this.plugin.open(true)),{icon:'calendar-days',iconOnly:true});
+   const tabs=el(root,'nav','brpg-tabs brpg-atlas-tabs');
+   for(const [id,text,icon]of PANELS){
+     const b=button(tabs,text,()=>this.show(id),{icon});b.setAttribute('aria-pressed',String(this.panel===id));
+   }
+   const c=el(root,'div','brpg-atlas-campaign');
+   labelled(c,'Campanha',[['','Todas as campanhas'],...this.m.campaigns.map(x=>[x.id,x.name])],this.campaign,
+     v=>{this.campaign=v;this.selected='';this.mapId='';this.focus='';this.render();});
+   if(this.panel==='relations')this.relationsPane(root);
+   else this.mapsPane(root);
+   root.scrollTop=top;
+ }
+ editMap(existing){
+   const base=existing||newMap(this.campaign,'hex');
+   if(!existing){base.name='Novo mapa';if(!base.campaign)base.campaign=this.m.campaigns[0]?.id||'';}
+   modal(this,existing?'Editar mapa':'Criar mapa',base,(root,d)=>{
+     input(root,'Nome do mapa',d.name,v=>{d.name=v;},{maxLength:120});
+     labelled(root,'Campanha',opts(this.m.campaigns,'Sem campanha'),d.campaign,v=>{d.campaign=v;});
+     labelled(root,'Grade',[['hex','Hexagonal'],['square','Quadrada']],d.grid,v=>{d.grid=v;});
+     input(root,'Largura (3–40)',d.width,v=>{d.width=v;},{type:'number',min:3,max:40});
+     input(root,'Altura (3–40)',d.height,v=>{d.height=v;},{type:'number',min:3,max:40});
+     labelled(root,'Terreno inicial',Object.entries(TERRAIN).map(([id,t])=>[id,t.name]),d.defaultTerrain,
+       v=>{d.defaultTerrain=v;});
+     input(root,'Imagem de fundo no cofre (opcional)',d.background||'',v=>{d.background=v;},{maxLength:500});
+     info(root,'Altere a grade antes de pintar. Diminuir o tamanho de um mapa já preenchido pode eliminar células.');
+   },async d=>{
+     d.name=trim(d.name);d.background=trim(d.background,500);
+     requireMesa(!!d.name,'Dê um nome ao mapa.');
+     requireMesa(Number.isInteger(d.width)&&Number.isInteger(d.height)&&d.width*d.height<=1600,'Use dimensões inteiras entre 3 e 40.');
+     requireMesa(safeNote(d.background),'Caminho de imagem inválido.');
+     if(existing){
+       for(const at of Object.keys(d.cells)){const p=unpack(at);requireMesa(p&&inMap(d,p.col,p.row),'A nova dimensão corta células preenchidas.');}
+       for(const path of d.paths)for(const at of path){const p=unpack(at);requireMesa(p&&inMap(d,p.col,p.row),'A nova dimensão corta uma rota salva.');}
+       for(const token of d.tokens){const p=unpack(token.at);requireMesa(p&&inMap(d,p.col,p.row),'A nova dimensão corta um token.');}
+     }
+     await this.save(a=>{
+       if(existing){const pos=a.maps.findIndex(x=>x.id===d.id);requireMesa(pos>=0,'Mapa não encontrado.');a.maps[pos]=d;}
+       else a.maps.push(d);
+     });
+     this.mapId=d.id;this.campaign=d.campaign||'';this.render();
+   });
+ }
+ removeMap(map){
+   new Confirm(this.plugin.app,'Excluir o mapa '+map.name+'? As notas do cofre não serão apagadas.',()=>this.save(a=>{
+     a.maps=a.maps.filter(x=>x.id!==map.id);
+     for(const item of a.maps){if(item.parent===map.id){item.parent='';item.parentCell='';}
+       for(const cell of Object.values(item.cells))if(cell.submap===map.id)delete cell.submap;}
+     a.relations=a.relations.filter(x=>x.from!=='map:'+map.id&&x.to!=='map:'+map.id);
+     this.mapId='';this.selected='';
+   })).open();
+ }
+ mapsPane(root){
+   const listing=this.atlas.maps.filter(x=>!this.campaign||x.campaign===this.campaign);
+   const controls=el(root,'div','brpg-atlas-map-controls');
+   labelled(controls,'Mapa',opts(listing,'Escolher mapa'),listing.some(x=>x.id===this.mapId)?this.mapId:'',
+     v=>this.chooseMap(v));
+   const tools=row(controls);
+   button(tools,'Novo mapa',()=>this.editMap(),{icon:'plus',className:'brpg-button mod-cta'});
+   const map=this.current;
+   if(!map){info(root,'Crie seu primeiro mapa hexagonal ou quadriculado. Você poderá conectar cada célula a notas, personagens e encontros da Mesa.');return;}
+   const mapActions=row(root);
+   button(mapActions,'Configurações do mapa',()=>this.editMap(map),{icon:'settings-2',iconOnly:true});
+   button(mapActions,'Excluir mapa',()=>this.removeMap(map),{icon:'trash-2',iconOnly:true});
+   button(mapActions,'Voltar ao mapa pai',()=>{
+     this.mapId=map.parent;this.selected=map.parentCell||'';this.render();
+   },{icon:'corner-up-left',iconOnly:true,disabled:!map.parent});
+   const main=panel(root,map.name,map.grid==='hex'?'Hexágonos · exploração e regiões':'Quadrados · ambientes, cidades e masmorras');
+   const basic=row(main);
+   const modes=[['inspect','Explorar','mouse-pointer-2'],['terrain','Terreno','paintbrush'],['tile','Textura','image'],['fog','Névoa','cloud'],['route','Rota','route'],['token','Tokens','users']];
+   for(const [id,label,icon]of modes){
+     const b=button(basic,label,()=>{this.mode=id;this.render();},{icon,iconOnly:true});
+     b.setAttribute('aria-pressed',String(this.mode===id));
+   }
+   const more=el(main,'div','brpg-atlas-tool-options');
+   if(this.mode==='terrain'){
+     labelled(more,'Pincel de terreno',Object.entries(TERRAIN).map(([id,t])=>[id,t.name+' '+t.icon]),this.terrain,
+       v=>{this.terrain=v;});
+     labelled(more,'Tamanho do pincel',[['0','1 célula'],['1','Até 3 células'],['3','Até 7 células']],String(this.brush),
+       v=>{this.brush=Number(v);});
+   }else if(this.mode==='tile'){
+     const files=(this.plugin.app.vault.getFiles?.()||[]).filter(x=>/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(x.path)).slice(0,200);
+     labelled(more,'Textura do cofre',[['','Remover textura'],...files.map(f=>[f.path,f.path])],this.tile,v=>{this.tile=v;});
+     input(more,'Caminho direto da imagem',this.tile,v=>{this.tile=v;},{maxLength:500});
+     labelled(more,'Tamanho do pincel',[['0','1 célula'],['1','Até 3 células'],['3','Até 7 células']],String(this.brush),v=>{this.brush=Number(v);});
+   }else if(this.mode==='fog')info(more,'Toque ou arraste para cobrir ou revelar células. Na visualização dos jogadores, os detalhes cobertos ficam ocultos.');
+   else if(this.mode==='route')info(more,'Toque nas células em sequência para traçar uma rota. O custo considera o terreno de destino.');
+   else if(this.mode==='token'){
+     const sheets=this.m.sheets.filter(x=>!x.campaign||x.campaign===map.campaign);
+     labelled(more,'Ficha do token',[['','Selecione uma ficha'],...opts(sheets).slice(1)],this.token,
+       v=>{this.token=v;});
+     info(more,'Escolha uma ficha e toque num hexágono. Toque em outro hexágono para mover o mesmo token.');
+   }
+   const switches=row(main);
+   checkbox(switches,'Visualização do mestre',this.gm,v=>{this.gm=v;this.render();});
+   checkbox(switches,'Regiões',this.regions,v=>{this.regions=v;this.render();});
+   checkbox(switches,'Facções',this.factions,v=>{this.factions=v;this.render();});
+   button(switches,'Ampliar',()=>{this.zoom=Math.min(2,+(this.zoom+.2).toFixed(1));this.render();},{icon:'zoom-in',iconOnly:true,disabled:this.zoom>=2});
+   button(switches,'Reduzir',()=>{this.zoom=Math.max(.7,+(this.zoom-.2).toFixed(1));this.render();},{icon:'zoom-out',iconOnly:true,disabled:this.zoom<=.7});
+   const canvas=el(main,'div','brpg-atlas-canvas');
+   const backgroundFile=map.background?this.plugin.app.vault.getAbstractFileByPath(map.background):null;
+   const background=backgroundFile instanceof TFile?this.plugin.app.vault.getResourcePath(backgroundFile):'';
+   renderMapCanvas(canvas,map,{background,mode:this.mode,gm:this.gm,zoom:this.zoom,selected:this.selected,paintTerrain:this.terrain,
+     regions:this.regions,factions:this.factions,getTileUrl:path=>{const f=this.plugin.app.vault.getAbstractFileByPath(path);return f instanceof TFile?this.plugin.app.vault.getResourcePath(f):'';},
+     onPick:at=>this.pickCell(map,at),onPaint:coords=>this.paintCells(map,coords)});
+   const board=row(main);
+   if(this.mode==='route'){
+     el(board,'span','brpg-chip',this.route.length+' pontos');
+     button(board,'Salvar rota',action(this.plugin,async()=>{
+       requireMesa(this.route.length>1,'Selecione ao menos duas células.');
+       const path=[...this.route];
+       await this.save(a=>{const m=a.maps.find(x=>x.id===map.id);m.paths.push(path);});
+       this.route=[];this.render();
+     }),{icon:'save',disabled:this.route.length<2});
+     button(board,'Cancelar',()=>{this.route=[];this.render();},{icon:'x'});
+     if(this.route.length>1)info(main,routeCost(map,this.route)+' unidades de deslocamento, com custos relativos de terreno.');
+   }
+   const generated=row(main);
+   button(generated,map.grid==='square'?'Gerar masmorra':'Gerar terreno',()=>
+     new Confirm(this.plugin.app,'Substituir somente a pintura do mapa? Vínculos, tokens e notas serão preservados.',()=>this.save(a=>{
+       const target=a.maps.find(x=>x.id===map.id);
+       const generated=map.grid==='square'?dungeonSeed(target,Date.now()):terrainSeed(target,Date.now());
+       for(let r=0;r<target.height;r++)for(let q=0;q<target.width;q++){
+         const at=place(q,r),cell=target.cells[at]||{};
+         delete cell.terrain;
+         if(generated[at]?.terrain)cell.terrain=generated[at].terrain;
+         if(generated[at]?.label&&!cell.label)cell.label=generated[at].label;
+         if(Object.keys(cell).length)target.cells[at]=cell;else delete target.cells[at];
+       }
+     })).open(),{icon:'sparkles'});
+   if(map.paths.length)button(generated,'Remover última rota',()=>
+     new Confirm(this.plugin.app,'Remover a última rota deste mapa?',()=>this.save(a=>{
+       a.maps.find(x=>x.id===map.id).paths.pop();
+     })).open(),{icon:'undo-2'});
+   if(this.selected)this.cellPane(root,map);
+ }
+ pickCell(map,at){
+   this.selected=at;
+   if(this.mode==='inspect')return this.render();
+   if(this.mode==='route'){this.route.push(at);return this.render();}
+   if(this.mode==='token')return this.placeToken(map,at);
+ }
+ paintCells(map,points){
+   const all=new Set();
+   if(this.mode==='tile'&&this.tile){
+     const file=this.plugin.app.vault.getAbstractFileByPath(this.tile);
+     if(!(file instanceof TFile))return this.plugin.attempt(()=>{throw new Error('Selecione uma imagem existente no cofre.');});
+   }
+   for(const at of points){const center=unpack(at);if(!center)continue;
+     for(const p of around(map,center.col,center.row,['terrain','tile'].includes(this.mode)?this.brush:0))
+       all.add(place(p.col,p.row));
+   }
+   return this.plugin.attempt(()=>this.save(a=>{
+     const target=a.maps.find(x=>x.id===map.id);if(!target)return;
+     for(const at of all){const p=unpack(at),cell=getCell(target,p.col,p.row);
+       if(this.mode==='terrain')setCell(target,p.col,p.row,{terrain:this.terrain});
+       else if(this.mode==='tile')setCell(target,p.col,p.row,{tile:this.tile});
+       else if(this.mode==='fog')setCell(target,p.col,p.row,{fog:!cell.fog});
+     }
+   }));
+ }
+ placeToken(map,at){
+   return this.plugin.attempt(()=>this.save(a=>{
+     requireMesa(!!this.token,'Selecione uma ficha para colocar no mapa.');
+     const target=a.maps.find(x=>x.id===map.id);requireMesa(!!target,'Mapa não encontrado.');
+     const sheet=this.m.sheets.find(x=>x.id===this.token);requireMesa(!!sheet,'Ficha não encontrada.');
+     const token=target.tokens.find(x=>x.sheet===sheet.id);
+     if(token)token.at=at;
+     else {requireMesa(target.tokens.length<80,'Mapa cheio de tokens.');target.tokens.push({id:uid('token'),sheet:sheet.id,name:sheet.name,at});}
+   }));
+ }
+ cellPane(root,map){
+   const p=unpack(this.selected),cell=getCell(map,p.col,p.row);
+   const visible=this.gm||!cell.fog;
+   const detail=panel(root,'Célula '+this.selected,(TERRAIN[cell.terrain||map.defaultTerrain]?.name||'Terreno')+(cell.region?' · '+cell.region:''));
+   if(!visible){info(detail,'Este local está coberto pela neblina de guerra na visualização dos jogadores.');return;}
+   if(cell.label)el(detail,'strong','',cell.label);
+   if(cell.text)el(detail,'p','brpg-mesa-prose',cell.text);
+   if(cell.secret&&this.gm)info(detail,'Segredo do mestre: '+cell.secret);
+   const links=row(detail);
+   if(cell.note)button(links,'Abrir nota',action(this.plugin,()=>this.plugin.openNote(cell.note)),{icon:'file-text'});
+   button(links,'Clima do mundo',action(this.plugin,async()=>{const view=await this.plugin.open(true);view.mode='weather';view.weatherPanel='forecast';view.render();}),{icon:'cloud-sun'});
+   if(cell.table)button(links,'Rolar encontro',action(this.plugin,async()=>{
+     const f=this.plugin.app.vault.getAbstractFileByPath(cell.table);
+     requireMesa(f instanceof TFile,'Tabela de encontros não encontrada no cofre.');
+     const src=await this.plugin.app.vault.read(f),parsed=parseTable(f.path,src,parseYaml),rolled=tableEngine([parsed],'Tables').output(parsed);
+     requireMesa(!!rolled,'A tabela não possui resultados válidos.');
+     const message=panel(root,'Encontro sorteado');
+     info(message,rolled);
+   }),{icon:'dices'});
+   if(cell.entry){
+     const entry=this.m.entries.find(x=>x.id===cell.entry);
+     if(entry)button(links,entry.name,action(this.plugin,()=>showEntity(this.plugin,this,'entry',entry.id)),{icon:'map-pin'});
+   }
+   if(cell.sheet){
+     const s=this.m.sheets.find(x=>x.id===cell.sheet);
+     if(s)button(links,s.name,action(this.plugin,()=>showEntity(this.plugin,this,'sheet',s.id)),{icon:'contact-round'});
+   }
+   if(cell.encounter){
+     const e=this.m.encounters.find(x=>x.id===cell.encounter);
+     if(e)button(links,'Iniciar '+e.name,action(this.plugin,async()=>{
+       await this.plugin.changeMesa(m=>{requireMesa(!m.running,'Finalize o encontro atual antes de iniciar outro.');
+         m.running=buildRunning(m.encounters.find(x=>x.id===e.id),m);});
+       await this.plugin.openMesa('encounters');
+     }),{icon:'swords'});
+   }
+   if(cell.submap){
+     const child=this.atlas.maps.find(x=>x.id===cell.submap);
+     if(child)button(links,'Entrar em '+child.name,()=>this.chooseMap(child.id),{icon:'corner-down-right'});
+   }
+   const controls=row(detail);
+   button(controls,'Editar célula',()=>this.editCell(map,this.selected),{icon:'pencil'});
+   button(controls,cell.note?'Abrir/criar nota':'Criar nota do hex',action(this.plugin,()=>makeHexNote(this.plugin,map,this.selected)),{icon:'file-plus'});
+   button(controls,'Gerar local',action(this.plugin,async()=>{
+     const generated=randomContent('site');
+     await this.save((a,m)=>{
+       requireMesa(!!map.campaign,'Associe o mapa a uma campanha para gerar registros.');
+       const entry=newEntry(map.campaign);entry.kind='site';entry.name=generated.title;entry.summary=generated.body;
+       m.entries.push(entry);const target=a.maps.find(x=>x.id===map.id);setCell(target,p.col,p.row,{entry:entry.id,label:generated.title});
+     });
+   }),{icon:'sparkles',disabled:!map.campaign});
+ }
+ editCell(map,at){
+   const p=unpack(at),cell=getCell(map,p.col,p.row);
+   modal(this,'Editar célula '+at,{...copy(cell)},(root,c)=>{
+     labelled(root,'Terreno',Object.entries(TERRAIN).map(([id,x])=>[id,x.name]),c.terrain||map.defaultTerrain,v=>{c.terrain=v;});
+     for(const [name,label,max,multi]of [
+       ['label','Nome do lugar',120],['region','Região',120],['faction','Facção',120],
+       ['text','Descrição',3000,true],['secret','Segredo do mestre',3000,true],
+       ['icon','Símbolo',10],['tile','Textura da célula (imagem do cofre)',500],['note','Caminho de nota existente',500],['table','Tabela de encontros (nota)',500]
+     ])input(root,label,c[name]||'',v=>{c[name]=v;},{multiline:!!multi,rows:multi?3:undefined,maxLength:max});
+     const entries=this.m.entries.filter(x=>x.campaign===map.campaign);
+     const sheets=this.m.sheets.filter(x=>!x.campaign||x.campaign===map.campaign);
+     const encounters=this.m.encounters.filter(x=>x.campaign===map.campaign);
+     labelled(root,'Registro da campanha',opts(entries),c.entry||'',v=>{c.entry=v;});
+     labelled(root,'Ficha ou criatura',opts(sheets),c.sheet||'',v=>{c.sheet=v;});
+     labelled(root,'Encontro preparado',opts(encounters),c.encounter||'',v=>{c.encounter=v;});
+     const submaps=this.atlas.maps.filter(x=>x.id!==map.id&&x.campaign===map.campaign);
+     labelled(root,'Submapa',opts(submaps),c.submap||'',v=>{c.submap=v;});
+     checkbox(root,'Ocultar atrás da neblina de guerra',c.fog||false,v=>{c.fog=v;});
+   },async c=>{
+     for(const f of ['label','region','faction','text','secret','icon','tile','note','table'])c[f]=trim(c[f],f==='text'||f==='secret'?3000:500);
+     requireMesa(safeNote(c.note),'Caminho de nota inválido.');
+     if(c.tile){const file=this.plugin.app.vault.getAbstractFileByPath(c.tile);requireMesa(file instanceof TFile,'Selecione uma imagem de textura existente no cofre.');}
+     if(c.submap){
+       const desc=this.atlas.maps.find(x=>x.id===c.submap);
+       requireMesa(!desc.parent||desc.parent===map.id,'O submapa já pertence a outro mapa.');
+     }
+     await this.save(a=>{
+       const target=a.maps.find(x=>x.id===map.id);requireMesa(!!target,'Mapa não encontrado.');
+       setCell(target,p.col,p.row,c);
+       if(c.submap){const child=a.maps.find(x=>x.id===c.submap);child.parent=map.id;child.parentCell=at;}
+     });
+   });
+ }
+ relationsPane(root){
+   const notes=mapNotes(this.plugin),graph=relationGraph(this.m,this.atlas,this.campaign,notes);
+   const controls=panel(root,'Rede de relações','Conexões da Mesa + relações tipadas nas propriedades das notas. Os vínculos das notas são somente leitura.');
+   const tools=row(controls);
+   button(tools,'Nova relação',()=>this.editRelation(notes),{icon:'plus',className:'brpg-button mod-cta',disabled:!this.m.campaigns.length});
+   button(tools,'Ir para campanhas',action(this.plugin,()=>this.plugin.openMesa('campaigns')),{icon:'map'});
+   if(!graph.edges.length)return info(root,'Crie relações entre fichas e registros, vincule registros da Mesa ou use propriedades como ally, enemy, spouse e parent nas notas.');
+   const options=[['','Rede completa'],...graph.nodes.filter(x=>x.id&&!x.id.startsWith('note:')).slice(0,250).map(x=>[x.id,x.label]),
+     ...graph.nodes.filter(x=>x.id.startsWith('note:')).slice(0,75).map(x=>[x.id,'Nota · '+x.label])];
+   labelled(controls,'Centro do gráfico',options,this.focus,v=>{this.focus=v;this.render();});
+   const filters=row(controls);
+   labelled(filters,'Tipo',[['','Todas as relações'],...Object.entries(RELATION_TYPES)],this.relationType,v=>{this.relationType=v;this.render();});
+   labelled(filters,'Profundidade',[['1','1 vínculo'],['2','2 vínculos'],['3','3 vínculos'],['4','4 vínculos']],String(this.depth),
+     v=>{this.depth=+v;this.render();});
+   labelled(filters,'Layout',[['radial','Rede'],['tree','Hierarquia']],this.graphStyle,v=>{this.graphStyle=v;this.render();});
+   const filtered=subgraph(graph,this.focus,this.depth,this.relationType?[this.relationType]:[]);
+   const box=panel(root,'Diagrama de relações',filtered.nodes.length+' nós · '+filtered.edges.length+' vínculos');
+   this.drawGraph(box,filtered);
+   const details=el(root,'details','brpg-disclosure brpg-atlas-relations-list');
+   el(details,'summary','brpg-summary','Gerenciar vínculos manuais · '+this.atlas.relations.length);
+   for(const edge of this.atlas.relations.filter(x=>!this.campaign||x.campaign===this.campaign)){
+     const a=graph.nodes.find(x=>x.id===edge.from)?.label||edge.from,b=graph.nodes.find(x=>x.id===edge.to)?.label||edge.to;
+     const item=row(details);
+     el(item,'span','brpg-atlas-relation-name',a+' · '+RELATION_TYPES[edge.type]+' · '+b);
+     button(item,'Excluir relação',()=>new Confirm(this.plugin.app,'Excluir este vínculo?',()=>this.save(a=>{
+       a.relations=a.relations.filter(x=>x.id!==edge.id);
+     })).open(),{icon:'trash-2',iconOnly:true});
+   }
+ }
+ drawGraph(root,graph){
+   const count=Math.min(graph.nodes.length,65);
+   if(!count)return info(root,'Nenhuma conexão para os filtros escolhidos.');
+   const nodes=graph.nodes.slice(0,count),ids=new Set(nodes.map(x=>x.id));
+   const w=780,h=500;
+   const scroller=el(root,'div','brpg-atlas-graph-scroll');
+   const svg=svgEl(scroller,'svg',{viewBox:'0 0 '+w+' '+h,width:w,height:h,
+     role:'img','aria-label':'Diagrama de conexões'});
+   const coords=new Map();
+   const selected=this.focus, centerNode=nodes.find(x=>x.id===selected);
+   const others=nodes.filter(x=>x!==centerNode);
+   if(centerNode)coords.set(centerNode.id,{x:w/2,y:h/2});
+   for(let i=0;i<others.length;i++){
+     const n=others[i];
+     if(this.graphStyle==='tree'){
+       const levels=4,cols=Math.ceil(Math.sqrt(others.length));
+       coords.set(n.id,{x:(i%cols+.5)*w/cols,y:(Math.floor(i/cols)+.5)*h/Math.ceil(others.length/cols)});
+     }else{
+       const angle=-Math.PI/2+2*Math.PI*i/Math.max(1,others.length);
+       const rad=Math.min(w*.38,h*.39)*(.72+.22*(i%3)/2);
+       coords.set(n.id,{x:w/2+Math.cos(angle)*rad,y:h/2+Math.sin(angle)*rad});
+     }
+   }
+   if(!centerNode&&nodes.length){
+     const angle=-Math.PI/2+2*Math.PI*others.length/Math.max(1,others.length);
+     coords.set(nodes.at(-1).id,{x:w/2+Math.cos(angle)*190,y:h/2+Math.sin(angle)*190});
+   }
+   const canvas=svgEl(svg,'g',{'class':'brpg-atlas-edges'});
+   for(const e of graph.edges){
+     if(!ids.has(e.from)||!ids.has(e.to))continue;
+     const a=coords.get(e.from),b=coords.get(e.to);if(!a||!b)continue;
+     const color=['enemy','rival'].includes(e.type)?'#cb6b73':['ally','friend'].includes(e.type)?'#71b59a':
+       ['parent','child','family','spouse'].includes(e.type)?'#b39be6':'#9f97b9';
+     const line=svgEl(canvas,'line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:color,'stroke-width':2,
+       'stroke-dasharray':e.automatic?'4 5':''});
+     svgEl(line,'title',{},RELATION_TYPES[e.type]||e.type);
+   }
+   const glyphs=svgEl(svg,'g',{'class':'brpg-atlas-nodes'});
+   for(const n of nodes){
+     const p=coords.get(n.id);if(!p)continue;
+     const g=svgEl(glyphs,'g',{'class':'brpg-atlas-graph-node'});
+     const color=n.kind==='sheet'?'#704767':n.kind==='map'?'#536c90':n.kind==='note'?'#6b6b75':'#476c60';
+     svgEl(g,'circle',{cx:p.x,cy:p.y,r:n.id===selected?23:18,fill:color,stroke:'#b8afc5','stroke-width':1.5});
+     svgEl(g,'text',{x:p.x,y:p.y+4,'text-anchor':'middle','font-size':'12',fill:'#fff'},n.label.slice(0,1).toUpperCase());
+     svgEl(g,'text',{x:p.x,y:p.y+34,'font-size':'11',fill:'var(--text-normal)','text-anchor':'middle'},n.label.slice(0,19));
+     svgEl(g,'title',{},n.label);
+     svgClick(g,()=>{const [kind,id]=getNode(n.id);this.plugin.attempt(()=>kind==='map'?this.plugin.openAtlas('maps',id):showEntity(this.plugin,this,kind,id));});
+   }
+   if(graph.nodes.length>nodes.length)info(root,'Mostrando os primeiros '+nodes.length+' nós. Escolha um centro ou filtre as relações para reduzir a rede.');
+ }
+ editRelation(notes){
+   const campaign=this.campaign||this.m.campaigns[0]?.id;
+   if(!campaign)return;
+   const items=[
+     ...this.m.entries.filter(x=>x.campaign===campaign).map(x=>({id:nodeRef('entry',x.id),name:'Registro · '+x.name})),
+     ...this.m.sheets.filter(x=>!x.campaign||x.campaign===campaign).map(x=>({id:nodeRef('sheet',x.id),name:'Ficha · '+x.name})),
+     ...this.atlas.maps.filter(x=>x.campaign===campaign).map(x=>({id:nodeRef('map',x.id),name:'Mapa · '+x.name})),
+     ...notes.filter(x=>x.path).slice(0,200).map(x=>({id:nodeRef('note',x.path),name:'Nota · '+x.path})),
+   ];
+   modal(this,'Nova relação',{id:uid('rel'),campaign,from:items[0]?.id||'',to:items[1]?.id||'',type:'ally'},(root,d)=>{
+     info(root,'Campanha: '+(this.m.campaigns.find(x=>x.id===campaign)?.name||'Campanha selecionada'));
+     d.campaign=campaign;
+     labelled(root,'Origem',items.map(x=>[x.id,x.name]),d.from,v=>{d.from=v;});
+     labelled(root,'Destino',items.map(x=>[x.id,x.name]),d.to,v=>{d.to=v;});
+     labelled(root,'Tipo',Object.entries(RELATION_TYPES),d.type,v=>{d.type=v;});
+     info(root,'O vínculo pertence à campanha escolhida. Para relações vindas de notas, também é possível usar frontmatter, como ally: "[[Nome]]".');
+   },async d=>{
+     requireMesa(d.from&&d.to&&d.from!==d.to,'Selecione dois elementos diferentes.');
+     await this.save(a=>a.relations.push(d));this.campaign=d.campaign;this.render();
+   });
+ }
+}
+async function openAtlas(plugin,panelName='maps',mapId=''){
+ const workspace=plugin.app.workspace,existing=workspace.getLeavesOfType(ATLAS_VIEW);
+ let leaf=existing[0];
+ if(!leaf){leaf=workspace.getLeaf('tab');await leaf.setViewState({type:ATLAS_VIEW,active:true});}
+ await workspace.revealLeaf(leaf);
+ const view=leaf.view;
+ if(panelName)view.panel=panelName;
+ if(mapId)view.mapId=mapId;
+ view.render();
+ return view;
+}
+function registerAtlasEmbeds(plugin){
+ const Base=MarkdownRenderChild||class {};
+ for(const name of ['brpg-mapa','brpg-relacoes']){
+   plugin.registerMarkdownCodeBlockProcessor(name,(source,host,ctx)=>{
+     class Embed extends Base{
+       constructor(){super(host);}
+       onload(){plugin.atlasEmbeds.add(this);this.render();}
+       onunload(){plugin.atlasEmbeds.delete(this);}
+       render(){
+         host.replaceChildren();const root=el(host,'section','brpg brpg-atlas-embed');
+         try{
+           const sourceTrim=source.trim();
+           const config=sourceTrim?sourceTrim.startsWith('{')?JSON.parse(sourceTrim):parseYaml(sourceTrim):{};
+           requireMesa(config&&typeof config==='object'&&!Array.isArray(config),'Configuração inválida.');
+           const atlas=plugin.mesa().atlas||blankAtlas();
+           if(name==='brpg-mapa'){
+             const map=find(atlas.maps,config.ref||config.map||'');
+             requireMesa(!!map,'Mapa não encontrado. Use ref: Nome ou ID.');
+             el(root,'h3','brpg-section-title',map.name);
+             const mapCanvas=el(root,'div','brpg-atlas-canvas');
+             const backgroundFile=map.background?plugin.app.vault.getAbstractFileByPath(map.background):null;
+             renderMapCanvas(mapCanvas,map,{background:backgroundFile instanceof TFile?plugin.app.vault.getResourcePath(backgroundFile):'',gm:config.view!=='player',zoom:1,
+               getTileUrl:path=>{const file=plugin.app.vault.getAbstractFileByPath(path);return file instanceof TFile?plugin.app.vault.getResourcePath(file):'';},
+               onPick:at=>plugin.attempt(async()=>{const view=await openAtlas(plugin,'maps',map.id);
+                 view.selected=at;view.render();})});
+             button(root,'Abrir Atlas',action(plugin,()=>openAtlas(plugin,'maps',map.id)),{icon:'map'});
+           }else{
+             const campaign=config.campaign?find(plugin.mesa().campaigns,config.campaign)?.id||'':'';
+             const notes=mapNotes(plugin),graph=relationGraph(plugin.mesa(),atlas,campaign,notes);
+             const focus=config.center?'note:'+String(config.center).replace(/^\[\[|\]\]$/g,''):config.focus||'';
+             const subset=subgraph(graph,focus,Number(config.depth||1),[]);
+             el(root,'h3','brpg-section-title','Relações');
+             info(root,subset.nodes.length+' nós · '+subset.edges.length+' conexões');
+             AtlasView.prototype.drawGraph.call({plugin,focus,graphStyle:config.tree?'tree':'radial'},root,subset);
+             button(root,'Abrir diagrama',action(plugin,async()=>{const view=await openAtlas(plugin,'relations');view.campaign=campaign;view.focus=focus;view.render();}),{icon:'network'});
+           }
+         }catch(e){info(root,e?.message||'Não foi possível abrir o bloco.');}
+       }
+     }
+     ctx.addChild(new Embed());
+   });
+ }
+}
+function renameAtlasNotes(m,oldPath,newPath){
+ if(!m.atlas)return false;
+ const move=x=>typeof x==='string'&&(x===oldPath||x.startsWith(oldPath+'/'))?newPath+x.slice(oldPath.length):x;
+ let changed=false;
+ for(const map of m.atlas.maps){
+   const background=move(map.background);
+   if(background!==map.background){map.background=background;changed=true;}
+   for(const c of Object.values(map.cells))for(const field of ['note','table','tile']){
+     const next=move(c[field]);if(next!==c[field]){c[field]=next;changed=true;}
+   }
+ }
+ for(const r of m.atlas.relations)for(const field of ['from','to']){
+   if(r[field]?.startsWith('note:')){
+     const next=move(r[field].slice(5));
+     if(next!==r[field].slice(5)){r[field]='note:'+next;changed=true;}
+   }
+ }
+ return changed;
+}
+function setupAtlas(plugin){
+ plugin.atlasEmbeds=new Set();
+ plugin.registerView(ATLAS_VIEW,leaf=>new AtlasView(leaf,plugin));
+ plugin.addRibbonIcon('map','Basic RPG · Atlas',()=>plugin.attempt(()=>plugin.openAtlas()));
+ plugin.addCommand({id:'atlas-open',name:'Atlas · Abrir mapas',callback:()=>plugin.attempt(()=>plugin.openAtlas('maps'))});
+ plugin.addCommand({id:'atlas-relations',name:'Atlas · Abrir relações',callback:()=>plugin.attempt(()=>plugin.openAtlas('relations'))});
+ registerAtlasEmbeds(plugin);
+}
+module.exports={ATLAS_VIEW,AtlasView,openAtlas,setupAtlas,renameAtlasNotes,makeHexNote,mapNotes};
+
+    },
+    "atlas-canvas.js": function (module, exports, load, require) {
+'use strict';
+const { TERRAIN,place,unpack,getCell }=load("atlas.js");
+const NS='http://www.w3.org/2000/svg';
+function svgEl(root,tag,attrs={},content){
+  const node=root.ownerDocument.createElementNS(NS,tag);
+  for(const [k,v]of Object.entries(attrs))if(v!==undefined&&v!==null)node.setAttribute(k,String(v));
+  if(content!==undefined)node.textContent=content;
+  root.appendChild(node);return node;
+}
+function center(map,col,row,unit=26){
+  if(map.grid==='square')return {x:unit*(2*col+1),y:unit*(2*row+1)};
+  return {x:unit*(Math.sqrt(3)*(col+.5*(row&1))+.95),y:unit*(1.5*row+1)};
+}
+function extent(map,unit=26){
+  if(map.grid==='square')return {width:map.width*unit*2,height:map.height*unit*2};
+  return {width:unit*(Math.sqrt(3)*(map.width+.6)+1.1),height:unit*(map.height*1.5+.6)};
+}
+function hexPoints(x,y,unit){
+  return Array.from({length:6},(_,i)=>{
+    const a=(i*60-30)*Math.PI/180;
+    return (x+unit*Math.cos(a)).toFixed(2)+','+(y+unit*Math.sin(a)).toFixed(2);
+  }).join(' ');
+}
+function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true}) {
+  host.replaceChildren();
+  const viewport=host.ownerDocument.createElement('div');
+  viewport.className='brpg-atlas-map-scroll';host.appendChild(viewport);
+  const unit=26, bounds=extent(map,unit);
+  const svg=svgEl(viewport,'svg',{viewBox:'0 0 '+bounds.width+' '+bounds.height,
+    width:Math.round(bounds.width*zoom),height:Math.round(bounds.height*zoom),
+    role:'img','aria-label':map.name+', '+map.width+' por '+map.height+' células'});
+  svg.classList.add('brpg-atlas-svg');
+  if(mode==='terrain'||mode==='fog'||mode==='tile')svg.classList.add('is-painting');
+  if(background){const image=svgEl(svg,'image',{href:background,x:0,y:0,width:bounds.width,height:bounds.height,
+    preserveAspectRatio:'xMidYMid slice',opacity:.68});image.style.pointerEvents='none';}
+  const defs=svgEl(svg,'defs');
+  const prefix='brpg-atlas-'+Math.random().toString(36).slice(2)+'-';
+  const tint=(text)=>{const colors=['#9dd6b5','#dfb67c','#9cb9e6','#d1a2ce','#7fc9d2','#e9cc8c'];let n=0;for(const c of text)n=(Math.imul(n,31)+c.charCodeAt(0))>>>0;return colors[n%colors.length];};
+  const floor=svgEl(svg,'g',{'class':'brpg-atlas-floor'});
+  const cellNodes=new Map();
+  for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+    const at=place(col,row),c=getCell(map,col,row),pos=center(map,col,row,unit);
+    const blocked=c.fog&&!gm,terrain=blocked?'':(c.terrain||map.defaultTerrain),swatch=TERRAIN[terrain]||TERRAIN.plains;
+    const g=svgEl(floor,'g',{'data-pos':at,'class':'brpg-atlas-tile'+(at===selected?' is-selected':'')+
+      (blocked?' is-fog':'')+(c.entry||c.sheet||c.note?' has-link':'')});
+    const common={fill:blocked?'#17171d':swatch.color,'fill-opacity':background&&!blocked?.74:1,stroke:at===selected?'var(--interactive-accent)':regions&&c.region?tint(c.region):'var(--background-modifier-border)', 'stroke-width':at===selected?3:regions&&c.region?2.5:1.1};
+    const shape=map.grid==='square'?svgEl(g,'rect',{x:pos.x-unit+1,y:pos.y-unit+1,width:unit*2-2,height:unit*2-2,...common}):
+      svgEl(g,'polygon',{points:hexPoints(pos.x,pos.y,unit-1),...common});
+    if(c.tile&&!blocked&&getTileUrl){const url=getTileUrl(c.tile);if(url){
+       const id=prefix+col+'-'+row,clip=svgEl(defs,'clipPath',{id});
+       if(map.grid==='square')svgEl(clip,'rect',{x:pos.x-unit+1,y:pos.y-unit+1,width:unit*2-2,height:unit*2-2});
+       else svgEl(clip,'polygon',{points:hexPoints(pos.x,pos.y,unit-1)});
+       const image=svgEl(g,'image',{href:url,x:pos.x-unit,y:pos.y-unit,width:unit*2,height:unit*2,
+         preserveAspectRatio:'xMidYMid slice','clip-path':'url(#'+id+')'});image.style.pointerEvents='none';
+     }}
+    const label=blocked?'?':c.icon||swatch.icon||'';
+    if(label)svgEl(g,'text',{x:pos.x,y:pos.y+2,'text-anchor':'middle',
+      'dominant-baseline':'middle','font-size':(c.icon?'15':'13'),
+      'pointer-events':'none',fill:'var(--text-normal)'},label);
+    if((c.label||c.region)&&!blocked){
+      const short=(c.label||c.region).slice(0,11);
+      svgEl(g,'text',{x:pos.x,y:pos.y+16,'text-anchor':'middle','font-size':'7.5',
+        'pointer-events':'none',fill:'var(--text-normal)'},short);
+    }
+    if(((factions&&c.faction)||c.submap)&&!blocked){
+      svgEl(g,'circle',{cx:pos.x+unit*.62,cy:pos.y-unit*.57,r:3.2,fill:c.submap?'#f6b65c':tint(c.faction),
+        'pointer-events':'none'});
+    }
+    svgEl(g,'title',{},(blocked?'Inexplorado':c.label||swatch.name)+' · '+at);
+    cellNodes.set(at,{g,shape});
+  }
+  // Route lines live above terrain and below tokens. Their coordinates match both grid types.
+  const roads=svgEl(svg,'g',{'class':'brpg-atlas-routes','pointer-events':'none'});
+  for(const path of map.paths||[]){
+    const points=path.map(at=>unpack(at)).filter(Boolean).map(pos=>center(map,pos.col,pos.row,unit));
+    if(points.length<2)continue;
+    if(!gm&&path.some(at=>{const p=unpack(at);return p&&getCell(map,p.col,p.row).fog;}))continue;
+    svgEl(roads,'polyline',{points:points.map(x=>x.x+','+x.y).join(' '),fill:'none',
+      stroke:'#ffe5a5','stroke-width':4,'stroke-linecap':'round','stroke-linejoin':'round',opacity:.9});
+  }
+  const tokens=svgEl(svg,'g',{'class':'brpg-atlas-tokens','pointer-events':'none'});
+  const occupied=new Map();
+  for(const token of map.tokens||[]){
+    const pos=unpack(token.at);if(!pos)continue;
+    if(getCell(map,pos.col,pos.row).fog&&!gm)continue;
+    const n=(occupied.get(token.at)||0);occupied.set(token.at,n+1);
+    const p=center(map,pos.col,pos.row,unit),dx=(n%2?1:-1)*6,dy=n>1?10:-7;
+    svgEl(tokens,'circle',{cx:p.x+dx,cy:p.y+dy,r:9,fill:'#533449',stroke:'#f0c9dd','stroke-width':1.4});
+    svgEl(tokens,'text',{x:p.x+dx,y:p.y+dy+1,'font-size':10,'text-anchor':'middle',
+      'dominant-baseline':'middle',fill:'#fff'},token.name?.slice(0,1).toUpperCase()||'●');
+  }
+  let painting=false,pending=new Set();
+  const posFromEvent=e=>{
+    let target=e.target;
+    while(target&&target!==svg&&!target.getAttribute?.('data-pos'))target=target.parentElement;
+    return target?.getAttribute?.('data-pos')||'';
+  };
+  const stage=(at)=>{
+    if(!at||pending.has(at))return;
+    pending.add(at);
+    const box=cellNodes.get(at);
+    if(!box)return;
+    if(mode==='terrain')box.shape.setAttribute('fill',TERRAIN[paintTerrain]?.color||TERRAIN.plains.color);
+    else if(mode==='fog')box.shape.setAttribute('opacity','.5');
+  };
+  const finish=()=>{
+    if(!painting)return;
+    painting=false;
+    const coords=[...pending];pending=new Set();
+    if(coords.length)onPaint?.(coords);
+  };
+  if(mode==='terrain'||mode==='fog'||mode==='tile'){
+    svg.addEventListener('pointerdown',e=>{
+      if(e.button!==0)return;
+      const at=posFromEvent(e);
+      if(!at)return;
+      painting=true;pending=new Set();
+      stage(at);e.preventDefault();
+    });
+    svg.addEventListener('pointermove',e=>{
+      if(painting)stage(posFromEvent(e));
+    });
+    svg.addEventListener('pointerup',finish);
+    svg.addEventListener('pointercancel',()=>{painting=false;pending.clear();});
+    svg.addEventListener('pointerleave',finish);
+  }else{
+    svg.addEventListener('click',e=>{const at=posFromEvent(e);if(at)onPick?.(at);});
+  }
+  return {svg,viewport};
+}
+module.exports={svgEl,center,extent,hexPoints,renderMapCanvas};
+
+    },
     "mesa-view.js": function (module, exports, load, require) {
 'use strict';
 const { ItemView, Modal, MarkdownRenderChild, parseYaml } = require('obsidian');
@@ -6656,6 +7642,7 @@ class MesaView extends ItemView {
     const anchors=row(head);
     button(anchors,'Calendário',this.run(() => this.plugin.open(true)),{icon:'calendar-days',iconOnly:true});
     button(anchors,'Kit solo',this.run(() => this.plugin.openSolo(null,true)),{icon:'dices',iconOnly:true});
+    button(anchors,'Atlas',this.run(() => this.plugin.openAtlas()),{icon:'map',iconOnly:true});
     const tabs=el(root,'nav','brpg-tabs brpg-mesa-tabs');
     tabs.setAttribute('aria-label','Ferramentas da Mesa');
     for (const [id,label,icon] of TABS) {
@@ -6722,12 +7709,13 @@ class MesaView extends ItemView {
     }
     const card=panel(root,current.name);
     if (current.summary) el(card,'p','brpg-mesa-prose',current.summary);
+    button(row(card),'Mapas da campanha',this.run(async()=>{const view=await this.plugin.openAtlas('maps');view.campaign=current.id;view.render();}),{icon:'map'});
     const controls=row(card);
     linkedNote(controls,p,current.note);
     button(controls,'Editar campanha',() => this.campaignEditor(current),{icon:'pencil'});
     cta(controls,'Novo registro',() => this.entryEditor(current),'plus');
     button(controls,'Excluir campanha',() => this.remove('Excluir a campanha vazia? Nenhuma nota será apagada.',m => {
-      requireMesa(![...m.entries,...m.sheets,...m.encounters,m.running].some(x => x?.campaign===current.id),
+      requireMesa(![...m.entries,...m.sheets,...m.encounters,...(m.atlas?.maps||[]),m.running].some(x => x?.campaign===current.id),
         'Remova os registros e encontros ou mova as fichas para outra campanha antes de excluir.');
       m.campaigns=m.campaigns.filter(x => x.id!==current.id);
     }),{icon:'trash-2',iconOnly:true});
@@ -6753,6 +7741,8 @@ class MesaView extends ItemView {
         button(actions,'Criar encontro',() => this.encounterEditor(null,e),{icon:'swords'});
         button(actions,'Excluir registro',() => this.remove('Excluir este registro da campanha?',m => {
           m.entries=m.entries.filter(x => x.id!==e.id);
+          if(m.atlas){for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.entry===e.id)delete cell.entry;
+          m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='entry:'+e.id&&x.to!=='entry:'+e.id);}
           for (const r of m.entries) r.links=r.links.filter(id => id!==e.id);
           for (const encounter of m.encounters) if (encounter.entry===e.id) encounter.entry='';
         }),{icon:'trash-2',iconOnly:true});
@@ -6832,13 +7822,18 @@ class MesaView extends ItemView {
         el(card,'strong','',s.name);
         el(card,'span','brpg-hint',[KINDS[s.kind],s.type].filter(Boolean).join(' · '));
         const commands=row(card);
+        const location=this.m.atlas?.maps.find(map=>Object.values(map.cells).some(cell=>cell.sheet===s.id)||map.tokens.some(t=>t.sheet===s.id));
+        if(location)button(commands,'Localizar no Atlas',this.run(()=>this.plugin.openAtlas('maps',location.id)),{icon:'map-pin'});
         button(commands,'Abrir ficha',() => new SheetPreview(this.plugin,s).open(),{icon:'eye'});
         button(commands,'Editar ficha',() => this.sheetEditor(s),{icon:'pencil',iconOnly:true});
         button(commands,'Duplicar ficha',() => this.sheetEditor(null,false,s),{icon:'copy',iconOnly:true});
         button(commands,'Excluir ficha',() => this.remove('Excluir esta ficha do bestiário?',m => {
+          requireMesa(!m.atlas?.maps.some(map=>map.tokens.some(t=>t.sheet===s.id)||Object.values(map.cells).some(c=>c.sheet===s.id)),
+            'Remova os vínculos e tokens da ficha nos mapas antes de excluí-la.');
           requireMesa(!m.encounters.some(e => e.roster.some(r => r.sheet===s.id)),
             'Remova a ficha dos encontros salvos antes de excluí-la.');
           m.sheets=m.sheets.filter(x => x.id!==s.id);
+          if(m.atlas)m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='sheet:'+s.id&&x.to!=='sheet:'+s.id);
         }),{icon:'trash-2',iconOnly:true});
       }
     };
@@ -6921,6 +7916,7 @@ class MesaView extends ItemView {
       button(commands,'Editar encontro',() => this.encounterEditor(e),{icon:'pencil',iconOnly:true});
       button(commands,'Excluir modelo de encontro',() => this.remove('Excluir o modelo deste encontro?',m => {
         m.encounters=m.encounters.filter(x => x.id!==e.id);
+        if(m.atlas)for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.encounter===e.id)delete cell.encounter;
       }),{icon:'trash-2',iconOnly:true});
     }
   }

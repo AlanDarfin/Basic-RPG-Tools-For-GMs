@@ -790,3 +790,50 @@
   .brpg-mesa-tabs .brpg-button > span:last-child:not(.brpg-icon) { display:none; }
   .brpg-mesa-tabs .brpg-icon { margin:auto; }
 }
+
+
+/* Atlas: one map/relationships workspace, touch-first and 720p-friendly. */
+.brpg-atlas {--atlas-gap:8px;padding-bottom:80px;}
+.brpg-atlas-header{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.brpg-atlas-header .brpg-heading{margin:0}
+.brpg-atlas .brpg-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.brpg-atlas-panel{padding:10px;border:1px solid var(--background-modifier-border);border-radius:10px;margin:8px 0;min-width:0}
+.brpg-atlas-panel .brpg-section-title{margin:0 0 6px}
+.brpg-atlas-panel .brpg-hint{margin:4px 0 7px}
+.brpg-atlas-row{display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
+.brpg-atlas-row .brpg-button{min-width:0}
+.brpg-atlas-map-controls{display:flex;flex-wrap:wrap;align-items:end;gap:7px;margin:7px 0}
+.brpg-atlas-map-controls .brpg-field{flex:1 1 190px}
+.brpg-atlas-tool-options{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.brpg-atlas-tool-options .brpg-field{flex:1 1 145px;min-width:0}
+.brpg-atlas-checkbox{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;min-height:32px;}
+.brpg-atlas-map-scroll{width:100%;max-height:min(60vh,580px);min-height:180px;overflow:auto;
+  border:1px solid var(--background-modifier-border);border-radius:8px;background:var(--background-primary-alt);
+  scrollbar-width:thin;overscroll-behavior:contain;}
+.brpg-atlas-svg{display:block;max-width:none;user-select:none;}
+.brpg-atlas-svg.is-painting{touch-action:none;cursor:crosshair;}
+.brpg-atlas-svg:not(.is-painting) .brpg-atlas-tile{cursor:pointer;}
+.brpg-atlas-tile > polygon,.brpg-atlas-tile > rect{transition:fill .1s ease;stroke-linejoin:round}
+.brpg-atlas-tile.is-selected > polygon,.brpg-atlas-tile.is-selected > rect{filter:brightness(1.25)}
+.brpg-atlas-tile.has-link > polygon,.brpg-atlas-tile.has-link > rect{stroke:var(--interactive-accent)}
+.brpg-atlas-tool-options select,.brpg-atlas-map-controls select{min-height:34px}
+.brpg-atlas-editor{max-height:72vh;overflow-y:auto;display:grid;gap:6px}
+.brpg-atlas-editor .brpg-field{min-width:0}
+.brpg-atlas-editor textarea{max-height:160px}
+.brpg-atlas-error{color:var(--text-error);min-height:1px}
+.brpg-atlas-graph-scroll{max-width:100%;max-height:60vh;overflow:auto;background:var(--background-primary-alt);
+  border-radius:8px;border:1px solid var(--background-modifier-border);}
+.brpg-atlas-graph-node{cursor:pointer;}
+.brpg-atlas-graph-node:focus{outline:2px solid var(--interactive-accent)}
+.brpg-atlas-relations-list{margin:8px 0}
+.brpg-atlas-relation-name{flex:1 1 160px;overflow-wrap:anywhere;font-size:.83rem;}
+.brpg-atlas-embed{max-width:100%;overflow:hidden;border:1px solid var(--background-modifier-border);
+  border-radius:8px;padding:8px}
+.brpg-atlas-embed .brpg-atlas-map-scroll{max-height:320px;}
+@media(max-width:650px){
+ .brpg-atlas-panel{padding:7px}
+ .brpg-atlas-map-scroll{max-height:46vh}
+ .brpg-atlas-tool-options{gap:4px}
+ .brpg-atlas .brpg-button{padding-inline:7px}
+ .brpg-atlas-graph-scroll{max-height:48vh}
+}
