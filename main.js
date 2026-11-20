@@ -68,6 +68,7 @@ class Settings extends PluginSettingTab {
     info(kit, 'Prepare campanhas, acompanhe encontros ou abra dados, baralhos, oráculos e tabelas.');
     button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
     button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
+    button(kit, 'Central de Sessão', () => p.attempt(() => p.openMesa('dashboard')), { icon: 'layout-dashboard' });
     button(kit, 'Abrir Atlas', () => p.attempt(() => p.openAtlas()), { icon: 'map' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
@@ -208,6 +209,7 @@ class BasicRPG extends Plugin {
     this.registerView(MESA_VIEW, leaf => new MesaView(leaf, this));
     this.addRibbonIcon('swords', 'Basic RPG · Mesa', () => this.attempt(() => this.openMesa()));
     this.addCommand({ id:'open-mesa', name:'Abrir Mesa', callback:() => this.attempt(() => this.openMesa()) });
+    this.addCommand({ id:'open-session-dashboard', name:'Abrir Central de Sessão', callback:() => this.attempt(() => this.openMesa('dashboard')) });
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
@@ -253,6 +255,7 @@ class BasicRPG extends Plugin {
       current: (name) => this.worldNow(this.resolveCalendar(name)),
       day: (name, date) => this.daySnapshot(this.resolveCalendar(name), date),
       maps: () => (this.mesa().atlas?.maps||[]).map(x=>({id:x.id,name:x.name,campaign:x.campaign,grid:x.grid})),
+      session: () => {const s=this.mesa().session;return s?{id:s.id,campaign:s.campaign,entry:s.entry,map:s.map,cell:s.cell,status:s.status}:null;},
     });
     this.onLayoutReady();
   }
@@ -2202,6 +2205,7 @@ class CalendarView extends ItemView {
     button(actions, 'Modelos de calendário', () => this.plugin.openCalendarTemplates(), { icon: 'layout-template', iconOnly: true });
     button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords' });
+    button(actions, 'Central de Sessão', this.run(() => this.plugin.openMesa('dashboard')), { icon: 'layout-dashboard' });
     button(actions, 'Abrir Atlas', this.run(() => this.plugin.openAtlas()), { icon: 'map' });
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
@@ -6067,6 +6071,7 @@ function checkEncounter(e) {
 }
 function checkMesa(m) {
   requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
+  load("session.js").checkSession(m);
   if(m.atlas !== undefined)load("atlas.js").checkAtlas(m.atlas,m);
   for (const field of ['campaigns','entries','sheets','encounters']) {
     const a = m[field];
@@ -6161,6 +6166,133 @@ function changeResource(r, id, i, delta) {
 }
 module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa, newCampaign, newEntry, newSheet, resource, arkanisSheet,
   newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
+
+    },
+    "session.js": function (module, exports, load, require) {
+'use strict';
+const {uid}=load("calendar.js");
+const {clean}=load("solo.js");
+const {requireMesa,newEntry}=load("mesa.js");
+const {unpack,inMap}=load("atlas.js");
+
+const MAX_JOURNAL=120;
+const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.parse(s));
+const nowString=()=>new Date().toISOString();
+
+function checkSession(m){
+ for(const entry of m.entries||[]){
+   if(entry.sessionJournal!==undefined)
+     requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
+       entry.sessionJournal.every(x=>x&&clean(x.id)&&validTimestamp(x.time)&&
+         typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+       'Diário arquivado inválido.');
+ }
+ const s=m.session;
+ if(s===undefined||s===null)return true;
+ requireMesa(s&&typeof s==='object'&&!Array.isArray(s)&&clean(s.id)&&
+   ['active','paused'].includes(s.status)&&validTimestamp(s.startedAt),'Sessão ativa inválida.');
+ const camp=m.campaigns.find(x=>x.id===s.campaign);
+ requireMesa(!!camp,'Campanha da sessão não encontrada.');
+ const entry=m.entries.find(x=>x.id===s.entry);
+ requireMesa(!!entry&&entry.campaign===s.campaign&&entry.kind==='session','O registro de sessão deve existir na mesma campanha.');
+ if(s.map){
+   const map=m.atlas?.maps.find(x=>x.id===s.map);
+   requireMesa(!!map&&map.campaign===s.campaign,'Mapa da sessão não encontrado nessa campanha.');
+   if(s.cell){
+     const at=unpack(s.cell);
+     requireMesa(at&&inMap(map,at.col,at.row),'Localização da sessão inválida.');
+   }
+ }else requireMesa(!s.cell,'Uma célula da sessão requer um mapa.');
+ requireMesa(Array.isArray(s.journal)&&s.journal.length<=MAX_JOURNAL&&s.journal.every(x=>
+   x&&clean(x.id)&&validTimestamp(x.time)&&typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+   'Anotações da sessão inválidas.');
+ return true;
+}
+function nextName(m,campaign){
+ const used=m.entries.filter(x=>x.campaign===campaign&&x.kind==='session');
+ return 'Sessão '+(used.length+1);
+}
+function newSessionEntry(m,campaign,options={}){
+ requireMesa(m.campaigns.some(c=>c.id===campaign),'Campanha não encontrada.');
+ const e=newEntry(campaign);
+ e.kind='session';e.name=clean(options.name,120)||nextName(m,campaign);
+ if(options.calendar&&options.date&&options.label)
+   e.date={calendar:options.calendar,date:options.date,label:clean(options.label,180)};
+ m.entries.push(e);
+ return e;
+}
+function startSession(m,campaign,entry='',options={}){
+ requireMesa(!m.session,'Finalize a sessão atual antes de iniciar outra.');
+ const c=m.campaigns.find(x=>x.id===campaign);
+ requireMesa(!!c,'Escolha uma campanha existente.');
+ const chosen=entry?m.entries.find(x=>x.id===entry):newSessionEntry(m,campaign,options);
+ requireMesa(chosen&&chosen.campaign===campaign&&chosen.kind==='session','Escolha um registro do tipo Sessão da campanha.');
+ m.session={id:uid('session'),status:'active',campaign,entry:chosen.id,
+   map:'',cell:'',startedAt:nowString(),journal:[]};
+ if(options.map)setSessionLocation(m,options.map,options.cell||'');
+ checkSession(m);
+ return m.session;
+}
+function setSessionStatus(m,status){
+ requireMesa(m.session,'Nenhuma sessão iniciada.');
+ requireMesa(['active','paused'].includes(status),'Estado da sessão inválido.');
+ m.session.status=status;return m.session;
+}
+function setSessionLocation(m,mapId='',cell=''){
+ requireMesa(m.session,'Inicie uma sessão para marcar a localização.');
+ requireMesa(!cell||!!mapId,'Selecione um mapa antes da célula.');
+ if(!mapId){m.session.map='';m.session.cell='';return m.session;}
+ const map=m.atlas?.maps.find(x=>x.id===mapId);
+ requireMesa(map&&map.campaign===m.session.campaign,'Este mapa não pertence à campanha da sessão.');
+ if(cell){
+   const p=unpack(cell);
+   requireMesa(p&&inMap(map,p.col,p.row),'Digite coordenadas válidas no formato coluna,linha.');
+ }
+ m.session.map=mapId;m.session.cell=cell;return m.session;
+}
+function addSessionNote(m,text){
+ const s=m.session;
+ requireMesa(s,'Nenhuma sessão iniciada.');
+ const note=clean(text,1200);
+ requireMesa(note&&typeof text==='string'&&text.trim().length<=1200,'A anotação precisa ter de 1 a 1200 caracteres.');
+ requireMesa(s.journal.length<MAX_JOURNAL,'Diário cheio. Encerre a sessão e comece outro registro.');
+ const entry={id:uid('note'),time:nowString(),text:note};
+ s.journal.unshift(entry);
+ return entry;
+}
+function finishSession(m){
+ const s=m.session;
+ requireMesa(!!s,'Nenhuma sessão em andamento.');
+ const entry=m.entries.find(e=>e.id===s.entry);
+ requireMesa(!!entry,'Registro da sessão não encontrado.');
+ const location=s.map?'\nLocal: '+(m.atlas?.maps.find(x=>x.id===s.map)?.name||s.map)+(s.cell?' ('+s.cell+')':''):'';
+ const lines=s.journal.slice().reverse().map(n=>'- '+n.time.slice(0,16).replace('T',' ')+' · '+n.text.replace(/\n/g,' / '));
+ // Archive the complete structured diary independently of summary size.
+ entry.sessionJournal ||= [];
+ requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
+ entry.sessionJournal.push(...s.journal.slice().reverse());
+ const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
+ const max=10000;
+ const previous=String(entry.summary||'').slice(0,max);
+ const space=Math.max(0,max-previous.length);
+ entry.summary=previous+(space>0?note.slice(-space):'');
+ m.session=null;
+ return entry;
+}
+function sessionInfo(m,calendars=[]){
+ const s=m.session;
+ if(!s)return null;
+ const campaign=m.campaigns.find(c=>c.id===s.campaign);
+ const entry=m.entries.find(e=>e.id===s.entry);
+ const map=m.atlas?.maps.find(x=>x.id===s.map)||null;
+ const cell=map&&s.cell?map.cells[s.cell]||{}:null;
+ const calendar=calendars.find(c=>c.id===campaign?.calendar)||null;
+ const running=m.running?.campaign===s.campaign?m.running:null;
+ const players=m.sheets.filter(x=>x.campaign===s.campaign&&x.kind==='player');
+ return {session:s,campaign,entry,map,cell,calendar,running,players};
+}
+module.exports={MAX_JOURNAL,checkSession,nextName,newSessionEntry,startSession,
+ setSessionStatus,setSessionLocation,addSessionNote,finishSession,sessionInfo};
 
     },
     "atlas.js": function (module, exports, load, require) {
@@ -6899,6 +7031,7 @@ const { copy,uid }=load("calendar.js");
 const { key,clean }=load("solo.js");
 const { newEntry,find,requireMesa,buildRunning }=load("mesa.js");
 const { randomContent }=load("ultra.js");
+const {setSessionLocation}=load("session.js");
 const { parseTable,tableEngine }=load("solo-tables.js");
 const { MAP_TEMPLATES, createMapTemplate }=load("map-presets.js");
 const {
@@ -7081,7 +7214,8 @@ class AtlasView extends ItemView{
    });
  }
  removeMap(map){
-   new Confirm(this.plugin.app,'Excluir o mapa '+map.name+'? As notas do cofre não serão apagadas.',()=>this.save(a=>{
+   new Confirm(this.plugin.app,'Excluir o mapa '+map.name+'? As notas do cofre não serão apagadas.',()=>this.save((a,m)=>{
+     if(m.session?.map===map.id){m.session.map='';m.session.cell='';}
      a.maps=a.maps.filter(x=>x.id!==map.id);
      for(const item of a.maps){if(item.parent===map.id){item.parent='';item.parentCell='';}
        for(const cell of Object.values(item.cells))if(cell.submap===map.id)delete cell.submap;}
@@ -7248,6 +7382,7 @@ class AtlasView extends ItemView{
      if(child)button(links,'Entrar em '+child.name,()=>this.chooseMap(child.id),{icon:'corner-down-right'});
    }
    const controls=row(detail);
+   if(this.m.session?.campaign===map.campaign)button(controls,'Marcar como local da sessão',action(this.plugin,()=>this.plugin.changeMesa(m=>setSessionLocation(m,map.id,this.selected))),{icon:'map-pin'});
    button(controls,'Editar célula',()=>this.editCell(map,this.selected),{icon:'pencil'});
    button(controls,cell.note?'Abrir/criar nota':'Criar nota do hex',action(this.plugin,()=>makeHexNote(this.plugin,map,this.selected)),{icon:'file-plus'});
    button(controls,'Gerar local',action(this.plugin,async()=>{
@@ -7757,7 +7892,8 @@ const {
 } = load("mesa.js");
 
 const MESA_VIEW = 'basic-rpg-mesa';
-const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
+const {renderSessionDashboard}=load("session-ui.js");
+const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
   const section = el(root, 'section', 'brpg-mesa-panel');
@@ -7882,7 +8018,7 @@ function editableRows(root, modal, draft, prop, title, addLabel, make, render, l
 }
 class MesaView extends ItemView {
   constructor(leaf,plugin) {
-    super(leaf); this.plugin=plugin; this.tab=plugin.mesa().running ? 'encounters' : 'campaigns'; this.campaign=''; this.filter=''; this.sheetType='';
+    super(leaf); this.plugin=plugin; this.tab='dashboard'; this.campaign=plugin.mesa().session?.campaign||''; this.filter=''; this.sheetType='';
   }
   getViewType() { return MESA_VIEW; }
   getDisplayText() { return 'Basic RPG · Mesa'; }
@@ -7916,7 +8052,8 @@ class MesaView extends ItemView {
     const scope=el(root,'div','brpg-mesa-scope');
     labelSelect(scope,'Campanha',choice(this.m.campaigns,'Sem filtro de campanha'),this.campaign,v => { this.campaign=v; this.render(); });
     const content=el(root,'div','brpg-mesa-content');
-    if (this.tab==='campaigns') this.campaignsPane(content);
+    if (this.tab==='dashboard') renderSessionDashboard(this,content);
+    else if (this.tab==='campaigns') this.campaignsPane(content);
     else if (this.tab==='sheets') this.sheetsPane(content);
     else if (this.tab==='encounters') this.encountersPane(content);
     else this.plugin.ultra?.render(this,content);
@@ -7979,6 +8116,7 @@ class MesaView extends ItemView {
     button(controls,'Editar campanha',() => this.campaignEditor(current),{icon:'pencil'});
     cta(controls,'Novo registro',() => this.entryEditor(current),'plus');
     button(controls,'Excluir campanha',() => this.remove('Excluir a campanha vazia? Nenhuma nota será apagada.',m => {
+      requireMesa(m.session?.campaign!==current.id,'Finalize a sessão ativa antes de excluir a campanha.');
       requireMesa(![...m.entries,...m.sheets,...m.encounters,...(m.atlas?.maps||[]),m.running].some(x => x?.campaign===current.id),
         'Remova os registros e encontros ou mova as fichas para outra campanha antes de excluir.');
       m.campaigns=m.campaigns.filter(x => x.id!==current.id);
@@ -7997,6 +8135,15 @@ class MesaView extends ItemView {
         const entry=disclosure(list,ELEMENTS[e.kind] + ' · ' + e.name + (e.date ? ' · ' + e.date.label : ''),this.focusEntry===e.id);
         this.focusEntry = this.focusEntry===e.id ? '' : this.focusEntry;
         if (e.summary) el(entry,'p','brpg-mesa-prose',e.summary);
+        if(e.sessionJournal?.length){
+          const archive=disclosure(entry,'Diário arquivado · '+e.sessionJournal.length);
+          for(const note of e.sessionJournal.slice(-30)){
+            const line=el(archive,'article','brpg-session-note');
+            el(line,'small','brpg-hint',new Date(note.time).toLocaleString('pt-BR'));
+            el(line,'p','brpg-mesa-prose',note.text);
+          }
+          if(e.sessionJournal.length>30)info(archive,'Exibindo as 30 entradas mais recentes. O histórico completo permanece salvo no registro.');
+        }
         const calendar=e.date && p.state.calendars.find(c => c.id===e.date.calendar);
         const actions=row(entry);
         linkedNote(actions,p,e.note);
@@ -8004,6 +8151,7 @@ class MesaView extends ItemView {
         button(actions,'Editar registro',() => this.entryEditor(current,e),{icon:'pencil'});
         button(actions,'Criar encontro',() => this.encounterEditor(null,e),{icon:'swords'});
         button(actions,'Excluir registro',() => this.remove('Excluir este registro da campanha?',m => {
+          requireMesa(m.session?.entry!==e.id,'Finalize a sessão antes de excluir seu registro.');
           m.entries=m.entries.filter(x => x.id!==e.id);
           if(m.atlas){for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.entry===e.id)delete cell.entry;
           m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='entry:'+e.id&&x.to!=='entry:'+e.id);}
@@ -8320,6 +8468,243 @@ function renameMesaNotes(m,oldPath,newPath) {
   return changed;
 }
 module.exports={MESA_VIEW,TABS,MesaView,openMesa,registerMesaEmbeds,renameMesaNotes};
+
+    },
+    "session-ui.js": function (module, exports, load, require) {
+'use strict';
+const {setIcon}=require('obsidian');
+const { CalendarEngine, MAX_YEAR, clockText }=load("calendar.js");
+const { CONDITIONS,weatherDay }=load("weather.js");
+const { el,button,select,input,info,Confirm }=load("ui.js");
+const { step, requireMesa }=load("mesa.js");
+const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionNote,finishSession }=load("session.js");
+const { unpack,place }=load("atlas.js");
+
+const row=root=>el(root,'div','brpg-toolbar brpg-session-actions');
+function iconEl(root,name){const span=el(root,'span','brpg-session-icon');setIcon(span,name);return span;}
+function panel(root,title,icon=''){
+ const out=el(root,'section','brpg-mesa-panel brpg-session-panel');
+ const header=el(out,'div','brpg-session-panel-head');
+ if(icon)iconEl(header,icon);
+ el(header,'h3','brpg-section-title',title);
+ return out;
+}
+function labelSelect(root,name,opts,value,fn){
+ const container=el(root,'label','brpg-field brpg-session-field');
+ el(container,'span','brpg-label',name);
+ return select(container,opts,value,fn,name);
+}
+const run=(plugin,fn)=>()=>plugin.attempt(fn);
+function stat(root,icon,title,value,detail,action){
+ const container=el(root,'div','brpg-session-stat');
+ const heading=el(container,'div','brpg-session-stat-top');
+ iconEl(heading,icon);
+ el(heading,'span','brpg-session-stat-title',title);
+ el(container,'strong','brpg-session-stat-value',value);
+ if(detail)el(container,'small','brpg-hint',detail);
+ if(action)button(container,'Abrir '+title,action,{icon:'arrow-up-right',iconOnly:true});
+ return container;
+}
+function calendarFor(plugin,campaign){
+ return plugin.state.calendars.find(c=>c.id===campaign.calendar)||plugin.active();
+}
+async function openCampaignCalendar(plugin,campaign,weather=false){
+ const cal=calendarFor(plugin,campaign);
+ if(cal.id!==plugin.active().id)await plugin.setActive(cal.id);
+ const view=await plugin.open(true);
+ if(weather)view.showWeather('forecast');
+ return view;
+}
+async function openCampaignMap(plugin,campaign,mapId='',cell=''){
+ const maps=plugin.mesa().atlas?.maps.filter(m=>m.campaign===campaign.id)||[];
+ const picked=mapId||maps[0]?.id||'';
+ const view=await plugin.openAtlas('maps',picked);
+ view.campaign=campaign.id;
+ if(picked)view.mapId=picked;
+ view.selected=cell;view.render();
+ return view;
+}
+function makeContext(root,view,campaign,overview){
+ const plugin=view.plugin,grid=el(root,'div','brpg-session-context');
+ const cal=calendarFor(plugin,campaign);
+ let dateText='Calendário não disponível',timeText='',weatherText='Sem previsão',weatherDetail='';
+ if(cal){
+   const engine=new CalendarEngine(cal);
+   const world=plugin.worldNow(cal,engine);
+   dateText=engine.format(world);timeText=clockText(world);
+   if(cal.weather?.enabled){
+     const regionName=overview?.cell?.region||'';
+     const weatherRegion=cal.weather.regions?.find(x=>x.name.toLocaleLowerCase('pt-BR')===regionName.toLocaleLowerCase('pt-BR'));
+     const day=weatherDay(cal,engine,world,MAX_YEAR,weatherRegion?.id||cal.weather.activeId);
+     if(day){
+       weatherText=CONDITIONS[day.condition]?.[0]||day.condition;
+       const symbol=cal.weather.temperature==='F'?'°F':'°C';
+       const transform=n=>Math.round(cal.weather.temperature==='F'?n*1.8+32:n);
+       weatherDetail=transform(day.low)+'–'+transform(day.high)+' '+symbol+' · '+day.region;
+     }
+   }
+ }
+ const map=overview?.map||null,cell=overview?.cell||null;
+ const location=map?(cell?.label||cell?.region|| (overview.session.cell?'Célula '+overview.session.cell:map.name)):'Nenhum mapa selecionado';
+ const players=plugin.mesa().sheets.filter(s=>s.kind==='player'&&(!s.campaign||s.campaign===campaign.id)).length;
+ const encounter=overview?.running||null;
+ stat(grid,'calendar-days','Calendário',dateText,timeText+(campaign.calendar?' · Vinculado':' · Calendário ativo'),
+   run(plugin,()=>openCampaignCalendar(plugin,campaign)));
+ stat(grid,'cloud-sun','Clima',weatherText,weatherDetail||'Configure o clima no calendário',
+   run(plugin,()=>openCampaignCalendar(plugin,campaign,true)));
+ stat(grid,'map','Localização',location,map?.name||'Abra o Atlas para definir um local',
+   run(plugin,()=>openCampaignMap(plugin,campaign,map?.id||'',overview?.session.cell||'')));
+ stat(grid,'swords','Encontro',encounter?'Rodada '+encounter.round:'Nenhum encontro ativo',
+   encounter?('Turno de '+(encounter.members.find(x=>x.id===encounter.turn)?.name||'participante')):players+' personagem(ns) no bestiário',
+   ()=>view.show('encounters'));
+}
+function renderQuickTools(root,view,campaign){
+ const plugin=view.plugin,box=panel(root,'Ferramentas da sessão','zap'),toolbar=row(box);
+ const items=[
+  ['Dados','dices',()=>plugin.openSolo('dice',true)],
+  ['Oráculos','sparkles',()=>plugin.openSolo('oracle',true)],
+  ['Baralhos','layers',()=>plugin.openSolo('deck',true)],
+  ['Fichas','contact-round',()=>view.show('sheets')],
+  ['Encontros','swords',()=>view.show('encounters')],
+  ['Estúdio','wand-sparkles',()=>view.show('studio')],
+  ['Atlas','map',()=>openCampaignMap(plugin,campaign,plugin.mesa().session?.map||'',plugin.mesa().session?.cell||'')],
+  ['Relações','network',async()=>{const v=await plugin.openAtlas('relations');v.campaign=campaign.id;v.render();}]
+ ];
+ for(const [name,icon,fn]of items)button(toolbar,name,run(plugin,fn),{icon});
+}
+function renderJournal(root,view,overview){
+ const plugin=view.plugin,s=overview.session,box=panel(root,'Diário rápido','notebook-pen');
+ info(box,'Anotações ficam vinculadas à sessão. Ao encerrar, o diário é acrescentado ao registro da campanha.');
+ input(box,'Anotação',view.sessionNoteDraft||'',v=>{view.sessionNoteDraft=v;},
+   {multiline:true,rows:2,maxLength:1200});
+ const actions=row(box);
+ button(actions,'Registrar anotação',run(plugin,async()=>{
+   const text=view.sessionNoteDraft||'';
+   await plugin.changeMesa(m=>addSessionNote(m,text));
+   view.sessionNoteDraft='';
+ }),{icon:'plus',disabled:s.status!=='active'});
+ if(overview.entry?.note)button(actions,'Abrir nota da sessão',
+   run(plugin,()=>plugin.openNote(overview.entry.note)),{icon:'file-text'});
+ const notes=el(box,'details','brpg-disclosure brpg-session-journal');
+ el(notes,'summary','brpg-summary','Entradas do diário · '+s.journal.length);
+ const entries=el(notes,'div','brpg-session-journal-entries');
+ if(!s.journal.length)info(entries,'Nenhuma anotação registrada ainda.');
+ for(const item of s.journal.slice(0,12)){
+   const line=el(entries,'article','brpg-session-note');
+   const time=Number.isNaN(Date.parse(item.time))?item.time:new Date(item.time).toLocaleString('pt-BR');
+   el(line,'small','brpg-hint',time);
+   el(line,'p','brpg-mesa-prose',item.text);
+ }
+}
+function renderLocation(root,view,overview){
+ const plugin=view.plugin,session=overview.session,campaign=overview.campaign;
+ const box=panel(root,'Localização da sessão','map-pin');
+ const maps=plugin.mesa().atlas?.maps.filter(m=>m.campaign===campaign.id)||[];
+ if(!maps.length){
+   info(box,'A campanha ainda não tem mapas. Abra o Atlas para criar um ou escolher um modelo.');
+   button(row(box),'Criar ou abrir Atlas',run(plugin,()=>openCampaignMap(plugin,campaign)),{icon:'map'});
+   return;
+ }
+ labelSelect(box,'Mapa',[['','Sem mapa'],...maps.map(m=>[m.id,m.name])],session.map,v=>
+   run(plugin,async()=>{await plugin.changeMesa(m=>setSessionLocation(m,v,''));view.sessionCellDraft='';})());
+ if(!session.map)return;
+ const map=maps.find(x=>x.id===session.map);
+ if(!map)return;
+ const cells=Object.entries(map.cells).filter(([at,c])=>c.label||c.entry||c.note||c.sheet||c.encounter)
+   .slice(0,120).map(([at,c])=>[at,(c.label||c.region||'Local')+' · '+at]);
+ labelSelect(box,'Locais marcados',[['','Escolher pelo mapa'],...cells],cells.some(x=>x[0]===session.cell)?session.cell:'',
+   at=>{view.sessionCellDraft=at;});
+ input(box,'Coordenadas (coluna,linha)',view.sessionCellDraft??session.cell,v=>{view.sessionCellDraft=v;},{maxLength:12});
+ const actions=row(box);
+ button(actions,'Salvar localização',run(plugin,async()=>{
+   const text=(view.sessionCellDraft??session.cell).trim();
+   await plugin.changeMesa(m=>setSessionLocation(m,session.map,text));
+   view.sessionCellDraft=null;
+ }),{icon:'map-pin'});
+ button(actions,'Mostrar no mapa',run(plugin,()=>openCampaignMap(plugin,campaign,session.map,session.cell)),{icon:'map'});
+}
+function renderRunning(root,view,overview){
+ const m=view.plugin.mesa(),running=m.running;
+ if(!running)return;
+ const box=panel(root,'Combate em andamento','swords');
+ if(running.campaign!==overview.campaign.id){
+   info(box,'Existe um encontro ativo em outra campanha. A Mesa mantém um único combate por vez.');
+   return;
+ }
+ const actor=running.members.find(x=>x.id===running.turn);
+ const heading=el(box,'div','brpg-session-combat');
+ el(heading,'strong','','Rodada '+running.round);
+ el(heading,'span','brpg-chip',actor?.name||'Participante');
+ const toolbar=row(box);
+ button(toolbar,'Abrir combate',()=>view.show('encounters'),{icon:'swords'});
+ button(toolbar,'Próximo turno',run(view.plugin,()=>view.plugin.changeMesa(m=>{
+   requireMesa(m.running?.id===running.id,'O encontro foi alterado.');
+   step(m.running,1);
+ })),{icon:'chevron-right',disabled:overview.session.status!=='active'});
+}
+function renderStart(root,view,campaign){
+ const plugin=view.plugin,m=plugin.mesa(),box=panel(root,'Iniciar sessão','play');
+ if(!campaign)return info(box,'Crie uma campanha na aba Campanhas para iniciar uma sessão.');
+ info(box,'Crie um registro novo ou retome um registro de sessão existente. O diário e a localização serão restaurados quando reabrir o Obsidian.');
+ const entries=m.entries.filter(e=>e.campaign===campaign.id&&e.kind==='session');
+ labelSelect(box,'Registro existente',[['','Nova sessão'],...entries.map(e=>[e.id,e.name])],view.sessionEntryDraft||'',
+   v=>{view.sessionEntryDraft=v;});
+ button(row(box),view.sessionEntryDraft?'Iniciar registro escolhido':'Iniciar nova sessão',run(plugin,async()=>{
+   const c=plugin.state.calendars.find(x=>x.id===campaign.calendar);
+   let date;
+   if(c){const engine=new CalendarEngine(c),now=plugin.worldNow(c,engine);date={calendar:c.id,date:now,label:engine.format(now)};}
+   const chosen=view.sessionEntryDraft||'';
+   await plugin.changeMesa(m=>startSession(m,campaign.id,chosen,date||{}));
+   view.campaign=campaign.id;view.sessionEntryDraft='';view.show('dashboard');
+ }),{icon:'play',className:'brpg-button mod-cta'});
+}
+function renderSessionDashboard(view,root){
+ const plugin=view.plugin,m=plugin.mesa(),session=m.session;
+ const chosen=m.campaigns.find(x=>x.id===view.campaign)||m.campaigns.find(x=>x.id===session?.campaign)||m.campaigns[0];
+ const intro=el(root,'header','brpg-session-intro');
+ el(intro,'p','brpg-eyebrow','CENTRAL DE SESSÃO');
+ el(intro,'h3','brpg-session-title',chosen?.name||'Sua próxima aventura');
+ if(!m.campaigns.length){
+   info(root,'Crie sua primeira campanha para reunir mapas, calendário, fichas, dados e encontros numa só tela.');
+   button(row(root),'Criar campanha',()=>view.campaignEditor(),{icon:'plus',className:'brpg-button mod-cta'});
+   return;
+ }
+ if(session&&session.campaign!==chosen.id){
+   const notice=panel(root,'Outra sessão em andamento','info');
+   info(notice,'Há uma sessão ativa ou pausada na campanha '+(m.campaigns.find(x=>x.id===session.campaign)?.name||'desconhecida')+'.');
+   button(row(notice),'Abrir sessão atual',()=>{view.campaign=session.campaign;view.render();},{icon:'play'});
+   makeContext(root,view,chosen,null);
+   renderQuickTools(root,view,chosen);
+   return;
+ }
+ if(!session){
+   makeContext(root,view,chosen,null);
+   renderStart(root,view,chosen);
+   renderQuickTools(root,view,chosen);
+   return;
+ }
+ const overview=sessionInfo(m,plugin.state.calendars);
+ const header=panel(root,overview.entry?.name||'Sessão atual','dices');
+ const tag=el(header,'div','brpg-session-status');
+ el(tag,'span','brpg-chip',session.status==='active'?'Em andamento':'Pausada');
+ el(tag,'span','brpg-hint',overview.campaign?.name||'Campanha');
+ const buttons=row(header);
+ button(buttons,session.status==='active'?'Pausar sessão':'Retomar sessão',
+   run(plugin,()=>plugin.changeMesa(m=>setSessionStatus(m,session.status==='active'?'paused':'active'))),
+   {icon:session.status==='active'?'pause':'play'});
+ button(buttons,'Encerrar sessão',()=>{
+   new Confirm(plugin.app,'Encerrar a sessão? O diário será guardado no registro e o encontro, se houver, permanecerá na Mesa.',
+     ()=>plugin.changeMesa(m=>finishSession(m))).open();
+ },{icon:'square'});
+ if(overview.entry?.note)
+   button(buttons,'Abrir nota',run(plugin,()=>plugin.openNote(overview.entry.note)),{icon:'file-text'});
+ makeContext(root,view,chosen,overview);
+ renderRunning(root,view,overview);
+ renderQuickTools(root,view,chosen);
+ renderLocation(root,view,overview);
+ renderJournal(root,view,overview);
+}
+module.exports={renderSessionDashboard,calendarFor,openCampaignCalendar,openCampaignMap};
 
     }
   };

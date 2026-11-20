@@ -37,6 +37,7 @@ class Settings extends PluginSettingTab {
     info(kit, 'Prepare campanhas, acompanhe encontros ou abra dados, baralhos, oráculos e tabelas.');
     button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
     button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
+    button(kit, 'Central de Sessão', () => p.attempt(() => p.openMesa('dashboard')), { icon: 'layout-dashboard' });
     button(kit, 'Abrir Atlas', () => p.attempt(() => p.openAtlas()), { icon: 'map' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
@@ -177,6 +178,7 @@ class BasicRPG extends Plugin {
     this.registerView(MESA_VIEW, leaf => new MesaView(leaf, this));
     this.addRibbonIcon('swords', 'Basic RPG · Mesa', () => this.attempt(() => this.openMesa()));
     this.addCommand({ id:'open-mesa', name:'Abrir Mesa', callback:() => this.attempt(() => this.openMesa()) });
+    this.addCommand({ id:'open-session-dashboard', name:'Abrir Central de Sessão', callback:() => this.attempt(() => this.openMesa('dashboard')) });
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
@@ -222,6 +224,7 @@ class BasicRPG extends Plugin {
       current: (name) => this.worldNow(this.resolveCalendar(name)),
       day: (name, date) => this.daySnapshot(this.resolveCalendar(name), date),
       maps: () => (this.mesa().atlas?.maps||[]).map(x=>({id:x.id,name:x.name,campaign:x.campaign,grid:x.grid})),
+      session: () => {const s=this.mesa().session;return s?{id:s.id,campaign:s.campaign,entry:s.entry,map:s.map,cell:s.cell,status:s.status}:null;},
     });
     this.onLayoutReady();
   }

@@ -5,6 +5,7 @@ const { copy,uid }=require('./calendar');
 const { key,clean }=require('./solo');
 const { newEntry,find,requireMesa,buildRunning }=require('./mesa');
 const { randomContent }=require('./ultra');
+const {setSessionLocation}=require('./session');
 const { parseTable,tableEngine }=require('./solo-tables');
 const { MAP_TEMPLATES, createMapTemplate }=require('./map-presets');
 const {
@@ -187,7 +188,8 @@ class AtlasView extends ItemView{
    });
  }
  removeMap(map){
-   new Confirm(this.plugin.app,'Excluir o mapa '+map.name+'? As notas do cofre não serão apagadas.',()=>this.save(a=>{
+   new Confirm(this.plugin.app,'Excluir o mapa '+map.name+'? As notas do cofre não serão apagadas.',()=>this.save((a,m)=>{
+     if(m.session?.map===map.id){m.session.map='';m.session.cell='';}
      a.maps=a.maps.filter(x=>x.id!==map.id);
      for(const item of a.maps){if(item.parent===map.id){item.parent='';item.parentCell='';}
        for(const cell of Object.values(item.cells))if(cell.submap===map.id)delete cell.submap;}
@@ -354,6 +356,7 @@ class AtlasView extends ItemView{
      if(child)button(links,'Entrar em '+child.name,()=>this.chooseMap(child.id),{icon:'corner-down-right'});
    }
    const controls=row(detail);
+   if(this.m.session?.campaign===map.campaign)button(controls,'Marcar como local da sessão',action(this.plugin,()=>this.plugin.changeMesa(m=>setSessionLocation(m,map.id,this.selected))),{icon:'map-pin'});
    button(controls,'Editar célula',()=>this.editCell(map,this.selected),{icon:'pencil'});
    button(controls,cell.note?'Abrir/criar nota':'Criar nota do hex',action(this.plugin,()=>makeHexNote(this.plugin,map,this.selected)),{icon:'file-plus'});
    button(controls,'Gerar local',action(this.plugin,async()=>{

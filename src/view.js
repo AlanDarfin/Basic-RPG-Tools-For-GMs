@@ -127,6 +127,7 @@ class CalendarView extends ItemView {
     button(actions, 'Modelos de calendário', () => this.plugin.openCalendarTemplates(), { icon: 'layout-template', iconOnly: true });
     button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords' });
+    button(actions, 'Central de Sessão', this.run(() => this.plugin.openMesa('dashboard')), { icon: 'layout-dashboard' });
     button(actions, 'Abrir Atlas', this.run(() => this.plugin.openAtlas()), { icon: 'map' });
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
