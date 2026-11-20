@@ -393,3 +393,48 @@ A Central reúne as ferramentas do mestre, mas não executa viagens, clima ou en
 automaticamente. A automação de exploração continua no roteiro da v2.
 
 O diário completo é preservado no campo estruturado `sessionJournal` do registro. O resumo mostra apenas um trecho caso alcance o limite de 10 mil caracteres. A aba **Campanhas** exibe até 30 anotações recentes sem apagar as anteriores.
+
+
+## Exploração e viagens (v1.7.0)
+
+A próxima etapa da v2 liga o **Atlas** à **Central de Sessão**, mantendo o mestre no controle.
+
+1. Inicie uma sessão, selecione um mapa e marque a célula de origem.
+2. Em **Mesa → Sessão → Exploração e viagens**, digite a célula de destino (coluna,linha),
+   escolha um lugar marcado ou abra o Atlas e use **Planejar viagem até aqui**.
+3. Defina o deslocamento (**a pé**, **montado**, **voando**) e os minutos de mundo por unidade.
+   O sistema calcula o caminho de menor custo por terreno, evitando água a pé e paredes.
+4. Clique **Pré-visualizar rota**, confira passos, duração, eventos e pontos de interesse.
+   Só **Confirmar deslocamento** altera a sessão. A rota é recalculada na confirmação.
+5. O mestre decide separadamente se deve avançar o calendário, mover tokens de personagens
+   na origem e revelar a neblina de guerra. Todas essas opções podem ser desativadas.
+
+**Avançar calendário** só funciona quando a campanha possui um calendário vinculado com
+relógio em modo **manual**. Em tempo real ou vinculado a outro relógio, a viagem é possível
+sem alteração do tempo. A conversão de minutos respeita dias de tamanho não convencional,
+mudanças de mês e anos bissextos.
+
+O Atlas destaca a posição atual da sessão com um marcador **G**. Ao mover tokens, só os
+tokens de fichas de jogador que já estavam na célula de origem se deslocam. Outras criaturas
+e tokens não são movidos automaticamente.
+
+Encontros preparados, tabelas e eventos do calendário ao longo da rota são **sugeridos**.
+Nenhum combate é iniciado automaticamente: a Central oferece um botão de confirmação para
+encontros salvos e permite abrir notas com tabelas. As viagens ficam guardadas no histórico da
+sessão e são arquivadas no registro ao final, mesmo que o mapa seja alterado depois.
+
+O tempo é medido em **minutos do próprio calendário**, não em tempo real de deslocamento.
+A duração padrão de 60 minutos por unidade é apenas um ponto de partida editável para a
+escala do seu mapa, não uma medida geográfica universal.
+
+### Limitações desta etapa
+
+- Os caminhos são calculados dentro de um único mapa, sem transferência automática
+  entre submapas ou travessia marítima. Voo permite cruzar água; paredes bloqueiam todos
+  os modos. Ainda não há montarias com regras de sistema, economia de carga ou fadiga.
+- O clima da região aparece na Central, mas não modifica automaticamente o custo da rota.
+- As sugestões do calendário consultam eventos cadastrados no calendário. Eventos de notas
+  externas podem exigir uma atualização dos índices.
+- A visualização do jogador continua sendo um filtro de interface, não um controle de acesso.
+- A interface Android precisa de teste manual; o motor tem testes de rota, terreno,
+  alterações de data, persistência e encontros que não iniciam sem confirmação.

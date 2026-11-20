@@ -7,6 +7,7 @@ const { VIEW, CalendarView } = require('./view');
 const { ensureSky } = require('./sky');
 const { ensureEclipseOrbits } = require('./eclipse');
 const { worldDate, linkedDate, mode: clockMode, anchor, ensureClock, transferDate } = require('./world-clock');
+const {previewTravel,executeTravel}=require('./exploration');
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = require('./ui');
 const arkanis = require('./arkanis.json');
 const { NoteIndex, parseDate } = require('./note-events');
@@ -179,6 +180,7 @@ class BasicRPG extends Plugin {
     this.addRibbonIcon('swords', 'Basic RPG · Mesa', () => this.attempt(() => this.openMesa()));
     this.addCommand({ id:'open-mesa', name:'Abrir Mesa', callback:() => this.attempt(() => this.openMesa()) });
     this.addCommand({ id:'open-session-dashboard', name:'Abrir Central de Sessão', callback:() => this.attempt(() => this.openMesa('dashboard')) });
+    this.addCommand({ id:'open-exploration', name:'Exploração · Planejar viagem do grupo', callback:()=>this.attempt(()=>this.openMesa('dashboard')) });
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
@@ -347,6 +349,20 @@ class BasicRPG extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(MESA_VIEW)) if (leaf.view instanceof MesaView) leaf.view.render();
     for (const view of this.mesaEmbeds) view.render();
     this.redrawAtlas();
+  }
+  planTravel(options){
+    const s=this.mesa().session;
+    assert(s,'Inicie uma sessão primeiro.');
+    const camp=this.mesa().campaigns.find(x=>x.id===s.campaign);
+    const cal=this.state.calendars.find(x=>x.id===camp?.calendar);
+    return previewTravel(this.mesa(),cal,options);
+  }
+  travelSession(options){
+    return this.change(state=>{
+      const plan=executeTravel(state,options,this.clockNow());
+      checkMesa(state.mesa);
+      return plan;
+    });
   }
   changeMesa(fn) {
     return this.change(state => {

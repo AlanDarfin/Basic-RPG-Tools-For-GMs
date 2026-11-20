@@ -9,6 +9,7 @@ const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.pa
 const nowString=()=>new Date().toISOString();
 
 function checkSession(m){
+ require('./exploration').validateTravel(m);
  for(const entry of m.entries||[]){
    if(entry.sessionJournal!==undefined)
      requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
@@ -100,6 +101,10 @@ function finishSession(m){
  entry.sessionJournal ||= [];
  requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
  entry.sessionJournal.push(...s.journal.slice().reverse());
+ entry.sessionTravel ||= [];
+ requireMesa(entry.sessionTravel.length+(s.travelLog?.length||0)<=10000,
+   'Histórico de viagens arquivado está cheio. Exporte o registro antes de finalizar.');
+ entry.sessionTravel.push(...(s.travelLog||[]));
  const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
  const max=10000;
  const previous=String(entry.summary||'').slice(0,max);

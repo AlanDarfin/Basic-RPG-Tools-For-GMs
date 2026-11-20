@@ -894,3 +894,22 @@
 
 .brpg-session-icon{display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;flex:0 0 16px;color:var(--text-muted)}
 .brpg-session-icon svg{width:16px;height:16px}
+
+
+/* Exploration v1.7: compact preview, touch-safe route planner and party position. */
+.brpg-session-travel-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.brpg-session-travel-settings .brpg-field{min-width:0;width:100%}
+.brpg-session-travel-checks{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.brpg-session-travel-option{display:inline-flex;align-items:center;gap:6px;min-height:30px;
+  font-size:.83rem;max-width:100%}
+.brpg-session-travel-option input{accent-color:var(--interactive-accent);flex:0 0 auto}
+.brpg-session-travel-preview{padding:8px;margin:8px 0;border:1px solid var(--interactive-accent);
+  border-radius:8px;background:var(--background-secondary)}
+.brpg-session-travel-preview .brpg-hint{margin:4px 0}
+.brpg-session-travel-history{margin-top:8px}
+.brpg-session-travel-stop{padding:6px 0;border-bottom:1px solid var(--background-modifier-border);
+  display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.brpg-session-travel-stop span{flex:1 1 120px;overflow-wrap:anywhere}
+.brpg-atlas-party{filter:drop-shadow(0 1px 3px rgba(0,0,0,.45))}
+@media(max-width:520px){.brpg-session-travel-settings{grid-template-columns:1fr}
+ .brpg-session-travel-checks{flex-direction:column;gap:3px}}
