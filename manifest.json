@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "minAppVersion": "1.7.2",
-  "description": "Calendários de fantasia, estações, clima, eclipses e cronologias para RPG.",
+  "description": "Calendário de fantasia, dados e baralhos personalizados, oráculos e tabelas para RPG.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false

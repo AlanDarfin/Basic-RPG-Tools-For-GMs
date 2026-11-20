@@ -14,6 +14,10 @@ const { registerEmbeds } = require('./embeds');
 const { observatory } = require('./observatory');
 const { weatherDay } = require('./weather');
 const { fantasyExport, gregorian } = require('./interchange');
+const { defaultSolo, validateSolo } = require('./solo');
+const { SOLO_VIEW, TABS, SoloView, openSolo } = require('./solo-ui');
+const { registerSoloInline } = require('./solo-inline');
+const { renameImages } = require('./solo-vault');
 
 class Settings extends PluginSettingTab {
   constructor(plugin) { super(plugin.app, plugin); this.plugin = plugin; }
@@ -23,6 +27,10 @@ class Settings extends PluginSettingTab {
     const area = el(root, 'div', 'brpg brpg-settings');
     el(area, 'p', 'brpg-eyebrow', 'FERRAMENTAS DE CAMPANHA');
     el(area, 'h2', 'brpg-heading', 'Calendários');
+    const kit = el(area, 'section', 'brpg-section brpg-settings-current');
+    el(kit, 'h3', '', 'Kit solo');
+    info(kit, 'Dados, baralhos, oráculos e tabelas para suas sessões.');
+    button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
@@ -104,6 +112,7 @@ class BasicRPG extends Plugin {
     this.pending = Promise.resolve();
     this.noteIndex = new NoteIndex(this);
     this.embeds = new Set();
+    this.defaultKit = defaultSolo();
     this.notified = new Map();
     this.readOnly = false;
     let saveMigration = false;
@@ -125,6 +134,10 @@ class BasicRPG extends Plugin {
         });
         assert(saved.calendars.some((c) => c.id === saved.activeId), 'Calendário ativo não encontrado.');
         this.checkLinks(saved);
+        if (saved.solo !== undefined) {
+          validateSolo(saved.solo);
+          saved.solo.settings = { ...this.defaultKit.settings, ...saved.solo.settings };
+        }
         this.state = saved;
       }
     } catch {
@@ -145,6 +158,11 @@ class BasicRPG extends Plugin {
     }
     this.registerView(VIEW, (leaf) => new CalendarView(leaf, this));
     this.addRibbonIcon('calendar-days', 'Basic RPG · Calendário', () => this.attempt(() => this.open(false)));
+    this.registerView(SOLO_VIEW, (leaf) => new SoloView(leaf, this));
+    this.addRibbonIcon('dices', 'Basic RPG · Kit solo', () => this.attempt(() => this.openSolo()));
+    this.addCommand({ id: 'open-solo', name: 'Abrir kit solo', callback: () => this.attempt(() => this.openSolo()) });
+    this.addCommand({ id: 'open-solo-main', name: 'Abrir kit solo na área principal', callback: () => this.attempt(() => this.openSolo(null, true)) });
+    for (const [id, name] of TABS) this.addCommand({ id: 'solo-' + id, name: 'Kit solo · ' + name, callback: () => this.attempt(() => this.openSolo(id)) });
     this.addSettingTab(new Settings(this));
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
@@ -175,6 +193,7 @@ class BasicRPG extends Plugin {
       await this.noteIndex.rebuild(); this.redraw();
     }) });
     registerEmbeds(this);
+    registerSoloInline(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,
@@ -195,6 +214,8 @@ class BasicRPG extends Plugin {
         this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
       }
       this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+        if (this.state.solo && renameImages(copy(this.state.solo), oldPath, file.path))
+          this.attempt(() => this.changeSolo((solo) => renameImages(solo, oldPath, file.path)));
         if (cache && this.state.calendars.some((c) => c.noteSources?.enabled))
           this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
         if (!this.state.calendars.some((c) => c.events.some((e) => e.note === oldPath || e.note.startsWith(oldPath + '/')))) return;
@@ -273,7 +294,20 @@ class BasicRPG extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.render();
     for (const view of this.embeds) view.draw();
   }
-  change(fn, rebuildNotes = false) {
+  solo() { return this.state.solo || this.defaultKit; }
+  openSolo(tab, main = false) { return openSolo(this, tab, main); }
+  redrawSolo() {
+    for (const leaf of this.app.workspace.getLeavesOfType(SOLO_VIEW)) if (leaf.view instanceof SoloView) leaf.view.renderIfTab();
+  }
+  changeSolo(fn) {
+    return this.change((state) => {
+      state.solo ||= defaultSolo();
+      const result = fn(state.solo);
+      validateSolo(state.solo);
+      return result;
+    }, false, true);
+  }
+  change(fn, rebuildNotes = false, onlySolo = false) {
     const next = this.pending.then(async () => {
       assert(!this.readOnly, 'Dados do Basic RPG em modo de segurança. Nada foi sobrescrito.');
       const draft = copy(this.state);
@@ -282,7 +316,7 @@ class BasicRPG extends Plugin {
       await this.saveData(draft);
       this.state = draft;
       if (rebuildNotes) await this.noteIndex.rebuild();
-      this.redraw();
+      if (onlySolo) this.redrawSolo(); else this.redraw();
       return value;
     });
     this.pending = next.catch(() => {});

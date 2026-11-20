@@ -1,6 +1,6 @@
 # Basic RPG
 
-Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto companheiro do Basic, mas tem instalação e dados próprios. Funciona sem conta, serviço externo ou outro plugin.
+Calendário de fantasia, cronologia de campanha e ferramentas para RPG solo no Obsidian. É um projeto companheiro do Basic, mas tem instalação e dados próprios. Funciona sem conta, serviço externo ou outro plugin.
 
 ## O que dá para fazer
 
@@ -19,6 +19,7 @@ Calendário de fantasia e cronologia de campanha para Obsidian. É um projeto co
 - Criar recorrências por intervalo e condições, com prévia de ocorrências e categorias padrão.
 - Gerar eventos das notas, inserir a data do mundo e mostrar calendário, agenda ou clima em blocos Markdown.
 - Importar calendários do Fantasy Calendar e do Calendarium, exportar JSON compatível com o Fantasy Calendar e salvar backups nativos ou um resumo para jogadores.
+- Jogar com dados e baralhos personalizados, oráculos, geradores de ideias, tabelas e fichas interativas no Markdown.
 
 ## Primeiro uso
 
@@ -29,6 +30,53 @@ O preset **Arkanis** vem pronto, começando em **1 de Arkanis, ano 1, às 00:00*
 Para criar outro calendário, use **Novo calendário** na barra ou **Configurações → Basic RPG → Novo calendário**. O editor visual tem seções para semana e relógio, meses, dias especiais, luas, sóis, estações, clima e eras. Você pode dar uma semana própria a um mês, fazer um mês aparecer só em alguns anos ou inserir dias especiais em qualquer posição. Dias intercalados não consomem a semana. Para um dia que ocorre a cada quatro anos, exceto nos múltiplos de 100 e restaurado nos múltiplos de 400, informe **4**, **100** e **400** na regra. A contagem começa no ano 1.
 
 Para um evento de sessão, selecione a data e clique em **Novo evento**. Escolha uma nota existente para abrir a sessão diretamente pelo calendário. Eventos marcados como reservados somem da visualização padrão, mas continuam no cofre e no backup. Isso é um filtro de interface, não uma permissão de acesso.
+
+## Kit solo
+
+Abra **Basic RPG · Abrir kit solo** na paleta de comandos ou toque no ícone de dados na faixa lateral. Também há um atalho no menu **Calendários**. Use **Abrir kit solo na área principal** para ganhar espaço no celular.
+
+### Dados
+
+- A rolagem rápida inclui d4, d6, d8, d10, d12, d20, d100 e dF. Informe a quantidade ou digite uma expressão como `2d20+3/a` para vantagem, `2d20/d` para desvantagem ou `4dF` para Fate/Fudge. Separe as rolagens em dois grupos e veja os totais de cada grupo.
+- Em **Novo dado**, escolha de **2 a 1.000 faces**. Cada face pode ser um número, texto, emoji/símbolo ou uma imagem. Toque no ícone de imagem para pegar um arquivo do cofre. Faces repetidas aumentam a chance de aquele resultado sair. Uma rolagem só mostra soma se todas as faces sorteadas forem numéricas.
+- Você pode copiar os resultados ou inseri-los na nota. Imagens do cofre aparecem sem internet. Para usar URLs HTTP(S), ative **Imagens por URL** nas preferências do Kit solo.
+
+### Baralhos
+
+O kit vem com um baralho de 52 cartas, com dois coringas opcionais, e um tarô de **22 Arcanos Maiores** com símbolos e palavras-chave em português. Escolha quantas cartas comprar, devolva uma carta ao monte ou reembaralhe a seção. O plugin guarda as compras entre sessões e não repõe cartas até você devolvê-las. As orientações são independentes do nome da carta.
+
+**Novo baralho** abre o editor de cartas. Você pode adicionar frente e verso, descrição, tipo, elemento, custo, nível, ataque e defesa. Organize cartas em **Principal**, **Extra** e **Reserva**. Cada seção tem seu próprio monte. Para imprimir ou revisar a composição, abra **Ver catálogo**. Os baralhos personalizados podem ser exportados em JSON. O JSON guarda os caminhos das imagens, não os arquivos de imagem em si.
+
+Também é possível ler baralhos no formato de pastas do Solo RPG Toolkit. Dentro de `Decks`, use uma subpasta por baralho. Coloque nela as imagens ou uma nota com as URLs. Uma linha `flip` permite inversão, `flip2` permite 90° à direita, `flip3` permite 90° para os dois lados e `flip4` permite as quatro direções. O caminho `Decks` pode ser alterado nas preferências.
+
+#### Migrar do Obsidian Deck Builder
+
+1. Deixe no cofre as notas com os blocos antigos `DeckCard` e `FullDeck`, junto às imagens.
+2. Vá a **Kit solo → Baralhos → Novo baralho → Importar cartas → Buscar notas do Deck Builder**.
+3. Escolha uma lista **FullDeck** e importe, ou adicione o catálogo inteiro. A migração preserva cópias repetidas, seções, atributos e a descrição. Se a configuração do Deck Builder ainda estiver no cofre, também traz os ícones de mana e elemento. Cartas referenciadas mas não encontradas aparecem num aviso.
+4. Salve o novo baralho. As notas antigas e os anexos não são reescritos. Para exibir uma carta nova numa nota use um bloco `brpg-card` com os campos do `DeckCard`. Um bloco `brpg-deck` aceita o nome de um baralho salvo ou uma lista no estilo `FullDeck`.
+
+### Oráculos e tabelas
+
+Os oráculos incluem **Padrão**, **Padrão II**, **FU**, **MUNE** e **Mythic**. Customize a chance, o modificador ou o fator de caos conforme o sistema. Resultados e eventos aparecem em português por padrão. Perguntas e respostas ficam no histórico da aba durante a sessão.
+
+Em **Tabelas**, gere ganchos, personagens e lugares ou use notas suas na pasta `Tables`. Cada linha da nota é uma opção. Um sufixo `^3` triplica o peso em comparação a uma entrada sem peso. Um sufixo `2d` no nome do arquivo ou no título da seção concentra as escolhas no meio da lista. Propriedades YAML com texto podem ser modelos ponderados. Use `{Seção}`, `{Nota/Seção}`, `{/Caminho/Nota}`, `{Pasta/*}` para um título, `{Pasta/!}` para conteúdo, `{A|B}` para alternativas ou `{<nome}` para repetir um sorteio. Dicionários internos aceitam chaves como `{noun}`, `{verb}`, `{adjective}`, `{aspect}` ou equivalentes em português. Sufixos de pasta `.` e `_` ocultam suas notas da seleção sem impedir referências. A propriedade `mode: cutup` sorteia trechos da nota em vez de linhas. Em **Modelo rápido**, monte uma frase sem criar uma nota.
+
+### Ferramentas nas notas
+
+Ative **Dados, contadores e relógios nas notas** nas preferências do Kit solo. Use trechos de código inline com um par de crases para rolagens e fichas. Na **Prévia ao vivo**, selecione o trecho para editar sua sintaxe. No modo **Leitura**, o contador só é editável quando o Obsidian consegue confirmar sua posição no arquivo.
+
+| Sintaxe inline | Resultado |
+| --- | --- |
+| `4` | Contador com −/+ |
+| `2/6`, `limit: 2/6` | Progresso padrão ou contador com limite |
+| `boxes: 2/6` | Seis caixas marcáveis |
+| `clock: 2/6`, `smclock: 2/6`, `lgclock: 2/6` | Relógio, com tamanhos opcionais |
+| `2d20/a+2,red` | Rolagem clicável com vantagem, modificador e cor |
+| `dado: Nome do dado` | Rola o dado personalizado do Kit solo |
+| Código inline só com espaços | Espaçamento de ficha |
+
+O Kit solo adapta recursos do [Solo RPG Toolkit](https://github.com/alexkurowski/solo-toolkit), de Alex Kurowski. A licença MIT da parte adaptada está em [THIRD-PARTY-SOLO-LICENSE](THIRD-PARTY-SOLO-LICENSE).
 
 ## Relógio em tempo real
 

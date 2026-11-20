@@ -124,6 +124,7 @@ class CalendarView extends ItemView {
       (v) => this.plugin.attempt(() => this.plugin.setActive(v)), 'Calendário ativo');
     button(actions, 'Editar calendário', () => new CalendarEditor(this.plugin, c).open(), { icon: 'settings', iconOnly: true });
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
+    button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     const world = el(header, 'div', 'brpg-world-status');
     const readout = el(world, 'div', 'brpg-world-readout');
     const live = clockMode(c) === 'real';

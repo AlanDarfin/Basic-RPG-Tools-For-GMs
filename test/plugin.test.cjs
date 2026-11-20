@@ -17,7 +17,10 @@ class Element {
         this.className = items.join(' ');
       },
     }; }
-  appendChild(c) { this.children.push(c); c.parentElement = this; return c; }
+  appendChild(c) {
+    if (c.parentElement) c.parentElement.children = c.parentElement.children.filter(x => x !== c);
+    this.children.push(c); c.parentElement = this; return c;
+  }
   replaceChildren() { this.children = []; this.text = ''; }
   setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener(name, fn) { this.listeners[name] ||= []; this.listeners[name].push(fn); }
@@ -34,7 +37,15 @@ class Element {
   get textContent() { return this.text + this.children.map((x) => x.textContent).join(''); }
   all(match) { return this.children.flatMap((x) => [...(match(x) ? [x] : []), ...x.all(match)]); }
   querySelector(className) { return this.all((x) => x.className.split(' ').includes(className.slice(1)))[0] || null; }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) { return this.all((el) => el.tag === selector); }
+  closest(tag) {
+    for (let node = this; node; node = node.parentElement) if (node.tag === tag) return node;
+    return null;
+  }
+  replaceWith(x) {
+    const parent = this.parentElement;
+    parent.children[parent.children.indexOf(this)] = x; x.parentElement = parent; this.parentElement = null;
+  }
 }
 function mock(startingState = null) {
   const document = {
@@ -43,7 +54,7 @@ function mock(startingState = null) {
   };
   const notices = [], app = {}, files = new Map(), leaves = [];
   const factories = new Map(), processors = new Map(), cacheListeners = new Map();
-  let modal, settings, rename, opened, rejectSave = false;
+  let modal, settings, rename, opened, inline, rejectSave = false;
   function workLeaf(main) {
     const item = { getRoot: () => main ? app.workspace.rootSplit : {},
       setViewState: async (state) => { item.type = state.type; item.view = factories.get(state.type)(item); await item.view.onOpen(); },
@@ -58,7 +69,9 @@ function mock(startingState = null) {
   class TFile { constructor(name) { this.path = name; this.basename = name.split('/').at(-1).replace(/\.md$/, ''); } }
   app.metadataCache = { on: (key, fn) => { cacheListeners.set(key, fn); return {}; }, getFileCache: (f) => ({ frontmatter: f.fm }) };
   app.vault = { getAbstractFileByPath: (name) => files.get(name), create: async (p, c) => { files.set(p, new TFile(p)); files.get(p).body = c; },
-    on: (_, fn) => { rename = fn; return {}; }, getMarkdownFiles: () => [...files.values()], cachedRead: async (f) => f.body || '',
+    on: (_, fn) => { rename = fn; return {}; }, getMarkdownFiles: () => [...files.values()].filter(f => /\.md$/.test(f.path)),
+    getFiles: () => [...files.values()], getResourcePath: f => 'app://cofre/' + f.path, cachedRead: async (f) => f.body || '',
+    process: async (f, callback) => { f.body = callback(f.body); return f.body; },
   };
   class Plugin {
     constructor() { this.app = app; this.commands = []; }
@@ -70,6 +83,7 @@ function mock(startingState = null) {
     addCommand(cmd) { this.commands.push(cmd); }
     registerEvent() {}
     registerMarkdownCodeBlockProcessor(name, fn) { processors.set(name, fn); }
+    registerMarkdownPostProcessor(fn) { inline = fn; }
   }
   class Modal {
     constructor() { this.app = app; this.modalEl = document.createElement('div'); this.contentEl = document.createElement('div'); }
@@ -84,7 +98,7 @@ function mock(startingState = null) {
   };
   const mod = { exports: null };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
-    { module: mod, require: (id) => { assert.equal(id, 'obsidian'); return obsidian; } });
+    { module: mod, URL, require: (id) => { assert.equal(id, 'obsidian'); return obsidian; } });
   return { p: new mod.exports(), files, TFile, leaves, notices, opened: () => opened, modal: () => modal,
     settings: () => settings,
     noteChange: (file) => cacheListeners.get('changed')(file, file.body || '', { frontmatter: file.fm }),
@@ -94,6 +108,12 @@ function mock(startingState = null) {
       let view;
       processors.get(name)(source, host, { addChild(child) { view = child; child.onload(); } });
       return { host, view };
+    },
+    renderInline: (file, contents) => {
+      const host = document.createElement('p');
+      for (const content of contents) { const c = document.createElement('code'); c.textContent = content; host.appendChild(c); }
+      inline(host, { sourcePath: file.path, getSectionInfo: () => ({ text: file.body, lineStart: 1, lineEnd: 1 }) });
+      return host;
     },
     rename: (f, p) => rename(f, p), stopSaves: () => { rejectSave = true; } };
 }
@@ -107,7 +127,8 @@ async function type(root, label, value) { const x = labelInput(root, label); x.v
 test('ciclo de vida abre calendário, navega sem mudar data, avança e grava', async () => {
   const { p, leaves } = mock();
   await p.onload();
-  assert.equal(p.commands.length, 13);
+  assert.ok(p.commands.some((c) => c.id === 'open-calendar'));
+  assert.ok(p.commands.some((c) => c.id === 'open-solo'));
   await p.open(false);
   const view = leaves[0].view, root = view.contentEl;
   assert.match(root.textContent, /1 de Arkanis, ano 1 · 00:00/);
@@ -666,4 +687,96 @@ test('sóis e luas mostram apenas o nome nos resumos e mantêm detalhes independ
   await moon.children[0].click();
   assert.equal(moon.open, false);
   assert.equal(sun.open, true);
+});
+
+test('kit solo cria dado com imagem e preserva o calendário ao gravar e reabrir', async () => {
+  const { p, modal, files, TFile } = mock();
+  await p.onload();
+  files.set('Arte/Explosão.png', new TFile('Arte/Explosão.png'));
+  const calendar = plain(p.state.calendars);
+  const view = await p.openSolo('dice', true);
+  const root = view.contentEl;
+  await pickButton(root, 'Novo dado').click();
+  const editor = modal(), form = editor.contentEl;
+  await type(form, 'Nome do dado', 'Dado de triunfo');
+  await type(form, 'Número de faces', '2');
+  await pickButton(form, 'Aplicar quantidade').click();
+  for (const i of [1,2]) {
+    const select = labelInput(form, 'Tipo da face ' + i);
+    select.value = 'image'; await select.emit('change');
+    const labels = form.all(el => el.tag === 'label' && el.children[0]?.textContent === 'Rótulo da imagem (opcional)');
+    labels[i - 1].children[1].value = 'Explosão'; await labels[i - 1].children[1].emit('input');
+    const imgs = form.all(el => el.tag === 'label' && el.children[0]?.textContent === 'Imagem da face');
+    imgs[i - 1].children[1].value = 'Arte/Explosão.png'; await imgs[i - 1].children[1].emit('input');
+  }
+  await pickButton(form, 'Salvar dado').click();
+  assert.equal(p.solo().dice[0].faces[1].image, 'Arte/Explosão.png');
+  assert.deepEqual(p.saved.calendars, calendar);
+  await pickButton(root, 'Rolar dado personalizado').click();
+  assert.match(root.textContent, /1 × Dado de triunfo/);
+  assert.ok(root.all(x => x.tag === 'img').some(img => img.src === 'app://cofre/Arte/Explosão.png'));
+  const reopened = mock(p.saved);
+  await reopened.p.onload();
+  assert.equal(reopened.p.solo().dice[0].name, 'Dado de triunfo');
+});
+test('kit solo importa o Deck Builder e persiste compra independente por seção', async () => {
+  const { p, modal, files, TFile } = mock();
+  await p.onload();
+  const f = new TFile('RPG/Meu baralho.md');
+  f.body = '\x60\x60\x60DeckCard\nnome: Guardião\nataque: 2\n\x60\x60\x60\n\x60\x60\x60FullDeck\n# Main\nGuardião\nGuardião\n# Side\nGuardião\n\x60\x60\x60';
+  files.set(f.path,f);
+  const root = (await p.openSolo('deck')).contentEl;
+  await pickButton(root,'Novo baralho').click();
+  const form = modal().contentEl;
+  await pickButton(form, 'Buscar notas do Deck Builder').click();
+  await pickButton(form, 'Importar lista').click();
+  await pickButton(form, 'Salvar baralho').click();
+  assert.equal(p.solo().decks[0].name, 'Meu baralho');
+  assert.equal(p.solo().decks[0].cards.length, 3);
+  await pickButton(root, 'Comprar carta').click();
+  assert.match(root.textContent, /1 no monte/);
+  assert.match(root.textContent, /ATQ 2/);
+  const id = p.solo().decks[0].id;
+  const reopened = mock(p.saved);
+  await reopened.p.onload();
+  const view = await reopened.p.openSolo('deck');
+  view.deckId = id; view.section = 'main'; view.render();
+  assert.match(view.contentEl.textContent, /1 compradas/);
+  const section = labelInput(view.contentEl, 'Seção do baralho');
+  section.value = 'side'; await section.emit('change');
+  assert.match(view.contentEl.textContent, /0 compradas/);
+  assert.match(view.contentEl.textContent, /1 no monte/);
+});
+test('kit solo lista os cinco oráculos e gera conteúdo de tabelas do cofre', async () => {
+  const { p, files, TFile } = mock();
+  await p.onload();
+  const f = new TFile('Tables/Encontros.md'); f.body = 'Um dragão atravessa a estrada.';
+  files.set(f.path,f);
+  const view = await p.openSolo('oracle');
+  const root = view.contentEl;
+  assert.ok(labelInput(root,'Sistema').children.some(o => o.textContent === 'Mythic'));
+  await type(root,'Pergunta (opcional)','O castelo está aberto?');
+  await pickButton(root,'Consultar oráculo').click();
+  assert.match(root.textContent,/O castelo está aberto\?/);
+  view.show('tables');
+  await pickButton(root,'Atualizar tabelas').click();
+  await pickButton(root,'Sortear da tabela').click();
+  assert.match(root.textContent,/Um dragão atravessa a estrada/);
+  await pickButton(root,'Personagem').click();
+  assert.ok(pickButton(root,'Sortear novamente · Ocupação'));
+});
+test('inline em leitura salva o contador e o dado na posição certa, sem alterar outro trecho', async () => {
+  const { p, files, TFile, renderInline } = mock();
+  await p.onload();
+  await p.changeSolo(s => { s.settings.inline = true; });
+  const f = new TFile('Ficha.md'), ticks = String.fromCharCode(96);
+  f.body = '# Ficha\nA ' + ticks + '2' + ticks + ' B ' + ticks + '2' + ticks + ' C ' + ticks + '2d6/a-1,show' + ticks + '\nA ' + ticks + '2' + ticks;
+  files.set(f.path, f);
+  const initial = renderInline(f, ['2','2','2d6/a-1,show']);
+  await initial.all(x => x.attributes['aria-label'] === 'Aumentar')[1].click();
+  assert.match(f.body, /A `2` B `3`/);
+  const fresh = renderInline(f, ['2','3','2d6/a-1,show']);
+  await pickButton(fresh, '2d6-1/a').click();
+  assert.match(f.body, /2d6\/a-1,show = \d, \d \(\d\)/);
+  assert.ok(f.body.endsWith('A ' + ticks + '2' + ticks));
 });
