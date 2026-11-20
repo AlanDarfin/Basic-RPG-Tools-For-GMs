@@ -434,6 +434,7 @@ class SoloView extends ItemView {
     el(identity, 'h2', 'brpg-heading', 'Kit solo');
     const actions = row(topline);
     button(actions, 'Abrir calendário', this.run(() => this.plugin.open(true)), { icon: 'calendar-days', iconOnly: true });
+    button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords', iconOnly: true });
     button(actions, 'Configurar kit solo', () => new SoloSettings(this).open(), { icon: 'settings', iconOnly: true });
     const tabBar = el(root, 'nav', 'brpg-solo-tabs'); tabBar.setAttribute('aria-label', 'Ferramentas solo');
     for (const [id, name, icon] of TABS) {

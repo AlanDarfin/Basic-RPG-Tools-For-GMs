@@ -18,6 +18,8 @@ const { defaultSolo, validateSolo } = require('./solo');
 const { SOLO_VIEW, TABS, SoloView, openSolo } = require('./solo-ui');
 const { registerSoloInline } = require('./solo-inline');
 const { renameImages } = require('./solo-vault');
+const { blankMesa, checkMesa } = require('./mesa');
+const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = require('./mesa-view');
 
 class Settings extends PluginSettingTab {
   constructor(plugin) { super(plugin.app, plugin); this.plugin = plugin; }
@@ -28,9 +30,10 @@ class Settings extends PluginSettingTab {
     el(area, 'p', 'brpg-eyebrow', 'FERRAMENTAS DE CAMPANHA');
     el(area, 'h2', 'brpg-heading', 'Calendários');
     const kit = el(area, 'section', 'brpg-section brpg-settings-current');
-    el(kit, 'h3', '', 'Kit solo');
-    info(kit, 'Dados, baralhos, oráculos e tabelas para suas sessões.');
+    el(kit, 'h3', '', 'Ferramentas de jogo');
+    info(kit, 'Prepare campanhas, acompanhe encontros ou abra dados, baralhos, oráculos e tabelas.');
     button(kit, 'Abrir kit solo', () => p.attempt(() => p.openSolo(null, true)), { icon: 'dices' });
+    button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
@@ -113,6 +116,8 @@ class BasicRPG extends Plugin {
     this.noteIndex = new NoteIndex(this);
     this.embeds = new Set();
     this.defaultKit = defaultSolo();
+    this.defaultMesa = blankMesa();
+    this.mesaEmbeds = new Set();
     this.notified = new Map();
     this.readOnly = false;
     let saveMigration = false;
@@ -138,6 +143,7 @@ class BasicRPG extends Plugin {
           validateSolo(saved.solo);
           saved.solo.settings = { ...this.defaultKit.settings, ...saved.solo.settings };
         }
+        if (saved.mesa !== undefined) checkMesa(saved.mesa);
         this.state = saved;
       }
     } catch {
@@ -163,6 +169,11 @@ class BasicRPG extends Plugin {
     this.addCommand({ id: 'open-solo', name: 'Abrir kit solo', callback: () => this.attempt(() => this.openSolo()) });
     this.addCommand({ id: 'open-solo-main', name: 'Abrir kit solo na área principal', callback: () => this.attempt(() => this.openSolo(null, true)) });
     for (const [id, name] of TABS) this.addCommand({ id: 'solo-' + id, name: 'Kit solo · ' + name, callback: () => this.attempt(() => this.openSolo(id)) });
+    this.registerView(MESA_VIEW, leaf => new MesaView(leaf, this));
+    this.addRibbonIcon('swords', 'Basic RPG · Mesa', () => this.attempt(() => this.openMesa()));
+    this.addCommand({ id:'open-mesa', name:'Abrir Mesa', callback:() => this.attempt(() => this.openMesa()) });
+    this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
+    for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
@@ -194,6 +205,7 @@ class BasicRPG extends Plugin {
     }) });
     registerEmbeds(this);
     registerSoloInline(this);
+    registerMesaEmbeds(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,
@@ -214,6 +226,8 @@ class BasicRPG extends Plugin {
         this.attempt(async () => { await this.noteIndex.rebuild(); this.redraw(); });
       }
       this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+        if (this.state.mesa && renameMesaNotes(copy(this.state.mesa), oldPath, file.path))
+          this.attempt(() => this.changeMesa(m => renameMesaNotes(m, oldPath, file.path)));
         if (this.state.solo && renameImages(copy(this.state.solo), oldPath, file.path))
           this.attempt(() => this.changeSolo((solo) => renameImages(solo, oldPath, file.path)));
         if (cache && this.state.calendars.some((c) => c.noteSources?.enabled))
@@ -293,6 +307,7 @@ class BasicRPG extends Plugin {
   redraw() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) if (leaf.view instanceof CalendarView) leaf.view.render();
     for (const view of this.embeds) view.draw();
+    this.redrawMesa();
   }
   solo() { return this.state.solo || this.defaultKit; }
   openSolo(tab, main = false) { return openSolo(this, tab, main); }
@@ -305,9 +320,23 @@ class BasicRPG extends Plugin {
       const result = fn(state.solo);
       validateSolo(state.solo);
       return result;
-    }, false, true);
+    }, false, 'solo');
   }
-  change(fn, rebuildNotes = false, onlySolo = false) {
+  mesa() { return this.state.mesa || this.defaultMesa; }
+  openMesa(tab, main = true) { return openMesa(this, tab, main); }
+  redrawMesa() {
+    for (const leaf of this.app.workspace.getLeavesOfType(MESA_VIEW)) if (leaf.view instanceof MesaView) leaf.view.render();
+    for (const view of this.mesaEmbeds) view.render();
+  }
+  changeMesa(fn) {
+    return this.change(state => {
+      state.mesa ||= blankMesa();
+      const result = fn(state.mesa);
+      checkMesa(state.mesa);
+      return result;
+    }, false, 'mesa');
+  }
+  change(fn, rebuildNotes = false, view = '') {
     const next = this.pending.then(async () => {
       assert(!this.readOnly, 'Dados do Basic RPG em modo de segurança. Nada foi sobrescrito.');
       const draft = copy(this.state);
@@ -316,7 +345,9 @@ class BasicRPG extends Plugin {
       await this.saveData(draft);
       this.state = draft;
       if (rebuildNotes) await this.noteIndex.rebuild();
-      if (onlySolo) this.redrawSolo(); else this.redraw();
+      if (view === 'solo') this.redrawSolo();
+      else if (view === 'mesa') this.redrawMesa();
+      else this.redraw();
       return value;
     });
     this.pending = next.catch(() => {});

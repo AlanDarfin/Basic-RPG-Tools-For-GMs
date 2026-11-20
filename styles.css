@@ -728,3 +728,43 @@
 }
 .brpg-solo-inline button.brpg-solo-inline-dice{min-height:var(--brpg-solo-die-size,24px)}
 .brpg-solo-inline .brpg-solo-box.is-checked::after{content:'✓';color:var(--text-normal);font-size:10px}
+
+/* Mesa */
+.brpg-mesa, .brpg-mesa-content, .brpg-mesa-panel, .brpg-mesa-editor, .brpg-mesa-sheet { display:grid; min-width:0; gap:8px; align-content:start; }
+.brpg-mesa-panel, .brpg-mesa-sheet, .brpg-mesa-scope {
+  padding:9px; border:1px solid var(--brpg-border); border-radius:var(--brpg-radius); background:var(--brpg-surface);
+}
+.brpg-mesa-head, .brpg-mesa-sheet-head { display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; }
+.brpg-mesa-tabs { margin:0; }
+.brpg-mesa .brpg-mesa-scope .brpg-field { margin:0; }
+.brpg-mesa .brpg-hint, .brpg-mesa-embed .brpg-hint { margin:0; }
+.brpg-mesa-prose { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.9em; }
+.brpg-mesa-list, .brpg-mesa-actions, .brpg-mesa-edit-list { display:grid; gap:6px; min-width:0; }
+.brpg-mesa-card, .brpg-mesa-edit-card {
+  min-width:0; display:grid; gap:5px; padding:7px; border:1px solid var(--brpg-border); border-radius:7px;
+  background:color-mix(in srgb,var(--brpg-surface) 92%,var(--brpg-ink)); overflow-wrap:anywhere;
+}
+.brpg-mesa-card.is-current { border-color:var(--brpg-accent); background:var(--brpg-active); }
+.brpg-mesa-details[open] { display:grid; gap:5px; }
+.brpg-mesa-details[open] > .brpg-summary { margin-bottom:3px; }
+.brpg-mesa-details .brpg-mesa-prose { padding:3px 5px; }
+.brpg-mesa-actions:empty, .brpg-mesa-embed .brpg-metadata:empty, .brpg-mesa-roll:empty, .brpg-mesa-error:empty, .brpg-mesa-row:empty { display:none; }
+.brpg-mesa-row .brpg-field { flex:1 1 110px; margin:0; }
+.brpg-mesa-modal { max-width:min(650px,97vw); }
+.brpg-mesa-modal .brpg-field { margin:0; }
+.brpg-mesa-check { min-height:32px; display:flex; align-items:center; gap:6px; font-size:.88em; }
+.brpg-mesa-check > input { flex:none; }
+.brpg-mesa-portrait { max-width:38%; width:88px; height:88px; object-fit:contain; border-radius:7px; }
+.brpg-mesa-error { color:var(--text-error); overflow-wrap:anywhere; }
+.brpg-mesa-roll, .brpg-mesa-turn { padding:6px; background:var(--brpg-active); border-radius:7px; color:var(--brpg-ink); font-weight:650; overflow-wrap:anywhere; }
+.brpg-mesa-turn, .brpg-mesa-participant { display:flex; align-items:center; flex-wrap:wrap; gap:5px; }
+.brpg-mesa-participant { justify-content:space-between; }
+.brpg-mesa-participant > div { min-width:0; display:grid; }
+.brpg-mesa-meter { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; align-items:center; gap:5px; font-variant-numeric:tabular-nums; }
+.brpg-mesa-meter > strong { text-align:center; }
+.brpg-mesa-meter > span { overflow-wrap:anywhere; }
+.is-mobile .brpg.brpg-mesa { padding-bottom:max(25px,env(safe-area-inset-bottom)); }
+@container brpg (max-width:320px) {
+  .brpg .brpg-mesa-tabs .brpg-button { flex-direction:row; padding-inline:3px; gap:3px; font-size:.75em; }
+  .brpg-mesa-tabs .brpg-icon, .brpg-mesa-tabs .brpg-icon svg { width:12px; height:12px; }
+}

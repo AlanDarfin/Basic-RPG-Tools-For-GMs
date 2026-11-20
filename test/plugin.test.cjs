@@ -839,3 +839,55 @@ test('atalho de importação abre o Deck Builder sem esconder as opções de imp
   assert.equal(section.parentElement.open, true);
   assert.ok(pickButton(form, 'Buscar notas do Deck Builder'));
 });
+
+test('Mesa liga registro ao calendário e salva ficha com recursos de Arkanis', async () => {
+  const { p, modal }=mock();
+  await p.onload();
+  const view=await p.openMesa('campaigns');
+  const root=view.contentEl, snapshot=plain(p.state.calendars);
+  await pickButton(root,'Nova campanha').click();
+  let form=modal().contentEl;
+  await type(form,'Nome da campanha','Crônicas');
+  const calendar=labelInput(form,'Calendário do mundo');
+  calendar.value=p.active().id; await calendar.emit('change');
+  await pickButton(form,'Salvar').click();
+  await pickButton(root,'Novo registro').click();
+  form=modal().contentEl;
+  await type(form,'Nome do registro','Primeira sessão');
+  await pickButton(form,'Registrar data atual do mundo').click();
+  await pickButton(form,'Salvar').click();
+  assert.match(root.textContent,/Sessão · Primeira sessão/);
+  assert.equal(p.mesa().entries[0].date.date.day,1);
+  assert.deepEqual(p.saved.calendars,snapshot);
+  view.show('sheets');
+  await pickButton(root,'Modelo Arkanis').click();
+  form=modal().contentEl;
+  await type(form,'Nome da ficha','Rhana');
+  await pickButton(form,'Salvar').click();
+  await pickButton(root,'Abrir ficha').click();
+  assert.match(modal().contentEl.textContent,/Rhana.*Vida 10\/10.*Estresse 0\/5/);
+});
+
+test('Mesa inicia encontro da nota, retoma rodada e não altera a ficha de origem', async () => {
+  const { p, renderBlock, leaves }=mock();
+  await p.onload();
+  const before={id:'sheet-npc',campaign:'',name:'Guarda',kind:'npc',type:'',note:'',description:'',image:'',initiative:'17',
+    attributes:[{name:'CA',value:'14'}],resources:[{name:'Vida',max:4,value:4}],actions:[]};
+  await p.changeMesa(m=>m.sheets.push(before));
+  const sheet=renderBlock('brpg-ficha',JSON.stringify({ ref:'Guarda' }));
+  assert.match(sheet.host.textContent,/Guarda.*CA 14.*Vida 4\/4/);
+  const encounter=renderBlock('brpg-encontro',JSON.stringify({name:'A ponte',creatures:[{sheet:'Guarda',count:2}]}));
+  await pickButton(encounter.host,'Iniciar encontro').click();
+  assert.match(leaves.at(-1).view.contentEl.textContent,/Rodada 1.*Vez de Guarda 1/);
+  const root=leaves.at(-1).view.contentEl;
+  await pickButton(root,'Reduzir Vida').click();
+  await pickButton(root,'Próximo turno').click();
+  await pickButton(root,'Próximo turno').click();
+  const resumed=mock(p.saved);
+  await resumed.p.onload();
+  const next=(await resumed.p.openMesa('encounters')).contentEl;
+  assert.match(next.textContent,/Rodada 2.*Guarda 1.*3\/4.*Guarda 2.*4\/4/);
+  assert.equal(resumed.p.mesa().sheets[0].resources[0].value,4);
+  const another=resumed.renderBlock('brpg-encontro',JSON.stringify({name:'Outro',creatures:['Avulso']}));
+  assert.equal(pickButton(another.host,'Iniciar encontro').disabled,true);
+});

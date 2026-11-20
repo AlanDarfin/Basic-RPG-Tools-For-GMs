@@ -78,6 +78,44 @@ Ative **Dados, contadores e relógios nas notas** nas preferências do Kit solo.
 
 O Kit solo adapta recursos do [Solo RPG Toolkit](https://github.com/alexkurowski/solo-toolkit), de Alex Kurowski. A licença MIT da parte adaptada está em [THIRD-PARTY-SOLO-LICENSE](THIRD-PARTY-SOLO-LICENSE).
 
+## Mesa de campanha
+
+Abra **Basic RPG → Abrir Mesa** na paleta de comandos ou use o ícone de espadas. A Mesa tem três abas e não precisa de nenhum outro plugin. A opção **Abrir Mesa na barra lateral** deixa uma nota aberta ao lado.
+
+- **Campanhas** organiza aventuras, capítulos, sessões, cenas, NPCs, facções, locais, pistas, objetos, eventos e subtramas. Um registro pode apontar para uma nota e para outros registros. Vincule um calendário à campanha para registrar a data atual do mundo na sessão e voltar a esse dia depois. Criar um registro não cria nem altera um evento no calendário.
+- **Fichas** reúne personagens de jogador, NPCs e criaturas. Crie atributos, recursos com limites, ações, traços e reações. Uma ação pode rolar expressões como `1d20+3`. Use **Modelo Arkanis** para começar com Vida, Esforço, Impulso e Estresse. Os valores preenchidos no modelo são exemplos editáveis. Fichas podem ser compartilhadas ou exclusivas de uma campanha.
+- **Encontros** aceita fichas do bestiário ou participantes avulsos. Use quantidades fixas ou dados como `1d4`, dê apelidos aos participantes e defina as iniciativas ou role-as ao iniciar. Empates mantêm a ordem de entrada. Cada participante recebe sua própria cópia dos recursos, sem alterar a ficha-base. Um encontro em andamento por cofre é salvo junto com rodada, turno, ordem, recursos e condições.
+
+### Blocos nas notas
+
+Os nomes dos blocos são próprios do Basic RPG, por isso não conflitam com `statblock` ou `encounter` de outros plugins.
+
+````md
+```brpg-ficha
+name: Guarda da Ponte
+kind: npc
+hp: 12
+ac: 14
+initiative: 1d20+2
+actions:
+  - name: Vigiar passagem
+    roll: 1d20+3
+    desc: Observa quem cruza a ponte.
+```
+
+```brpg-encontro
+name: Patrulha na ponte
+creatures:
+  - sheet: Guarda da Ponte
+    count: 1d4
+    side: enemies
+```
+````
+
+No primeiro bloco, **Importar ficha** na aba Fichas permite colar o YAML ou JSON na biblioteca. Uma ficha exibida apenas em um bloco inline não é cadastrada automaticamente. O exemplo de encontro usa o nome de uma ficha já cadastrada. Também é possível usar `ref: Nome do encontro` ou `ref: Nome da ficha` nos respectivos blocos. Se houver nomes repetidos, use o ID exibido na edição.
+
+A importação de fichas reconhece um subconjunto dos campos do Fantasy Statblocks, incluindo `name`, `hp`, `ac`, `stats`, `actions`, `traits` e `reactions`. A Mesa inicial não inclui migração completa de campanhas do RPG Manager, layouts do Fantasy Statblocks ou o bestiário SRD. As três referências são [RPG Manager](https://github.com/carlonicora/obsidian-rpg-manager), [Initiative Tracker](https://github.com/obsidian-ttrpg-community/initiative-tracker) e [Fantasy Statblocks](https://github.com/obsidian-ttrpg-community/fantasy-statblocks).
+
 ## Relógio em tempo real
 
 Ao abrir pela primeira vez, ou ao atualizar um calendário que ainda não tem uma configuração de relógio, o Basic RPG ativa **Tempo real** usando a data e a hora que já estavam salvas. Por padrão, **24 horas reais equivalem a um dia completo do mundo**. Altere a proporção em **Editar calendário → Geral → Relógio do mundo**. Nessa mesma seção, você pode fazer um calendário acompanhar outro com uma diferença em dias. O calendário vinculado avança junto à referência e preserva a data ao ser desvinculado.

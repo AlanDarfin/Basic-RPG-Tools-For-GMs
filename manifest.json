@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "minAppVersion": "1.7.2",
-  "description": "Calendário de fantasia, dados e baralhos personalizados, oráculos e tabelas para RPG.",
+  "description": "Calendário de fantasia, kit solo, fichas e encontros para campanhas de RPG.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false
