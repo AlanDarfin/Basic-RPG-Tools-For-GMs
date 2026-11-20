@@ -14,6 +14,7 @@ const { registerEmbeds } = require('./embeds');
 const { observatory } = require('./observatory');
 const { weatherDay } = require('./weather');
 const { fantasyExport, gregorian } = require('./interchange');
+const { CalendarTemplatesModal } = require('./templates-ui');
 const { defaultSolo, validateSolo } = require('./solo');
 const { SOLO_VIEW, TABS, SoloView, openSolo } = require('./solo-ui');
 const { registerSoloInline } = require('./solo-inline');
@@ -68,6 +69,7 @@ class Settings extends PluginSettingTab {
     el(importBox, 'h3', '', 'Biblioteca e backup');
     const buttons = el(importBox, 'div', 'brpg-toolbar');
     button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
+    button(buttons, 'Galeria de modelos', () => p.openCalendarTemplates(), { icon: 'layout-template' });
     button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
       const preset = copy(arkanis); ensureWeather(preset); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
@@ -178,6 +180,8 @@ class BasicRPG extends Plugin {
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
+    this.addCommand({id:'calendar-templates',name:'Calendário · Escolher modelo',callback:()=>this.openCalendarTemplates()});
+    this.addCommand({id:'atlas-template-map',name:'Atlas · Novo mapa a partir de modelo',callback:()=>this.attempt(async()=>{const view=await this.openAtlas('maps');view.editMap();})});
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
@@ -414,6 +418,7 @@ class BasicRPG extends Plugin {
     s.calendars = s.calendars.filter((c) => c.id !== id);
     if (s.activeId === id) s.activeId = s.calendars[0].id;
   }); }
+  openCalendarTemplates(){new CalendarTemplatesModal(this).open();}
   newCalendar() { new CalendarEditor(this, newCalendar(), true).open(); }
   async advance(amount) {
     await this.editCalendar(this.active().id, (c) => {

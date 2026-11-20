@@ -6,6 +6,7 @@ const { key,clean }=require('./solo');
 const { newEntry,find,requireMesa,buildRunning }=require('./mesa');
 const { randomContent }=require('./ultra');
 const { parseTable,tableEngine }=require('./solo-tables');
+const { MAP_TEMPLATES, createMapTemplate }=require('./map-presets');
 const {
   TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,around,
   terrainSeed,dungeonSeed,routeCost,relationGraph,subgraph,nodeRef,safeNote
@@ -146,7 +147,19 @@ class AtlasView extends ItemView{
  editMap(existing){
    const base=existing||newMap(this.campaign,'hex');
    if(!existing){base.name='Novo mapa';if(!base.campaign)base.campaign=this.m.campaigns[0]?.id||'';}
-   modal(this,existing?'Editar mapa':'Criar mapa',base,(root,d)=>{
+   modal(this,existing?'Editar mapa':'Criar mapa',base,(root,d,redraw)=>{
+     if(!existing){
+       labelled(root,'Modelo inicial',[['','Personalizado'],...MAP_TEMPLATES.map(t=>[t.id,t.name])],d.template||'',v=>{
+         const oldCampaign=d.campaign;
+         const fresh=v?createMapTemplate(v,oldCampaign):newMap(oldCampaign,d.grid);
+         if(!v)fresh.name='Novo mapa';
+         Object.assign(d,fresh);
+         redraw();
+       });
+       const model=MAP_TEMPLATES.find(x=>x.id===d.template);
+       if(model)info(root,model.description+' · '+model.size);
+       else info(root,'Escolha um modelo pronto ou crie uma grade personalizada. Os modelos só são adicionados após salvar.');
+     }
      input(root,'Nome do mapa',d.name,v=>{d.name=v;},{maxLength:120});
      labelled(root,'Campanha',opts(this.m.campaigns,'Sem campanha'),d.campaign,v=>{d.campaign=v;});
      labelled(root,'Grade',[['hex','Hexagonal'],['square','Quadrada']],d.grid,v=>{d.grid=v;});
@@ -188,7 +201,7 @@ class AtlasView extends ItemView{
    labelled(controls,'Mapa',opts(listing,'Escolher mapa'),listing.some(x=>x.id===this.mapId)?this.mapId:'',
      v=>this.chooseMap(v));
    const tools=row(controls);
-   button(tools,'Novo mapa',()=>this.editMap(),{icon:'plus',className:'brpg-button mod-cta'});
+   button(tools,'Novo mapa ou modelo',()=>this.editMap(),{icon:'layout-template',className:'brpg-button mod-cta'});
    const map=this.current;
    if(!map){info(root,'Crie seu primeiro mapa hexagonal ou quadriculado. Você poderá conectar cada célula a notas, personagens e encontros da Mesa.');return;}
    const mapActions=row(root);

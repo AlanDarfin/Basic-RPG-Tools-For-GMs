@@ -333,3 +333,34 @@ Campanhas, fichas, encontros e notas compartilham referências com o Atlas. A Me
 Esta é uma implementação nova e independente. **Ainda não** oferece importação automática de mapas dos dois plugins, pacotes Dungeondraft, pintura por imagem com múltiplas camadas, rotas Bezier, medição em sistemas de jogo ou editor de árvore genealógica equivalente ao Relations. Os mapas são armazenados no `data.json` do Basic RPG e as notas criadas permanecem arquivos Markdown normais.
 
 **Texturas de imagem (v1.4.0):** além de cores, o modo **Textura** permite escolher imagens do cofre como revestimento de células, com recorte hexagonal ou quadrado. O editor da célula também aceita caminho de textura individual. A caixa de ferramentas oferece pincéis de vários tamanhos, e os modos **Regiões** e **Facções** destacam áreas identificadas no mapa. Texturas são apenas caminhos para imagens existentes; não há importação automática de tilesets, brushes contínuos ou pacotes Dungeondraft nesta versão.
+
+
+## Biblioteca de modelos (v1.5.0)
+
+**Calendários → Modelos de calendário** ou Configurações → **Galeria de modelos**:
+Arkanis, Gregoriano, 13 Luas (fictício), Lunar de campanha (fictício), Solar de oito dias e Personalizado em branco.
+Os modelos são apenas pontos de partida: um novo calendário é aberto no editor antes de ser salvo; o original e os outros calendários permanecem intactos.
+O gregoriano usa meses reais e ano bissexto de quatro em quatro anos, exceto séculos não divisíveis por 400.
+O modelo de 13 Luas tem 13 meses de 28 dias e 1 dia anual fora da semana, e o Solar de oito dias tem cinco festivais anuais.
+Os modelos fictícios não pretendem representar calendários históricos ou religiosos.
+
+**Atlas → Novo mapa ou modelo**:
+Mapa-múndi · Terra alternativa (40×22 hexágonos), Arquipélago, Região de aventura,
+Masmorra gerada, Hexágonos em branco e Quadrados em branco. Os mapas novos usam a mesma
+biblioteca de fichas, encontros, regiões e notas que os mapas criados manualmente. É possível
+alterar nomes, adicionar cidades, estados e províncias fictícios e converter células de terreno.
+
+O mapa-múndi é uma **aproximação estilizada**, sem divisão política, derivada de
+[polígonos de terra Natural Earth 1:110m](https://www.naturalearthdata.com/about/terms-of-use/)
+(disponíveis em domínio público), rasterizados em células hexagonais. Não é um mapa para
+navegação ou cartografia precisa. Sua topografia foi simplificada para exploração de RPG.
+
+### Primeiras correções de estabilidade
+
+- O gráfico de relações agora limita o percurso corretamente ao número de conexões escolhido.
+- A validação de mapas rejeita cadeias circulares de submapas, incluindo ciclos com três ou mais mapas.
+- A biblioteca é opt-in; nenhum modelo é inserido silenciosamente nos dados existentes.
+
+A v1.5.0 é **a primeira etapa de preparação para a v2**, não a v2 completa.
+Ainda falta a Central de Sessão, otimização de gravação de mapas grandes, importar mapas antigos
+e testar a interface manualmente no Obsidian Android.

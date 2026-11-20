@@ -837,3 +837,17 @@
  .brpg-atlas .brpg-button{padding-inline:7px}
  .brpg-atlas-graph-scroll{max-height:48vh}
 }
+
+
+/* Template library: compact cards in Settings and calendar creation. */
+.brpg-template-modal .modal-content{max-height:80vh;overflow-y:auto;}
+.brpg-template-picker{display:grid;gap:10px;min-width:0;}
+.brpg-template-picker .brpg-heading{margin:0;}
+.brpg-template-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;}
+.brpg-template-card{min-width:0;border:1px solid var(--background-modifier-border);
+ border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:5px;background:var(--background-primary);}
+.brpg-template-card-head{display:flex;flex-wrap:wrap;align-items:center;gap:7px;justify-content:space-between;}
+.brpg-template-card .brpg-hint{margin:0;font-size:.8rem;overflow-wrap:anywhere;}
+.brpg-template-card .brpg-button{margin-top:auto;justify-content:center;}
+@media(max-width:720px){.brpg-template-list{grid-template-columns:minmax(0,1fr);}
+.brpg-template-card{padding:8px;}.brpg-template-picker{gap:6px;}}
