@@ -4391,6 +4391,23 @@ function group(root, title, note) {
   if (note) info(box, note);
   return box;
 }
+function disclosure(root, label, open, update) {
+  const box = el(root, 'details', 'brpg-disclosure brpg-solo-options');
+  box.open = Boolean(open);
+  el(box, 'summary', 'brpg-summary', label);
+  box.addEventListener('toggle', () => update(box.open));
+  return box;
+}
+function segment(root, choices, active, update, label) {
+  const bar = el(root, 'div', 'brpg-solo-segment');
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', label);
+  for (const [id, name, icon] of choices) {
+    const control = button(bar, name, () => { if (id !== active) update(id); }, { icon });
+    control.setAttribute('aria-pressed', String(id === active));
+  }
+  return bar;
+}
 function choose(root, label, entries, value, update) {
   const labelEl = el(root, 'label', 'brpg-field');
   el(labelEl, 'span', 'brpg-label', label);
@@ -4431,22 +4448,23 @@ function imageField(root, plugin, label, value, update) {
     { icon: 'image', iconOnly: true });
   return field;
 }
-function cardFace(root, plugin, card, angle = 0) {
-  const frame = el(root, 'div', 'brpg-solo-card-face');
+function cardFace(root, plugin, card, angle = 0, compact = false) {
+  const block = compact ? 'span' : 'div';
+  const frame = el(root, block, 'brpg-solo-card-face');
   if (card.image || card.symbol) {
-    const picture = el(frame, 'div', 'brpg-solo-card-picture');
+    const picture = el(frame, block, 'brpg-solo-card-picture');
     const artwork = card.image ? art(picture, plugin, card.image, card.title, card.source) :
       el(picture, 'span', 'brpg-solo-symbol' + (/[♥♦]/.test(card.symbol) || card.id === 'joker-red' ? ' is-red' : ''), card.symbol);
     if (artwork && angle) artwork.style.transform = 'rotate(' + angle + 'deg)';
   }
-  const titleRow = el(frame, 'div', 'brpg-solo-card-title');
+  const titleRow = el(frame, block, 'brpg-solo-card-title');
   el(titleRow, 'strong', '', card.title);
   const icons = plugin.solo().legacyIcons;
   if (card.element && icons?.elements && Object.hasOwn(icons.elements, key(card.element)))
     art(titleRow, plugin, icons.elements[key(card.element)], card.element, card.source, 'brpg-solo-card-icon');
   const meta = [card.type, card.element, card.level && 'Nível ' + card.level, angle === 180 ? 'Invertida' : angle ? 'Girou ' + angle + '°' : ''].filter(Boolean);
-  if (meta.length) el(frame, 'div', 'brpg-solo-card-meta', meta.join(' · '));
-  if (card.cost) {
+  if (meta.length) el(frame, block, 'brpg-solo-card-meta', meta.join(' · '));
+  if (card.cost && !compact) {
     const cost = el(frame, 'div', 'brpg-solo-card-cost', 'Custo ');
     for (const piece of card.cost.split(',').map(x => x.trim()).filter(Boolean)) {
       const m = piece.match(/^(?:(\d+)\s+)?(.+)$/);
@@ -4456,8 +4474,8 @@ function cardFace(root, plugin, card, angle = 0) {
       } else el(cost, 'span', '', piece);
     }
   }
-  if (card.text) el(frame, 'p', 'brpg-solo-card-text', card.text);
-  if (card.attack || card.defense) el(frame, 'div', 'brpg-solo-card-meta', 'ATQ ' + (card.attack || '0') + ' · DEF ' + (card.defense || '0'));
+  if (card.text && !compact) el(frame, 'p', 'brpg-solo-card-text', card.text);
+  if (card.attack || card.defense) el(frame, block, 'brpg-solo-card-meta', 'ATQ ' + (card.attack || '0') + ' · DEF ' + (card.defense || '0'));
   return frame;
 }
 function formatCard(card, angle, mode) {
@@ -4507,6 +4525,18 @@ class SoloModal extends Modal {
   footer(label, save) {
     button(this.actions, 'Cancelar', () => this.close());
     saveButton(this.actions, label, () => this.submit(save));
+  }
+}
+class CardPreview extends SoloModal {
+  constructor(view, card, angle = 0, actions = null) {
+    super(view.plugin, 'Detalhes da carta');
+    this.view = view; this.card = card; this.angle = angle; this.previewActions = actions;
+  }
+  form() {
+    const preview = el(this.body, 'article', 'brpg-solo-card brpg-solo-card-preview');
+    cardFace(preview, this.plugin, this.card, this.angle);
+    if (this.previewActions) this.previewActions(this.actions, () => this.close());
+    button(this.actions, 'Fechar', () => this.close());
   }
 }
 class DieEditor extends SoloModal {
@@ -4567,11 +4597,12 @@ class DieEditor extends SoloModal {
   }
 }
 class DeckEditor extends SoloModal {
-  constructor(view, deck = null) {
+  constructor(view, deck = null, importCards = false) {
     super(view.plugin, deck ? 'Editar baralho' : 'Novo baralho');
-    this.view = view; this.section = 'main'; this.warnings = [];
+    this.view = view; this.section = 'main'; this.warnings = []; this.showImport = importCards;
     this.draft = deck ? copy(deck) : { id: uid('deck'), name: '', back: '', orientations: 1, cards: [] };
     this.active = this.draft.cards[0]?.id || '';
+    this.section = this.draft.cards[0]?.section || 'main';
     this.initialCards = deck && JSON.stringify(deck.cards.map(c => [c.id, c.section]));
   }
   async applyImport(load) {
@@ -4590,13 +4621,11 @@ class DeckEditor extends SoloModal {
   form() {
     const d = this.draft, basics = group(this.body, 'Baralho');
     input(basics, 'Nome do baralho', d.name, v => { d.name = v; }, { maxLength: 120 });
-    choose(basics, 'Rotação ao comprar', ROTATIONS, d.orientations, v => { d.orientations = +v; });
-    imageField(basics, this.plugin, 'Imagem do verso (opcional)', d.back, v => { d.back = v; });
-    const transfer = el(this.body, 'details', 'brpg-disclosure');
-    transfer.open = !!this.showImport;
-    transfer.addEventListener('toggle', () => { this.showImport = transfer.open; });
-    el(transfer, 'summary', '', 'Importar cartas');
-    const imports = group(transfer, '', 'Importe imagens, uma lista do Deck Builder ou adicione as cartas manualmente.');
+    const optionsDeck = disclosure(basics, 'Verso e rotação', this.showDeckOptions, v => { this.showDeckOptions = v; });
+    choose(optionsDeck, 'Rotação ao comprar', ROTATIONS, d.orientations, v => { d.orientations = +v; });
+    imageField(optionsDeck, this.plugin, 'Imagem do verso (opcional)', d.back, v => { d.back = v; });
+    const transfer = disclosure(this.body, 'Importar cartas', this.showImport, v => { this.showImport = v; });
+    const imports = group(transfer, '', 'Traga um baralho de imagens ou listas DeckCard / FullDeck do Deck Builder.');
     let path = this.folder || this.view.plugin.solo().settings.deckRoot;
     const folderInput = input(imports, 'Pasta de imagens no cofre', path, v => { this.folder = path = v; }, { maxLength: 300 });
     const options = deckFolders(this.plugin.app.vault, this.plugin.solo().settings.deckRoot);
@@ -4643,7 +4672,7 @@ class DeckEditor extends SoloModal {
     if (this.warnings.length) info(imports, 'Cartas não encontradas: ' + this.warnings.slice(0, 20).join(', ') + (this.warnings.length > 20 ? '…' : ''));
     const cards = group(this.body, 'Cartas · ' + d.cards.length);
     const navigation = row(cards);
-    choose(navigation, 'Seção', Object.entries(sections), this.section, v => {
+    choose(navigation, 'Seção', Object.entries(sections).map(([id, label]) => [id, label + ' · ' + d.cards.filter(c => c.section === id).length]), this.section, v => {
       this.section = v; this.active = d.cards.find(c => c.section === v)?.id || ''; this.draw();
     });
     button(navigation, 'Adicionar carta', () => {
@@ -4664,14 +4693,19 @@ class DeckEditor extends SoloModal {
       input(form, 'Nome da carta', card.title, v => { card.title = v; }, { maxLength: 120 });
       imageField(form, this.plugin, 'Imagem da carta', card.image, v => { card.image = v; });
       input(form, 'Descrição / regras', card.text, v => { card.text = v; }, { multiline: true, maxLength: 8000 });
-      const more = el(form, 'details', 'brpg-disclosure');
-      el(more, 'summary', '', 'Tipo, custo e atributos');
+      const more = disclosure(form, 'Atributos TCG', this.showTcg, v => { this.showTcg = v; });
+      const fields = el(more, 'div', 'brpg-solo-fields');
       for (const [property, name] of [['type','Tipo'], ['cost','Custo'], ['element','Elemento'], ['level','Nível'], ['attack','Ataque'], ['defense','Defesa']])
-        input(more, name, card[property], v => { card[property] = v; }, { maxLength: 200 });
+        input(fields, name, card[property], v => { card[property] = v; }, { maxLength: 200 });
       choose(more, 'Mover para a seção', Object.entries(sections), card.section, v => {
         card.section = this.section = v; this.draw();
       });
       const manage = row(form);
+      button(manage, 'Prévia da carta', () => {
+        const preview = makeCard(card, card.id);
+        preview.title ||= 'Carta sem nome';
+        new CardPreview(this.view, preview).open();
+      }, { icon: 'eye' });
       button(manage, 'Duplicar carta', () => {
         try {
           const duplicate = { ...card, id: uid('card') };
@@ -4755,7 +4789,10 @@ class SoloView extends ItemView {
   async onOpen() { this.render(); }
   async onClose() { this.closed = true; this.contentEl.replaceChildren(); }
   renderIfTab() { if (!this.closed) this.render(); }
-  show(tab) { if (TABS.some(t => t[0] === tab)) this.tab = tab; this.render(); }
+  show(tab) {
+    if (!TABS.some(t => t[0] === tab) || this.tab === tab) return;
+    this.tab = tab; this.render(); this.contentEl.scrollTop = 0;
+  }
   render() {
     if (this.closed) return;
     const root = this.contentEl;
@@ -4790,6 +4827,7 @@ class SoloView extends ItemView {
   }
   outputButtons(root, text, afterCopy, image) {
     const actions = row(root), editor = this.activeEditor();
+    actions.classList.add('brpg-solo-output-actions');
     button(actions, 'Copiar resultado', this.run(async () => {
       await navigator.clipboard.writeText(text);
       new Notice('Copiado.'); afterCopy?.();
@@ -4845,7 +4883,7 @@ class SoloView extends ItemView {
   }
   renderDice(root) {
     const s = this.plugin.solo(), common = group(root, 'Rolagem rápida');
-    const setup = row(common);
+    const setup = el(common, 'div', 'brpg-solo-fields');
     inlineNumber(setup, 'Quantidade', this.quant, v => { this.quant = v; }, 1, 100);
     choose(setup, 'Grupo', [['primary','Principal'],['secondary','Alternativo']], this.pool, v => { this.pool = v; });
     const grid = el(common, 'div', 'brpg-solo-dice-grid');
@@ -4853,15 +4891,19 @@ class SoloView extends ItemView {
       const b = button(grid, 'd' + n, () => {}, { icon: 'dice-5' });
       this.palette(b, alt => this.numericDice(String(this.quant) + 'd' + n, alt));
     }
-    info(common, 'Shift, clique direito ou toque longo envia a rolagem para o grupo alternativo.');
-    const expression = row(common);
+    info(common, 'Grupo alternativo · toque longo, clique direito ou Shift.');
+    const expression = el(common, 'div', 'brpg-solo-action-field');
     const notation = input(expression, 'Expressão', this.expr, v => { this.expr = v; }, { maxLength: 60 });
     notation.placeholder = '2d20+3/a';
     notation.addEventListener('keydown', e => { if (e.key === 'Enter') this.numericDice(this.expr, e.shiftKey); });
     button(expression, 'Rolar expressão', () => this.numericDice(this.expr), { icon: 'play' });
-    const custom = group(root, 'Dados personalizados');
+    this.diceSummary = el(root, 'div', 'brpg-solo-dice-summary');
+    this.renderDiceSummary();
+    const custom = group(root, '');
+    const customHead = el(custom, 'div', 'brpg-solo-section-head');
+    el(customHead, 'h3', 'brpg-solo-label', 'Dados personalizados');
+    button(customHead, 'Novo dado', () => new DieEditor(this).open(), { icon: 'plus', className: 'brpg-button mod-cta' });
     const actions = row(custom);
-    button(actions, 'Novo dado', () => new DieEditor(this).open(), { icon: 'plus', className: 'brpg-button mod-cta' });
     const selected = s.dice.find(x => x.id === this.dieId) || s.dice[0];
     if (selected) {
       this.dieId = selected.id;
@@ -4875,23 +4917,23 @@ class SoloView extends ItemView {
         const result = dieRoll(selected, this.customQuant);
         this.addDice({ ...result, label: this.customQuant + ' × ' + selected.name });
       }), { icon: 'dice-6' });
-    } else info(custom, 'Dê um nome ao dado e escolha o que vai em cada face. Misture números, símbolos e imagens.');
-    this.diceSummary = el(root, 'div');
-    this.renderDiceSummary();
+    } else info(custom, 'Crie faces com números, símbolos ou imagens.');
   }
   renderDiceSummary() {
     this.diceSummary.replaceChildren();
-    const result = group(this.diceSummary, 'Resultados');
-    if (!this.diceLog.length) { info(result, 'As rolagens desta sessão aparecem aqui.'); return; }
-    const sums = row(result);
+    if (!this.diceLog.length) return;
+    const result = group(this.diceSummary, '');
+    const head = el(result, 'div', 'brpg-solo-section-head');
+    el(head, 'h3', 'brpg-solo-label', 'Resultados');
+    button(head, 'Limpar rolagens', () => { this.diceLog = []; this.renderDiceSummary(); }, { icon: 'trash-2', iconOnly: true });
+    const sums = el(result, 'div', 'brpg-metadata');
     for (const [pool, name] of [['primary','Principal'],['secondary','Alternativo']]) {
       const values = this.diceLog.filter(x => x.pool === pool && x.total !== null).map(x => x.total);
       if (values.length) el(sums, 'span', 'brpg-chip is-' + pool, name + ' · ' + values.reduce((a,b) => a + b, 0).toLocaleString('pt-BR'));
     }
-    button(sums, 'Limpar rolagens', () => { this.diceLog = []; this.renderDiceSummary(); }, { icon: 'trash-2', iconOnly: true });
     const log = el(result, 'div', 'brpg-solo-log'); log.setAttribute('aria-live', 'polite');
-    this.diceLog.forEach(entry => {
-      const item = el(log, 'article', 'brpg-solo-result is-' + entry.pool);
+    const display = (parent, entry) => {
+      const item = el(parent, 'article', 'brpg-solo-result is-' + entry.pool);
       const title = row(item);
       el(title, 'strong', '', entry.label + (entry.total !== null ? ' = ' + entry.total.toLocaleString('pt-BR') : ''));
       const faceLabel = f => f.kind === 'number' ? String(f.value) : (f.label || (f.image && f.image.split('/').at(-1)) || 'Imagem');
@@ -4904,7 +4946,13 @@ class SoloView extends ItemView {
         if (face.kind === 'image') art(node, this.plugin, face.image, faceLabel(face), '', 'brpg-solo-die-face');
         if (face.kind !== 'image' || face.label) el(node, 'span', '', faceLabel(face));
       }
-    });
+    };
+    display(log, this.diceLog[0]);
+    if (this.diceLog.length > 1) {
+      const older = disclosure(result, 'Rolagens anteriores · ' + (this.diceLog.length - 1), this.diceHistoryOpen, v => { this.diceHistoryOpen = v; });
+      const previous = el(older, 'div', 'brpg-solo-log');
+      for (const entry of this.diceLog.slice(1)) display(previous, entry);
+    }
   }
   async loadFolder(id) {
     this.folder = null;
@@ -4933,6 +4981,7 @@ class SoloView extends ItemView {
     });
     const actions = row(box);
     button(actions, 'Novo baralho', () => new DeckEditor(this).open(), { icon: 'plus', className: 'brpg-button mod-cta' });
+    button(actions, 'Importar cartas', () => new DeckEditor(this, null, true).open(), { icon: 'folder-input' });
     if (custom) {
       button(actions, 'Editar baralho', () => new DeckEditor(this, deck).open(), { icon: 'pencil' });
       button(actions, 'Exportar baralho JSON', this.run(async () => {
@@ -4957,11 +5006,14 @@ class SoloView extends ItemView {
       await this.plugin.changeSolo(v => { v.decks.push(d); });
       this.deckId = d.id; this.section = d.cards[0].section; this.render();
     }));
-    if (id === 'standard') toggle(box, 'Incluir dois coringas', s.settings.jokers, v => this.plugin.attempt(() => this.plugin.changeSolo(next => {
-      next.settings.jokers = v; delete next.piles[id];
-    })));
-    if (id === 'tarot') toggle(box, 'Permitir tarô invertido', s.settings.tarotFlip,
-      v => this.plugin.attempt(() => this.plugin.changeSolo(next => { next.settings.tarotFlip = v; })));
+    if (id === 'standard' || id === 'tarot') {
+      const rules = disclosure(box, 'Opções do baralho', this.deckOptionsOpen, v => { this.deckOptionsOpen = v; });
+      if (id === 'standard') toggle(rules, 'Incluir dois coringas', s.settings.jokers, v => this.plugin.attempt(() => this.plugin.changeSolo(next => {
+        next.settings.jokers = v; delete next.piles[id];
+      })));
+      else toggle(rules, 'Permitir tarô invertido', s.settings.tarotFlip,
+        v => this.plugin.attempt(() => this.plugin.changeSolo(next => { next.settings.tarotFlip = v; })));
+    }
     if (!deck) { info(root, 'Carregando o conteúdo da pasta…'); return; }
     if (!deck.cards.length) { info(root, 'Pasta sem imagens ou links.'); return; }
     const sectionsUsed = Object.entries(sections).filter(([sc]) => deck.cards.some(c => c.section === sc));
@@ -4979,65 +5031,74 @@ class SoloView extends ItemView {
       next.piles[id][section] = fn(validPile(stack, deck, section) ? stack : null);
     });
     const stack = el(table, 'div', 'brpg-solo-stack');
-    const back = button(stack, 'Comprar carta', this.run(() => {
+    const remaining = pile?.remaining.length ?? cards.length, drawn = pile?.drawn.length || 0;
+    const badges = el(table, 'div', 'brpg-metadata');
+    el(badges, 'span', 'brpg-chip', remaining + ' no monte');
+    el(badges, 'span', 'brpg-chip', drawn + ' compradas');
+    button(stack, 'Comprar carta', this.run(() => {
       if (!integer(this.drawCount, 1, 30)) throw new Error('Escolha de 1 a 30 cartas.');
       this.deckPage = 1;
       return change(old => draw(old, deck, section, this.drawCount));
-    }), { icon: 'layers', disabled: pile?.remaining.length === 0, className: 'brpg-button mod-cta brpg-solo-back' });
-    if (deck.back) art(back, this.plugin, deck.back, 'Verso de ' + deck.name, '');
-    const controls = el(stack, 'div', 'brpg-solo-stack-controls');
-    const badges = row(controls);
-    el(badges, 'span', 'brpg-chip', (pile?.remaining.length ?? cards.length) + ' no monte');
-    el(badges, 'span', 'brpg-chip', (pile?.drawn.length || 0) + ' compradas');
-    inlineNumber(controls, 'Cartas por compra', this.drawCount, v => { this.drawCount = v; }, 1, 30);
-    const buttons = row(controls);
+    }), { icon: 'layers', disabled: !remaining, className: 'brpg-button mod-cta brpg-solo-buy' });
+    const count = inlineNumber(stack, 'Cartas por compra', this.drawCount, v => { this.drawCount = v; }, 1, 30);
+    count.setAttribute('inputmode', 'numeric');
+    const buttons = row(table);
     button(buttons, 'Reembaralhar seção', () => {
       if (pile?.drawn.length) new Confirm(this.plugin.app, 'Devolver todas as cartas compradas desta seção e embaralhar?', () =>
         change(() => freshPile(deck, section))).open();
       else this.plugin.attempt(() => change(() => freshPile(deck, section)));
     }, { icon: 'shuffle' });
-    button(buttons, this.gallery ? 'Mostrar compradas' : 'Ver catálogo', () => {
-      this.gallery = !this.gallery; this.deckPage = 1; this.render();
-    }, { icon: 'layout-grid' });
+    if (deck.back) button(buttons, 'Ver verso do baralho', () =>
+      new CardPreview(this, { title: 'Verso de ' + deck.name, image: deck.back }).open(), { icon: 'image', iconOnly: true });
     if (folder) button(buttons, 'Atualizar pasta', this.run(() => this.loadFolder(id)), { icon: 'refresh-cw', iconOnly: true });
-    const catalog = group(root, this.gallery ? 'Catálogo' : 'Cartas compradas');
+    const catalog = group(root, '');
+    segment(catalog, [['drawn','Compradas','layers'], ['catalog','Catálogo','layout-grid']], this.gallery ? 'catalog' : 'drawn', v => {
+      this.gallery = v === 'catalog'; this.deckPage = 1; this.render();
+    }, 'Visualização das cartas');
     const index = new Map(cards.map(c => [c.id,c]));
     const entries = this.gallery ? cards.map(c => ({ id: c.id, angle: 0 })) : pile?.drawn || [];
-    if (!entries.length) info(catalog, 'Compre uma carta para revelar o que saiu.');
+    if (!entries.length) info(catalog, this.gallery ? 'Nenhuma carta nesta seção.' : 'As cartas compradas aparecem aqui.');
     const gallery = el(catalog, 'div', 'brpg-solo-card-grid');
     for (const { id: cardId, angle } of entries.slice(0, 12 * this.deckPage)) {
       const card = index.get(cardId);
-      const item = el(gallery, 'article', 'brpg-solo-card');
-      cardFace(item, this.plugin, card, angle);
-      this.outputButtons(item, formatCard(card, angle, s.settings.copyCard), null, card.image);
-      if (!this.gallery) {
-        if (deck.orientations !== 1) button(item, 'Girar carta', this.run(() => change(old => {
-          if (!old) return freshPile(deck, section);
-          const rotation = deck.orientations === 2 ? 180 : 90;
-          return { ...old, drawn: old.drawn.map(c => c.id === cardId ? { ...c, angle: (c.angle + rotation) % 360 } : c) };
-        })), { icon: 'rotate-cw', iconOnly: true });
-        button(item, 'Devolver ao monte', this.run(() => change(old => returnCard(old, cardId))), { icon: 'undo-2', iconOnly: true });
-        item.addEventListener('contextmenu', e => { e.preventDefault(); this.plugin.attempt(() => change(old => returnCard(old, cardId))); });
-      }
+      const item = el(gallery, 'button', 'brpg-button brpg-solo-card brpg-solo-card-tile');
+      item.type = 'button';
+      item.setAttribute('aria-label', 'Ver carta · ' + card.title);
+      const showDrawActions = !this.gallery;
+      const undo = () => change(old => returnCard(old, cardId));
+      item.addEventListener('click', () => new CardPreview(this, card, angle, (panel, close) => {
+        this.outputButtons(panel, formatCard(card, angle, s.settings.copyCard), null, card.image);
+        if (!showDrawActions) return;
+        if (deck.orientations !== 1) button(panel, 'Girar carta', this.run(async () => {
+          await change(old => {
+            if (!old) return freshPile(deck, section);
+            const rotation = deck.orientations === 2 ? 180 : 90;
+            return { ...old, drawn: old.drawn.map(c => c.id === cardId ? { ...c, angle: (c.angle + rotation) % 360 } : c) };
+          });
+          close();
+        }), { icon: 'rotate-cw', iconOnly: true });
+        button(panel, 'Devolver ao monte', this.run(async () => { await undo(); close(); }), { icon: 'undo-2' });
+      }).open());
+      cardFace(item, this.plugin, card, angle, true);
+      if (showDrawActions) item.addEventListener('contextmenu', e => {
+        e.preventDefault(); this.plugin.attempt(undo);
+      });
     }
     if (entries.length > 12 * this.deckPage) button(catalog, 'Mostrar mais cartas', () => { this.deckPage++; this.render(); });
   }
   renderOracle(root) {
-    const settings = this.plugin.solo().settings, box = group(root, 'Pergunte ao oráculo', 'Faça uma pergunta que possa ser respondida com sim ou não.');
-    choose(box, 'Sistema', BODIES, this.oracleId, v => {
+    const settings = this.plugin.solo().settings, box = group(root, 'Pergunte ao oráculo');
+    const controls = el(box, 'div', 'brpg-solo-fields');
+    choose(controls, 'Sistema', BODIES, this.oracleId, v => {
       this.oracleId = v; this.odds = v === 'mythic' ? '4' : v === 'standard2' ? '0' : 'mid'; this.render();
     });
-    const controls = row(box);
     const choices = this.oracleId === 'mythic' ? ODDS.map((label, i) => [i, label]) : this.oracleId === 'standard2' ?
       [-2,-1,0,1,2].map(n => [n, String(n > 0 ? '+' + n : n)]) : [['low','Improvável'], ['mid','50/50'], ['high','Provável']];
     choose(controls, this.oracleId === 'standard2' ? 'Modificador' : 'Chance de sim', choices, this.odds, v => { this.odds = v; });
-    if (this.oracleId === 'mythic') choose(controls, 'Fator de caos', Array.from({ length: 9 }, (_, i) => [i + 1, String(i + 1)]), settings.chaos, v =>
+    if (this.oracleId === 'mythic') choose(box, 'Fator de caos', Array.from({ length: 9 }, (_, i) => [i + 1, String(i + 1)]), settings.chaos, v =>
       this.plugin.attempt(() => this.plugin.changeSolo(s => { s.settings.chaos = +v; })));
-    if (this.oracleId === 'standard') toggle(box, 'Compensar sequência de respostas negativas', settings.bias, v =>
-      this.plugin.attempt(() => this.plugin.changeSolo(s => { s.settings.bias = v; })));
-    if (this.oracleId === 'standard' || this.oracleId === 'standard2') toggle(box, 'Detalhar eventos aleatórios', settings.events, v =>
-      this.plugin.attempt(() => this.plugin.changeSolo(s => { s.settings.events = v; })));
     const question = input(box, 'Pergunta (opcional)', this.question, v => { this.question = v; }, { maxLength: 500 });
+    question.placeholder = 'Uma pergunta de sim ou não…';
     const ask = () => {
       const id = this.oracleId, result = oracle(id, this.odds, settings, this.oracleStates[id]);
       this.oracleStates[id] = result.state;
@@ -5047,6 +5108,13 @@ class SoloView extends ItemView {
     };
     question.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
     button(row(box), 'Consultar oráculo', ask, { icon: 'sparkles', className: 'brpg-button mod-cta' });
+    if (this.oracleId === 'standard' || this.oracleId === 'standard2') {
+      const rules = disclosure(box, 'Opções do oráculo', this.oracleOptionsOpen, v => { this.oracleOptionsOpen = v; });
+      if (this.oracleId === 'standard') toggle(rules, 'Compensar sequência de respostas negativas', settings.bias, v =>
+        this.plugin.attempt(() => this.plugin.changeSolo(s => { s.settings.bias = v; })));
+      toggle(rules, 'Detalhar eventos aleatórios', settings.events, v =>
+        this.plugin.attempt(() => this.plugin.changeSolo(s => { s.settings.events = v; })));
+    }
     this.oracleResults = el(root, 'div');
     this.renderOracleLog();
   }
@@ -5059,9 +5127,12 @@ class SoloView extends ItemView {
     }), () => { this.oracleLog = []; this.renderOracleLog(); });
   }
   log(root, title, values, clear) {
-    const box = group(root, title), log = el(box, 'div', 'brpg-solo-log');
+    const box = group(root, '');
+    const line = el(box, 'div', 'brpg-solo-section-head');
+    el(line, 'h3', 'brpg-solo-label', title);
+    if (clear) button(line, 'Limpar histórico', clear, { icon: 'trash-2', iconOnly: true });
+    const log = el(box, 'div', 'brpg-solo-log');
     log.setAttribute('aria-live', 'polite');
-    if (clear) button(box, 'Limpar histórico', clear, { icon: 'trash-2', iconOnly: true });
     for (const { title, detail, text } of values) {
       const entry = el(log, 'article', 'brpg-solo-result');
       const head = row(entry); el(head, 'strong', '', title);
@@ -5074,16 +5145,23 @@ class SoloView extends ItemView {
     const id = this.activeIdea, entry = IDEAS[id];
     if (!entry || !this.ideas[id]) return;
     const [title, fields] = entry, selected = this.ideas[id], panel = el(root, 'div', 'brpg-solo-edit-entry');
-    const controls = row(panel);
+    const controls = el(panel, 'div', 'brpg-solo-section-head');
     el(controls, 'strong', '', title);
-    const full = fields.map(([label], i) => label + ' · ' + selected[i]).join('\n');
-    this.outputButtons(controls, formatResult(full, this.plugin.solo().settings.copyText));
+    const output = el(controls, 'div');
+    const updateOutput = () => {
+      const full = fields.map(([label], i) => label + ' · ' + selected[i]).join('\n');
+      output.replaceChildren();
+      this.outputButtons(output, formatResult(full, this.plugin.solo().settings.copyText));
+    };
+    updateOutput();
     fields.forEach(([label, dictionary], i) => {
-      const line = row(panel);
-      el(line, 'span', 'brpg-chip', label);
-      el(line, 'span', '', selected[i]);
+      const line = el(panel, 'div', 'brpg-solo-idea-line');
+      const value = el(line, 'div', 'brpg-solo-idea-value');
+      el(value, 'span', 'brpg-label', label);
+      el(value, 'strong', '', selected[i]);
       button(line, 'Sortear novamente · ' + label, () => {
-        selected[i] = pick(DICT[dictionary]); this.renderIdeas(root);
+        selected[i] = pick(DICT[dictionary]); value.children[1].textContent = selected[i];
+        updateOutput();
       }, { icon: 'refresh-cw', iconOnly: true });
     });
   }
@@ -5103,13 +5181,17 @@ class SoloView extends ItemView {
     if (this.tableLog.length) this.log(this.tableResults, 'Resultados', this.tableLog, () => { this.tableLog = []; this.renderTableLog(); });
   }
   renderTables(root) {
-    const settings = this.plugin.solo().settings, box = group(root, 'Geradores e tabelas');
+    const settings = this.plugin.solo().settings;
     if (!settings.hideIdeas) {
-      const generators = row(box);
+      const box = group(root, 'Geradores de ideias');
+      const generators = el(box, 'div', 'brpg-solo-generators');
       for (const [id, [title, fields]] of Object.entries(IDEAS)) {
-        button(generators, title, () => {
+        const generator = button(generators, id === 'plot' ? 'Gancho' : title, () => {
           this.activeIdea = id; this.ideas[id] = fields.map(([, dictionary]) => pick(DICT[dictionary])); this.renderIdeas(ideaOutput);
-        }, { icon: 'sparkles' });
+          for (const item of generators.children) item.setAttribute('aria-pressed', String(item === generator));
+        }, { icon: { plot: 'sparkles', npc: 'user', place: 'map-pin' }[id] });
+        generator.setAttribute('aria-label', title);
+        generator.setAttribute('aria-pressed', String(this.activeIdea === id));
       }
       const ideaOutput = el(box, 'div');
       this.renderIdeas(ideaOutput);

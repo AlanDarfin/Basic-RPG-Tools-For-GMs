@@ -780,3 +780,62 @@ test('inline em leitura salva o contador e o dado na posição certa, sem altera
   assert.match(f.body, /2d6\/a-1,show = \d, \d \(\d\)/);
   assert.ok(f.body.endsWith('A ' + ticks + '2' + ticks));
 });
+
+test('kit solo destaca a última rolagem e preserva o estado do histórico', async () => {
+  const { p } = mock();
+  await p.onload();
+  const root = (await p.openSolo('dice')).contentEl;
+  await pickButton(root, 'd6').click();
+  await pickButton(root, 'd8').click();
+  const result = root.querySelector('.brpg-solo-dice-summary');
+  const previous = () => result.all(x => x.tag === 'summary' && x.textContent.startsWith('Rolagens anteriores'))[0];
+  assert.match(result.querySelector('.brpg-solo-log').textContent, /1d8/);
+  assert.equal(previous().parentElement.open, false);
+  await previous().click();
+  await pickButton(root, 'd10').click();
+  assert.equal(previous().parentElement.open, true);
+  assert.equal(previous().textContent, 'Rolagens anteriores · 2');
+  assert.match(result.querySelector('.brpg-solo-log').textContent, /1d10/);
+});
+
+test('editor TCG mostra atributos na prévia e na carta comprada, e deixa devolver ao monte', async () => {
+  const { p, modal } = mock();
+  await p.onload();
+  const root = (await p.openSolo('deck')).contentEl;
+  await pickButton(root, 'Novo baralho').click();
+  const form = modal().contentEl;
+  await type(form, 'Nome do baralho', 'Criaturas da Serra');
+  await pickButton(form, 'Adicionar carta').click();
+  await type(form, 'Nome da carta', 'Gárgula');
+  await type(form, 'Descrição / regras', 'Protege a ponte.');
+  const attributes = form.all(x => x.tag === 'summary' && x.textContent === 'Atributos TCG')[0];
+  await attributes.click();
+  await type(form, 'Tipo', 'Criatura');
+  await type(form, 'Custo', '2 Pedra');
+  await type(form, 'Ataque', '7');
+  await type(form, 'Defesa', '4');
+  await pickButton(form, 'Prévia da carta').click();
+  assert.match(modal().contentEl.textContent, /Gárgula.*Criatura.*Custo 2 Pedra.*Protege a ponte.*ATQ 7 · DEF 4/);
+  await pickButton(modal().contentEl, 'Fechar').click();
+  await pickButton(form, 'Salvar baralho').click();
+  await pickButton(root, 'Comprar carta').click();
+  assert.doesNotMatch(root.textContent, /Protege a ponte/);
+  await pickButton(root, 'Ver carta · Gárgula').click();
+  assert.match(modal().contentEl.textContent, /Protege a ponte/);
+  await pickButton(modal().contentEl, 'Devolver ao monte').click();
+  assert.match(root.textContent, /1 no monte.*0 compradas/);
+  await pickButton(root, 'Catálogo').click();
+  assert.equal(pickButton(root, 'Catálogo').attributes['aria-pressed'], 'true');
+  assert.ok(pickButton(root, 'Ver carta · Gárgula'));
+});
+
+test('atalho de importação abre o Deck Builder sem esconder as opções de importação', async () => {
+  const { p, modal } = mock();
+  await p.onload();
+  const root = (await p.openSolo('deck')).contentEl;
+  await pickButton(root, 'Importar cartas').click();
+  const form = modal().contentEl;
+  const section = form.all(x => x.tag === 'summary' && x.textContent === 'Importar cartas')[0];
+  assert.equal(section.parentElement.open, true);
+  assert.ok(pickButton(form, 'Buscar notas do Deck Builder'));
+});

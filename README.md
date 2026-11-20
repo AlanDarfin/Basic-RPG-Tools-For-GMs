@@ -45,14 +45,14 @@ Abra **Basic RPG · Abrir kit solo** na paleta de comandos ou toque no ícone de
 
 O kit vem com um baralho de 52 cartas, com dois coringas opcionais, e um tarô de **22 Arcanos Maiores** com símbolos e palavras-chave em português. Escolha quantas cartas comprar, devolva uma carta ao monte ou reembaralhe a seção. O plugin guarda as compras entre sessões e não repõe cartas até você devolvê-las. As orientações são independentes do nome da carta.
 
-**Novo baralho** abre o editor de cartas. Você pode adicionar frente e verso, descrição, tipo, elemento, custo, nível, ataque e defesa. Organize cartas em **Principal**, **Extra** e **Reserva**. Cada seção tem seu próprio monte. Para imprimir ou revisar a composição, abra **Ver catálogo**. Os baralhos personalizados podem ser exportados em JSON. O JSON guarda os caminhos das imagens, não os arquivos de imagem em si.
+**Novo baralho** abre o editor de cartas. Você pode adicionar frente e verso, descrição, tipo, elemento, custo, nível, ataque e defesa. Organize cartas em **Principal**, **Extra** e **Reserva**. Cada seção tem seu próprio monte. Abra **Catálogo** para revisar a composição ou **Compradas** para ver o que já saiu. Toque numa carta para ver seus detalhes e ações. Os baralhos personalizados podem ser exportados em JSON. O JSON guarda os caminhos das imagens, não os arquivos de imagem em si. O editor gerencia as cartas e o monte, mas não aplica regras de partida de um TCG.
 
 Também é possível ler baralhos no formato de pastas do Solo RPG Toolkit. Dentro de `Decks`, use uma subpasta por baralho. Coloque nela as imagens ou uma nota com as URLs. Uma linha `flip` permite inversão, `flip2` permite 90° à direita, `flip3` permite 90° para os dois lados e `flip4` permite as quatro direções. O caminho `Decks` pode ser alterado nas preferências.
 
 #### Migrar do Obsidian Deck Builder
 
 1. Deixe no cofre as notas com os blocos antigos `DeckCard` e `FullDeck`, junto às imagens.
-2. Vá a **Kit solo → Baralhos → Novo baralho → Importar cartas → Buscar notas do Deck Builder**.
+2. Vá a **Kit solo → Baralhos → Importar cartas → Buscar notas do Deck Builder**.
 3. Escolha uma lista **FullDeck** e importe, ou adicione o catálogo inteiro. A migração preserva cópias repetidas, seções, atributos e a descrição. Se a configuração do Deck Builder ainda estiver no cofre, também traz os ícones de mana e elemento. Cartas referenciadas mas não encontradas aparecem num aviso.
 4. Salve o novo baralho. As notas antigas e os anexos não são reescritos. Para exibir uma carta nova numa nota use um bloco `brpg-card` com os campos do `DeckCard`. Um bloco `brpg-deck` aceita o nome de um baralho salvo ou uma lista no estilo `FullDeck`.
 
