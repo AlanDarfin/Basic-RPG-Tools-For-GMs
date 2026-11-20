@@ -45,6 +45,7 @@ const { registerEmbeds } = load("embeds.js");
 const { observatory } = load("observatory.js");
 const { weatherDay } = load("weather.js");
 const { fantasyExport, gregorian } = load("interchange.js");
+const { CalendarTemplatesModal } = load("templates-ui.js");
 const { defaultSolo, validateSolo } = load("solo.js");
 const { SOLO_VIEW, TABS, SoloView, openSolo } = load("solo-ui.js");
 const { registerSoloInline } = load("solo-inline.js");
@@ -99,6 +100,7 @@ class Settings extends PluginSettingTab {
     el(importBox, 'h3', '', 'Biblioteca e backup');
     const buttons = el(importBox, 'div', 'brpg-toolbar');
     button(buttons, 'Novo calendário', () => p.newCalendar(), { icon: 'plus' });
+    button(buttons, 'Galeria de modelos', () => p.openCalendarTemplates(), { icon: 'layout-template' });
     button(buttons, 'Preset Arkanis', () => p.attempt(async () => {
       const preset = copy(arkanis); ensureWeather(preset); preset.id = uid('cal');
       await p.putCalendar(preset, true); this.display();
@@ -209,6 +211,8 @@ class BasicRPG extends Plugin {
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
+    this.addCommand({id:'calendar-templates',name:'Calendário · Escolher modelo',callback:()=>this.openCalendarTemplates()});
+    this.addCommand({id:'atlas-template-map',name:'Atlas · Novo mapa a partir de modelo',callback:()=>this.attempt(async()=>{const view=await this.openAtlas('maps');view.editMap();})});
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
     this.addCommand({ id: 'open-sky', name: 'Abrir céu do dia', callback: () => this.attempt(async () => {
       const view = await this.open(false); if (view instanceof CalendarView) { view.mode = 'sky'; view.render(); }
@@ -445,6 +449,7 @@ class BasicRPG extends Plugin {
     s.calendars = s.calendars.filter((c) => c.id !== id);
     if (s.activeId === id) s.activeId = s.calendars[0].id;
   }); }
+  openCalendarTemplates(){new CalendarTemplatesModal(this).open();}
   newCalendar() { new CalendarEditor(this, newCalendar(), true).open(); }
   async advance(amount) {
     await this.editCalendar(this.active().id, (c) => {
@@ -2194,6 +2199,7 @@ class CalendarView extends ItemView {
       (v) => this.plugin.attempt(() => this.plugin.setActive(v)), 'Calendário ativo');
     button(actions, 'Editar calendário', () => new CalendarEditor(this.plugin, c).open(), { icon: 'settings', iconOnly: true });
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
+    button(actions, 'Modelos de calendário', () => this.plugin.openCalendarTemplates(), { icon: 'layout-template', iconOnly: true });
     button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords' });
     button(actions, 'Abrir Atlas', this.run(() => this.plugin.openAtlas()), { icon: 'map' });
@@ -4156,6 +4162,101 @@ function registerEmbeds(plugin) {
 module.exports = { registerEmbeds };
 
     },
+    "templates-ui.js": function (module, exports, load, require) {
+'use strict';
+const { Modal } = require('obsidian');
+const { el, button, info, CalendarEditor } = load("ui.js");
+const { CALENDAR_TEMPLATES, makeTemplate } = load("calendar-presets.js");
+class CalendarTemplatesModal extends Modal {
+ constructor(plugin){super(plugin.app);this.plugin=plugin;}
+ onOpen(){
+   const root=this.contentEl;
+   root.replaceChildren();this.modalEl.addClass('brpg-template-modal');
+   const wrapper=el(root,'section','brpg brpg-template-picker');
+   el(wrapper,'p','brpg-eyebrow','BIBLIOTECA DE MODELOS');
+   el(wrapper,'h2','brpg-heading','Criar calendário');
+   info(wrapper,'Escolha um exemplo para começar. O original permanece intacto e todas as datas, luas e regras podem ser editadas.');
+   const listing=el(wrapper,'div','brpg-template-list');
+   for(const preset of CALENDAR_TEMPLATES){
+     const item=el(listing,'article','brpg-template-card');
+     const title=el(item,'div','brpg-template-card-head');
+     el(title,'strong','',preset.name);
+     el(title,'span','brpg-chip',preset.category);
+     el(item,'p','brpg-hint',preset.description);
+     el(item,'small','brpg-hint',preset.details);
+     button(item,'Usar e personalizar',()=>{
+       const calendar=makeTemplate(preset.id,new Date(this.plugin.clockNow()));
+       this.close();
+       new CalendarEditor(this.plugin,calendar,true).open();
+     },{icon:'copy'});
+   }
+ }
+}
+module.exports={CalendarTemplatesModal};
+
+    },
+    "calendar-presets.js": function (module, exports, load, require) {
+'use strict';
+const { newCalendar, copy, uid, validateCalendar, CalendarEngine } = load("calendar.js");
+const { gregorian } = load("interchange.js");
+const arkanis = load("arkanis.json");
+
+const CALENDAR_TEMPLATES=Object.freeze([
+ {id:'arkanis',name:'Arkanis',category:'Fantasia',description:'Mundo de exemplo com 26 meses, semana de 12 dias, três sóis, três luas, estações e eventos.',details:'26 meses · 12 dias/semana · 32 horas/dia'},
+ {id:'gregorian',name:'Gregoriano',category:'Histórico',description:'Calendário civil com 12 meses, sete dias por semana e anos bissextos com regra 4/100/400.',details:'12 meses · 7 dias/semana · 24 horas/dia'},
+ {id:'thirteen-moons',name:'13 Luas',category:'Fantasia',description:'Treze meses de 28 dias e um dia fora da semana ao fim do ano. Exemplo fictício editável.',details:'13 meses · 7 dias/semana · 365 dias/ano'},
+ {id:'lunar-fantasy',name:'Lunar de campanha',category:'Fantasia',description:'Doze meses alternando 30 e 29 dias, com 354 dias/ano. Modelo fictício, não representa um calendário religioso.',details:'12 meses · 7 dias/semana · 354 dias/ano'},
+ {id:'solar-eight',name:'Solar de oito dias',category:'Fantasia',description:'Doze meses de 30 dias, semana de 8 dias e cinco dias festivos fora da semana.',details:'12 meses · 8 dias/semana · 365 dias/ano'},
+ {id:'blank',name:'Personalizado em branco',category:'Livre',description:'Estrutura neutra para criar um calendário totalmente novo.',details:'4 meses de exemplo · editável'}
+]);
+const special=(name,month,after,number)=>({
+ id:uid('special'),name,month,after,intercalary:true,every:1,except:0,also:0,offset:0,order:number
+});
+function makeTemplate(id,now=new Date()){
+ if(!CALENDAR_TEMPLATES.some(t=>t.id===id))throw new Error('Modelo de calendário não encontrado.');
+ if(id==='arkanis'){
+   const c=copy(arkanis);c.id=uid('cal');
+   c.description=(c.description||'')||'Calendário demonstrativo de Arkanis.';
+   return validateCalendar(c);
+ }
+ if(id==='gregorian'){
+   const c=gregorian(now);
+   c.id=uid('cal');
+   c.description='Modelo civil gregoriano, com anos bissextos segundo a regra de 4/100/400.';
+   // A fresh template must begin with the local date; its year has no zero.
+   c.firstWeekday=0;c.firstYear=1;
+   return validateCalendar(c);
+ }
+ const c=newCalendar();
+ c.id=uid('cal');c.events=[];c.moons=[];c.seasons=[];c.eras=[];
+ c.firstYear=1;c.firstWeekday=0;c.weekOverflow=true;
+ c.current={year:1,month:c.months[0].id,day:1,hour:0,minute:0};
+ c.description=CALENDAR_TEMPLATES.find(t=>t.id===id).description;
+ if(id==='thirteen-moons'){
+   c.name='13 Luas';c.months=Array.from({length:13},(_,i)=>({id:'lua-'+(i+1),name:'Lua '+(i+1),length:28,intercalary:false}));
+   c.week=['Primeiro','Segundo','Terceiro','Quarto','Quinto','Sexto','Sétimo'];
+   c.leapDays=[special('Dia fora do tempo',c.months[12].id,28,1)];
+   c.moons=[{id:'lua-principal',name:'Lua',period:28,offset:0,granularity:8,rounding:'round',hidden:false}];
+ }else if(id==='lunar-fantasy'){
+   c.name='Lunar de campanha';
+   c.months=Array.from({length:12},(_,i)=>({id:'ciclo-'+(i+1),name:'Ciclo '+(i+1),length:i%2===0?30:29,intercalary:false}));
+   c.moons=[{id:'lua-principal',name:'Lua',period:29.5,offset:0,granularity:8,rounding:'round',hidden:false}];
+ }else if(id==='solar-eight'){
+   c.name='Solar de oito dias';
+   c.months=Array.from({length:12},(_,i)=>({id:'estacao-'+(i+1),name:'Mês '+(i+1),length:30,intercalary:false}));
+   c.week=['Aurora','Vento','Fogo','Água','Terra','Luz','Sombra','Descanso'];
+   c.leapDays=['Festival do Sol','Festival das Águas','Festival da Terra','Festival do Vento','Festival das Estrelas']
+    .map((name,i)=>special(name,c.months[11].id,30,i+1));
+ }else{
+   c.name='Meu mundo';c.description='Calendário simples editável, ponto de partida para criar outro mundo.';
+ }
+ c.current.month=c.months[0].id;
+ c.sky.unitPeriod=new CalendarEngine(c).yearInfo(1).total;
+ return validateCalendar(c);
+}
+module.exports={CALENDAR_TEMPLATES,makeTemplate};
+
+    },
     "solo.js": function (module, exports, load, require) {
 'use strict';
 
@@ -6076,6 +6177,7 @@ const TERRAIN=Object.freeze({
   desert:{name:'Deserto',color:'#c49d64',icon:'☼',speed:2},
   road:{name:'Estrada',color:'#9e866a',icon:'═',speed:.75},
   wall:{name:'Parede',color:'#514b52',icon:'▧',speed:999},
+  ice:{name:'Gelo e neve',color:'#c8dce3',icon:'❄',speed:3},
   floor:{name:'Piso',color:'#b0a496',icon:'',speed:1}
 });
 const RELATION_TYPES=Object.freeze({
@@ -6196,6 +6298,14 @@ function checkAtlas(atlas,m){
    assert(Object.hasOwn(TERRAIN,map.defaultTerrain),'Terreno padrão inválido.');
    assert(safeNote(map.background||'')&& (!map.parent||maps.has(map.parent)), 'Vínculo do mapa inválido.');
    assert(map.parent!==map.id,'Um mapa não pode ser seu próprio submapa.');
+   const visited=new Set([map.id]);let ancestor=map.parent;
+   while(ancestor){
+     assert(!visited.has(ancestor),'Ciclo de submapas detectado. Remova a referência circular.');
+     visited.add(ancestor);
+     const next=maps.get(ancestor);
+     assert(!!next,'Mapa pai não encontrado.');
+     ancestor=next.parent||'';
+   }
    if(map.parentCell){const parent=maps.get(map.parent),cell=unpack(map.parentCell);assert(parent&&cell&&inMap(parent,cell.col,cell.row),'Coordenadas do mapa pai inválidas.');}
    if(map.parent)assert(maps.get(map.parent).campaign===map.campaign,'Submapas precisam pertencer à mesma campanha.');
    assert(map.cells&&typeof map.cells==='object'&&!Array.isArray(map.cells)&&Object.keys(map.cells).length<=MAX_CELLS,'Mapa possui células inválidas.');
@@ -6310,15 +6420,23 @@ function relationGraph(m,atlas,campaign='',notes=[]){
 }
 function subgraph(graph,focus='',depth=2,filter=[]){
  const filtered=graph.edges.filter(e=>!filter.length||filter.includes(e.type));
- if(!focus)return {nodes:graph.nodes.filter(n=>filtered.some(e=>e.from===n.id||e.to===n.id)).slice(0,80),
-  edges:filtered.slice(0,200)};
- const seen=new Set([focus]),frontier=[focus];
- for(let i=0;i<Math.min(5,Math.max(1,depth));i++){
-   const next=[];
-   for(const e of filtered)if(seen.has(e.from)&&!seen.has(e.to)){next.push(e.to);seen.add(e.to);}
-     else if(seen.has(e.to)&&!seen.has(e.from)){next.push(e.from);seen.add(e.from);}
-   frontier.push(...next);
-   if(!next.length)break;
+ if(!focus){
+   const active=new Set();
+   for(const e of filtered){active.add(e.from);active.add(e.to);}
+   const nodes=graph.nodes.filter(n=>active.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
+   return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
+ }
+ const seen=new Set([focus]);
+ let frontier=new Set([focus]);
+ for(let level=0;level<Math.min(5,Math.max(0,depth));level++){
+   const next=new Set();
+   for(const e of filtered){
+     if(frontier.has(e.from)&&!seen.has(e.to))next.add(e.to);
+     if(frontier.has(e.to)&&!seen.has(e.from))next.add(e.from);
+   }
+   if(!next.size)break;
+   for(const id of next)seen.add(id);
+   frontier=next;
  }
  const nodes=graph.nodes.filter(n=>seen.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
  return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
@@ -6782,6 +6900,7 @@ const { key,clean }=load("solo.js");
 const { newEntry,find,requireMesa,buildRunning }=load("mesa.js");
 const { randomContent }=load("ultra.js");
 const { parseTable,tableEngine }=load("solo-tables.js");
+const { MAP_TEMPLATES, createMapTemplate }=load("map-presets.js");
 const {
   TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,around,
   terrainSeed,dungeonSeed,routeCost,relationGraph,subgraph,nodeRef,safeNote
@@ -6922,7 +7041,19 @@ class AtlasView extends ItemView{
  editMap(existing){
    const base=existing||newMap(this.campaign,'hex');
    if(!existing){base.name='Novo mapa';if(!base.campaign)base.campaign=this.m.campaigns[0]?.id||'';}
-   modal(this,existing?'Editar mapa':'Criar mapa',base,(root,d)=>{
+   modal(this,existing?'Editar mapa':'Criar mapa',base,(root,d,redraw)=>{
+     if(!existing){
+       labelled(root,'Modelo inicial',[['','Personalizado'],...MAP_TEMPLATES.map(t=>[t.id,t.name])],d.template||'',v=>{
+         const oldCampaign=d.campaign;
+         const fresh=v?createMapTemplate(v,oldCampaign):newMap(oldCampaign,d.grid);
+         if(!v)fresh.name='Novo mapa';
+         Object.assign(d,fresh);
+         redraw();
+       });
+       const model=MAP_TEMPLATES.find(x=>x.id===d.template);
+       if(model)info(root,model.description+' · '+model.size);
+       else info(root,'Escolha um modelo pronto ou crie uma grade personalizada. Os modelos só são adicionados após salvar.');
+     }
      input(root,'Nome do mapa',d.name,v=>{d.name=v;},{maxLength:120});
      labelled(root,'Campanha',opts(this.m.campaigns,'Sem campanha'),d.campaign,v=>{d.campaign=v;});
      labelled(root,'Grade',[['hex','Hexagonal'],['square','Quadrada']],d.grid,v=>{d.grid=v;});
@@ -6964,7 +7095,7 @@ class AtlasView extends ItemView{
    labelled(controls,'Mapa',opts(listing,'Escolher mapa'),listing.some(x=>x.id===this.mapId)?this.mapId:'',
      v=>this.chooseMap(v));
    const tools=row(controls);
-   button(tools,'Novo mapa',()=>this.editMap(),{icon:'plus',className:'brpg-button mod-cta'});
+   button(tools,'Novo mapa ou modelo',()=>this.editMap(),{icon:'layout-template',className:'brpg-button mod-cta'});
    const map=this.current;
    if(!map){info(root,'Crie seu primeiro mapa hexagonal ou quadriculado. Você poderá conectar cada célula a notas, personagens e encontros da Mesa.');return;}
    const mapActions=row(root);
@@ -7344,6 +7475,139 @@ function setupAtlas(plugin){
  registerAtlasEmbeds(plugin);
 }
 module.exports={ATLAS_VIEW,AtlasView,openAtlas,setupAtlas,renameAtlasNotes,makeHexNote,mapNotes};
+
+    },
+    "map-presets.js": function (module, exports, load, require) {
+'use strict';
+// All built-in templates are cloned on creation. They do not modify existing maps.
+// The Earth grid is a stylized 40×22 landmask derived from Natural Earth 1:110m
+// public-domain land polygons (https://www.naturalearthdata.com/about/terms-of-use/).
+// Simplified for fantasy worldbuilding: not suitable for navigation or accurate borders.
+const { newMap, terrainSeed, dungeonSeed, place } = load("atlas.js");
+
+const MAP_TEMPLATES=Object.freeze([
+ {id:'world-earth',name:'Mapa-múndi · Terra alternativa',description:'Continentes reconhecíveis em hexágonos, com biomas e regiões editáveis. Sem fronteiras nem cidades fixas.',grid:'hex',size:'40 × 22',category:'Mundo'},
+ {id:'archipelago',name:'Arquipélago',description:'Ilhas e oceanos para exploração naval, com terreno gerado a partir de uma semente.',grid:'hex',size:'28 × 18',category:'Mundo'},
+ {id:'regional',name:'Região de aventura',description:'Mapa hexagonal de exploração com floresta, colinas e pontos de interesse de exemplo.',grid:'hex',size:'22 × 16',category:'Região'},
+ {id:'dungeon',name:'Masmorra gerada',description:'Salas e corredores em uma planta quadrada editável.',grid:'square',size:'18 × 16',category:'Cena'},
+ {id:'empty-hex',name:'Hexágonos em branco',description:'Terreno neutro para criar seu próprio mundo ou região.',grid:'hex',size:'12 × 10',category:'Vazio'},
+ {id:'empty-square',name:'Quadrados em branco',description:'Grade vazia para interiores e mapas de combate.',grid:'square',size:'12 × 10',category:'Vazio'},
+]);
+// '~' water, P plains, F forest, H hills, M mountain, D desert, I ice
+const EARTH_ROWS=Object.freeze([
+'~~~~~~~~~IIIIIIIIII~~~~~~~~~~~~~~~~~~~~~',
+'~~~~~~IIIII~~IIII~~~~~~~~~~~~IIIII~II~~~',
+'IIIIIIIIIII~I~II~~I~~IIIIIIIIIIIIIIIIIII',
+'~~~~MMMMMH~PP~~~~~~~~FFPPFFFFFFFFFFF~P~~',
+'~~~~~~MMMFFFFH~~~~~~FFFFPPFFFFFFFFFF~~~~',
+'~~~~~~PPFFFF~~~~~~~F~FF~PPPMMMMPPPH~~~~~',
+'~~~~~~~DDFFF~~~~~~~HPH~~PPPPMMMMPPHP~~~~',
+'~~~~~~~DP~P~~~~~~~DDDDDDDDDMMMMPP~~~~~~~',
+'~~~~~~~~PH~~~~~~~~DDDDDDDDD~PP~P~~~~~~~~',
+'~~~~~~~~~~~H~~~~~~PPPPPPP~~~P~~F~~~~~~~~',
+'~~~~~~~~~~~MMFF~~~~~~FFFPP~~~~~F~F~~~~~~',
+'~~~~~~~~~~~MMFPH~~~~~FFP~~~~~~~FF~~F~~~~',
+'~~~~~~~~~~~MMFFP~~~~~~PPP~~~~~~~~~~~~~~~',
+'~~~~~~~~~~~~MPP~~~~~~PPP~~~~~~~~~DDDD~~~',
+'~~~~~~~~~~~~MPP~~~~~~~PP~~~~~~~~~DDDDH~~',
+'~~~~~~~~~~~~MH~~~~~~~~~~~~~~~~~~~~~PP~~~',
+'~~~~~~~~~~~~M~~~~~~~~~~~~~~~~~~~~~~~~~~H',
+'~~~~~~~~~~~M~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
+'~~~~~~~~~~~~I~~~~~~~~~~~~~~~~~~I~~~~~~~~',
+'~~~~~~I~~IIII~~~~~IIIIIIIIIIIIIIIIIIIIII',
+'~~IIIIIIIIII~~IIIIIIIIIIIIIIIIIIIIIIII~~'
+]);
+const SYMBOL_TERRAIN=Object.freeze({P:'plains',F:'forest',H:'hills',M:'mountain',D:'desert',I:'ice'});
+function worldGeo(col,row){
+ return {lon:-180+360*(col+.5+(row%2)*.5)/40.5,lat:85-170*(row+.5)/22};
+}
+function continent(lon,lat){
+ if(lat < -60)return 'Antártida';
+ if(lon < -33)return lat>12?'América do Norte':'América do Sul';
+ if(lon>105&&lat<0)return 'Oceania';
+ if(lon>-20&&lon<43&&lat<35&&lat>-40)return 'África';
+ if(lon>-15&&lon<45&&lat>=35)return 'Europa';
+ if(lon>=40)return 'Ásia';
+ return 'Oceano Ártico';
+}
+function makeWorld(map){
+ map.width=40;map.height=22;map.defaultTerrain='water';
+ for(let row=0;row<22;row++){
+   const line=EARTH_ROWS[row];
+   if(line.length!==40)throw new Error('Modelo da Terra inválido.');
+   for(let col=0;col<40;col++){
+     const terrain=SYMBOL_TERRAIN[line[col]];
+     if(!terrain)continue;
+     const point=worldGeo(col,row);
+     map.cells[place(col,row)]={terrain,region:continent(point.lon,point.lat)};
+   }
+ }
+ // The labels are decorative named regions, not geospatial or political borders.
+ const targets=[
+  ['América do Norte',-105,42],['América do Sul',-64,-16],['Europa',12,50],
+  ['África',19,1],['Ásia',100,41],['Oceania',133,-24],['Antártida',15,-74]
+ ];
+ for(const [name,lon,lat] of targets){
+   const candidates=[];
+   for(const [at,cell]of Object.entries(map.cells)){
+     if(cell.region!==name)continue;
+     const [col,row]=at.split(',').map(Number),g=worldGeo(col,row);
+     candidates.push({at,score:Math.pow((g.lon-lon)*Math.cos(lat*Math.PI/180),2)+Math.pow(g.lat-lat,2)});
+   }
+   candidates.sort((a,b)=>a.score-b.score);
+   if(candidates.length)map.cells[candidates[0].at].label=name;
+ }
+ map.description='Mapa de exemplo: continentes da Terra em uma projeção simplificada. Personalize países, estados e cidades sem alterar o mundo original.';
+ return map;
+}
+function makeArchipelago(map){
+ map.width=28;map.height=18;map.defaultTerrain='water';
+ const islands=[[6,6,4.2,3.5],[18,9,5.1,4.5],[22,3,2.6,2.1],[10,14,2.3,2.4]];
+ for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+   let score=0;
+   for(const [x,y,rx,ry]of islands){
+     const dist=Math.pow((col-x)/rx,2)+Math.pow((row-y)/ry,2);
+     score=Math.max(score,1-dist);
+   }
+   const noise=(Math.sin(col*7.3+row*1.9)+Math.sin(col*1.3-row*3.7))*.045;
+   if(score+noise<.15)continue;
+   const terrain=score>.78?'mountain':score>.55?'hills':score>.33?'forest':'plains';
+   map.cells[place(col,row)]={terrain,region:'Ilhas do Horizonte'};
+ }
+ for(const [col,row,label]of [[6,6,'Ilha Grande'],[18,9,'Ilha das Brumas'],[22,3,'Farol']]){
+   const at=place(col,row);
+   if(map.cells[at])map.cells[at].label=label;
+ }
+ return map;
+}
+function makeRegional(map,seed){
+ map.width=22;map.height=16;map.defaultTerrain='plains';
+ map.cells=terrainSeed(map,seed);
+ // The generated cells remain completely editable.
+ const labels=[[3,7,'Vila Inicial'],[14,4,'Bosque Antigo'],[18,12,'Ruínas']];
+ for(const [col,row,label]of labels){
+   map.cells[place(col,row)]={...(map.cells[place(col,row)]||{}),label,region:'Região inicial'};
+ }
+ return map;
+}
+function createMapTemplate(templateId,campaign='',options={}){
+ const template=MAP_TEMPLATES.find(x=>x.id===templateId);
+ if(!template)throw new Error('Modelo de mapa desconhecido.');
+ const map=newMap(campaign,template.grid);
+ map.name=template.name;map.template=template.id;
+ const seed=Number.isInteger(options.seed)?options.seed:2026;
+ if(template.id==='world-earth')makeWorld(map);
+ else if(template.id==='archipelago')makeArchipelago(map);
+ else if(template.id==='regional')makeRegional(map,seed);
+ else if(template.id==='dungeon'){
+   map.width=18;map.height=16;map.cells=dungeonSeed(map,seed);
+ }else if(template.id==='empty-square'){
+   map.defaultTerrain='floor';
+ }
+ return map;
+}
+module.exports={MAP_TEMPLATES,EARTH_ROWS,createMapTemplate,worldGeo,continent};
 
     },
     "atlas-canvas.js": function (module, exports, load, require) {

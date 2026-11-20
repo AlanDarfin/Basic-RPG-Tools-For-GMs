@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "minAppVersion": "1.7.2",
-  "description": "Calendários, fichas, combate, mapas interligados, relações, dados e ferramentas de mestre.",
+  "description": "Calendários com modelos, Atlas integrado de mundos, mapas, fichas, combate e relações.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false

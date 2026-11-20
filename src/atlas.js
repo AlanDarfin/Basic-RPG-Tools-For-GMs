@@ -11,6 +11,7 @@ const TERRAIN=Object.freeze({
   desert:{name:'Deserto',color:'#c49d64',icon:'☼',speed:2},
   road:{name:'Estrada',color:'#9e866a',icon:'═',speed:.75},
   wall:{name:'Parede',color:'#514b52',icon:'▧',speed:999},
+  ice:{name:'Gelo e neve',color:'#c8dce3',icon:'❄',speed:3},
   floor:{name:'Piso',color:'#b0a496',icon:'',speed:1}
 });
 const RELATION_TYPES=Object.freeze({
@@ -131,6 +132,14 @@ function checkAtlas(atlas,m){
    assert(Object.hasOwn(TERRAIN,map.defaultTerrain),'Terreno padrão inválido.');
    assert(safeNote(map.background||'')&& (!map.parent||maps.has(map.parent)), 'Vínculo do mapa inválido.');
    assert(map.parent!==map.id,'Um mapa não pode ser seu próprio submapa.');
+   const visited=new Set([map.id]);let ancestor=map.parent;
+   while(ancestor){
+     assert(!visited.has(ancestor),'Ciclo de submapas detectado. Remova a referência circular.');
+     visited.add(ancestor);
+     const next=maps.get(ancestor);
+     assert(!!next,'Mapa pai não encontrado.');
+     ancestor=next.parent||'';
+   }
    if(map.parentCell){const parent=maps.get(map.parent),cell=unpack(map.parentCell);assert(parent&&cell&&inMap(parent,cell.col,cell.row),'Coordenadas do mapa pai inválidas.');}
    if(map.parent)assert(maps.get(map.parent).campaign===map.campaign,'Submapas precisam pertencer à mesma campanha.');
    assert(map.cells&&typeof map.cells==='object'&&!Array.isArray(map.cells)&&Object.keys(map.cells).length<=MAX_CELLS,'Mapa possui células inválidas.');
@@ -245,15 +254,23 @@ function relationGraph(m,atlas,campaign='',notes=[]){
 }
 function subgraph(graph,focus='',depth=2,filter=[]){
  const filtered=graph.edges.filter(e=>!filter.length||filter.includes(e.type));
- if(!focus)return {nodes:graph.nodes.filter(n=>filtered.some(e=>e.from===n.id||e.to===n.id)).slice(0,80),
-  edges:filtered.slice(0,200)};
- const seen=new Set([focus]),frontier=[focus];
- for(let i=0;i<Math.min(5,Math.max(1,depth));i++){
-   const next=[];
-   for(const e of filtered)if(seen.has(e.from)&&!seen.has(e.to)){next.push(e.to);seen.add(e.to);}
-     else if(seen.has(e.to)&&!seen.has(e.from)){next.push(e.from);seen.add(e.from);}
-   frontier.push(...next);
-   if(!next.length)break;
+ if(!focus){
+   const active=new Set();
+   for(const e of filtered){active.add(e.from);active.add(e.to);}
+   const nodes=graph.nodes.filter(n=>active.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
+   return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
+ }
+ const seen=new Set([focus]);
+ let frontier=new Set([focus]);
+ for(let level=0;level<Math.min(5,Math.max(0,depth));level++){
+   const next=new Set();
+   for(const e of filtered){
+     if(frontier.has(e.from)&&!seen.has(e.to))next.add(e.to);
+     if(frontier.has(e.to)&&!seen.has(e.from))next.add(e.from);
+   }
+   if(!next.size)break;
+   for(const id of next)seen.add(id);
+   frontier=next;
  }
  const nodes=graph.nodes.filter(n=>seen.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
  return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
