@@ -117,6 +117,7 @@ function renderAssetLibrary(view,root){
   labelled(box,'Tipo',[['all','Tudo'],['image','Imagens e tokens'],['audio','Áudio'],['note','Notas']],s.assetType||'all',
     v=>{s.assetType=v;paint();});
   const cloud=row(box);
+  button(cloud,'Abrir Atlas',run(plugin,()=>plugin.openAtlas()),{icon:'map'});
   const commands=plugin.app.commands?.listCommands?.()||[];
   const moulinette=commands.find(cmd=>/moulinette/i.test(cmd.id)&&/browser|browse|open/i.test(cmd.id))
     ||commands.find(cmd=>/moulinette/i.test(cmd.id));

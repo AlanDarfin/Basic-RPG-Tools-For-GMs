@@ -274,3 +274,60 @@ O primeiro exibe atributos e contadores persistentes de uma ficha da biblioteca.
 Esta implementação é independente e não redistribui conteúdo dos catálogos externos. A versão 1.3.0 não substitui as regras completas de D&D, não importa automaticamente os componentes do UI Toolkit, não executa downloads diretos do Moulinette Cloud e não interpreta integralmente todos os modelos avançados do TTRPG Content Generator.
 
 Execute `npm test` para validar o núcleo do plugin e `npm run build` para reconstruir `main.js` a partir de `src/`.
+
+
+## Atlas: mapas e relações (1.4.0)
+
+**Atlas** é uma ferramenta integrada à Mesa para desenho de mapas de RPG e organização das relações da campanha. Não exige instalar Windrose, Hexmaker nem Relations.
+
+### Mapas hexagonais e quadrados
+
+- **Novo mapa** permite escolher grade hexagonal ou quadrada, tamanho, nome, campanha, terreno padrão e imagem de fundo existente no cofre.
+- Em **Terreno**, toque e arraste para pintar planície, floresta, colina, montanha, água, pântano, deserto, estrada, parede ou piso. Pincéis de 1, 3 ou até 7 células, com suporte a toque.
+- Em **Névoa**, esconda e revele células. **Visualização do mestre** controla a exibição de segredos e locais inexplorados na interface. Isso é um filtro visual, não um mecanismo de controle de acesso aos arquivos.
+- Em **Rotas**, toque em pontos sucessivos, veja o custo relativo de deslocamento conforme o terreno e salve caminhos no mapa.
+- Em **Tokens**, escolha uma ficha da Mesa e toque em uma célula para colocá-la ou movê-la.
+- Em cada célula, configure região, facção, nome, descrição, segredo, nota do cofre, tabela de encontros, ficha, encontro preparado ou submapa. O editor abre os registros existentes, em vez de criar cópias.
+- Use **Gerar terreno** num mapa hexagonal ou **Gerar masmorra** em um mapa quadrado para preencher as cores de terreno, preservando os vínculos e tokens existentes.
+- **Criar nota do hex** grava uma nota Markdown em `Basic RPG/Mapas/<Mapa>/Celula-x-y.md` com identificação de mapa e coordenadas. Notas preexistentes não são sobrescritas.
+- Se uma célula tiver uma tabela Markdown vinculada, **Rolar encontro** usa o motor local de tabelas do Kit Solo.
+
+### Rede de relações
+
+O painel **Relações** reúne vínculos manuais da Mesa, conexões entre registros, associações entre mapas e entidades e vínculos declarados nas propriedades de notas (por exemplo `ally`, `enemy`, `family`, `parent`, `child`, `spouse`, `mentor`, `member`, `leader`).
+
+É possível escolher um centro, profundidade, filtrar o tipo de vínculo e alternar entre a disposição em rede e uma hierarquia simples. Clique em um nó para abrir sua nota, ficha, registro ou mapa. A visualização é leve para dispositivos móveis e não tenta implementar a renderização genealógica avançada do plugin Relations.
+
+### Blocos Markdown
+
+Exibir um mapa salvo em uma nota:
+
+~~~md
+```brpg-mapa
+ref: Vale Lunar
+view: player
+```
+~~~
+
+Vínculos de uma campanha:
+
+~~~md
+```brpg-relacoes
+campaign: Crônicas de Arkanis
+depth: 2
+```
+~~~
+
+Blocos usam os dados da Mesa e mostram a versão atual no Obsidian. A opção `view: player` mascara as células com neblina, mas não criptografa nem oculta os dados do cofre.
+
+### Integração
+
+Campanhas, fichas, encontros e notas compartilham referências com o Atlas. A Mesa tem atalhos para abrir os mapas, e a busca de fichas pode indicar em qual mapa existe um token ou vínculo de célula. Excluir uma ficha com vínculos cartográficos exige desvinculá-la antes.
+
+### Referências e limites
+
+- [Windrose MapDesigner](https://github.com/alas-poor-ophelia/windrose-md): pintura de terrenos, grades, regiões, objetos, névoa, rotas e submapas.
+- [Hexmaker](https://github.com/sbuffkin/hexmaker): células ligadas a notas, terreno, facções, tokens e tabelas de encontro.
+- [Relations](https://github.com/obsidian-ttrpg-community/Relations): relações tipadas entre notas, filtros, exploração de vizinhança e grafos incorporados.
+
+Esta é uma implementação nova e independente. **Ainda não** oferece importação automática de mapas dos dois plugins, pacotes Dungeondraft, pintura por imagem com múltiplas camadas, rotas Bezier, medição em sistemas de jogo ou editor de árvore genealógica equivalente ao Relations. Os mapas são armazenados no `data.json` do Basic RPG e as notas criadas permanecem arquivos Markdown normais.

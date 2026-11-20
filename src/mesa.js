@@ -108,6 +108,7 @@ function checkEncounter(e) {
 }
 function checkMesa(m) {
   requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
+  if(m.atlas !== undefined)require('./atlas').checkAtlas(m.atlas,m);
   for (const field of ['campaigns','entries','sheets','encounters']) {
     const a = m[field];
     requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&

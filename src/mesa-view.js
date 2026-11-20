@@ -159,6 +159,7 @@ class MesaView extends ItemView {
     const anchors=row(head);
     button(anchors,'Calendário',this.run(() => this.plugin.open(true)),{icon:'calendar-days',iconOnly:true});
     button(anchors,'Kit solo',this.run(() => this.plugin.openSolo(null,true)),{icon:'dices',iconOnly:true});
+    button(anchors,'Atlas',this.run(() => this.plugin.openAtlas()),{icon:'map',iconOnly:true});
     const tabs=el(root,'nav','brpg-tabs brpg-mesa-tabs');
     tabs.setAttribute('aria-label','Ferramentas da Mesa');
     for (const [id,label,icon] of TABS) {
@@ -225,12 +226,13 @@ class MesaView extends ItemView {
     }
     const card=panel(root,current.name);
     if (current.summary) el(card,'p','brpg-mesa-prose',current.summary);
+    button(row(card),'Mapas da campanha',this.run(async()=>{const view=await this.plugin.openAtlas('maps');view.campaign=current.id;view.render();}),{icon:'map'});
     const controls=row(card);
     linkedNote(controls,p,current.note);
     button(controls,'Editar campanha',() => this.campaignEditor(current),{icon:'pencil'});
     cta(controls,'Novo registro',() => this.entryEditor(current),'plus');
     button(controls,'Excluir campanha',() => this.remove('Excluir a campanha vazia? Nenhuma nota será apagada.',m => {
-      requireMesa(![...m.entries,...m.sheets,...m.encounters,m.running].some(x => x?.campaign===current.id),
+      requireMesa(![...m.entries,...m.sheets,...m.encounters,...(m.atlas?.maps||[]),m.running].some(x => x?.campaign===current.id),
         'Remova os registros e encontros ou mova as fichas para outra campanha antes de excluir.');
       m.campaigns=m.campaigns.filter(x => x.id!==current.id);
     }),{icon:'trash-2',iconOnly:true});
@@ -256,6 +258,8 @@ class MesaView extends ItemView {
         button(actions,'Criar encontro',() => this.encounterEditor(null,e),{icon:'swords'});
         button(actions,'Excluir registro',() => this.remove('Excluir este registro da campanha?',m => {
           m.entries=m.entries.filter(x => x.id!==e.id);
+          if(m.atlas){for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.entry===e.id)delete cell.entry;
+          m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='entry:'+e.id&&x.to!=='entry:'+e.id);}
           for (const r of m.entries) r.links=r.links.filter(id => id!==e.id);
           for (const encounter of m.encounters) if (encounter.entry===e.id) encounter.entry='';
         }),{icon:'trash-2',iconOnly:true});
@@ -335,13 +339,18 @@ class MesaView extends ItemView {
         el(card,'strong','',s.name);
         el(card,'span','brpg-hint',[KINDS[s.kind],s.type].filter(Boolean).join(' · '));
         const commands=row(card);
+        const location=this.m.atlas?.maps.find(map=>Object.values(map.cells).some(cell=>cell.sheet===s.id)||map.tokens.some(t=>t.sheet===s.id));
+        if(location)button(commands,'Localizar no Atlas',this.run(()=>this.plugin.openAtlas('maps',location.id)),{icon:'map-pin'});
         button(commands,'Abrir ficha',() => new SheetPreview(this.plugin,s).open(),{icon:'eye'});
         button(commands,'Editar ficha',() => this.sheetEditor(s),{icon:'pencil',iconOnly:true});
         button(commands,'Duplicar ficha',() => this.sheetEditor(null,false,s),{icon:'copy',iconOnly:true});
         button(commands,'Excluir ficha',() => this.remove('Excluir esta ficha do bestiário?',m => {
+          requireMesa(!m.atlas?.maps.some(map=>map.tokens.some(t=>t.sheet===s.id)||Object.values(map.cells).some(c=>c.sheet===s.id)),
+            'Remova os vínculos e tokens da ficha nos mapas antes de excluí-la.');
           requireMesa(!m.encounters.some(e => e.roster.some(r => r.sheet===s.id)),
             'Remova a ficha dos encontros salvos antes de excluí-la.');
           m.sheets=m.sheets.filter(x => x.id!==s.id);
+          if(m.atlas)m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='sheet:'+s.id&&x.to!=='sheet:'+s.id);
         }),{icon:'trash-2',iconOnly:true});
       }
     };
@@ -424,6 +433,7 @@ class MesaView extends ItemView {
       button(commands,'Editar encontro',() => this.encounterEditor(e),{icon:'pencil',iconOnly:true});
       button(commands,'Excluir modelo de encontro',() => this.remove('Excluir o modelo deste encontro?',m => {
         m.encounters=m.encounters.filter(x => x.id!==e.id);
+        if(m.atlas)for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.encounter===e.id)delete cell.encounter;
       }),{icon:'trash-2',iconOnly:true});
     }
   }
