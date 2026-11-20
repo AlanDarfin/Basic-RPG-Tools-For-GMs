@@ -139,6 +139,7 @@ function checkAtlas(atlas,m){
      assert(!cell.terrain||Object.hasOwn(TERRAIN,cell.terrain),'Terreno inválido.');
      for(const field of ['label','region','faction','text','secret','icon','table'])assert(!cell[field]||(typeof cell[field]==='string'&&cell[field].length<=(field==='text'||field==='secret'?3000:500)), 'Texto de célula inválido.');
      assert(!cell.note||safeNote(cell.note),'Nota da célula inválida.');
+     assert(!cell.tile||(safeNote(cell.tile)&&/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(cell.tile)), 'Textura da célula inválida.');
      assert(!cell.entry||entries.get(cell.entry)?.campaign===map.campaign,'Registro da célula pertence a outra campanha.');
      assert(!cell.sheet||(sheets.has(cell.sheet)&&(!sheets.get(cell.sheet).campaign||sheets.get(cell.sheet).campaign===map.campaign)),'Ficha da célula não encontrada.');
      assert(!cell.encounter||encounters.get(cell.encounter)?.campaign===map.campaign,'Encontro da célula pertence a outra campanha.');

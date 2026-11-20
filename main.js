@@ -6204,6 +6204,7 @@ function checkAtlas(atlas,m){
      assert(!cell.terrain||Object.hasOwn(TERRAIN,cell.terrain),'Terreno inválido.');
      for(const field of ['label','region','faction','text','secret','icon','table'])assert(!cell[field]||(typeof cell[field]==='string'&&cell[field].length<=(field==='text'||field==='secret'?3000:500)), 'Texto de célula inválido.');
      assert(!cell.note||safeNote(cell.note),'Nota da célula inválida.');
+     assert(!cell.tile||(safeNote(cell.tile)&&/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(cell.tile)), 'Textura da célula inválida.');
      assert(!cell.entry||entries.get(cell.entry)?.campaign===map.campaign,'Registro da célula pertence a outra campanha.');
      assert(!cell.sheet||(sheets.has(cell.sheet)&&(!sheets.get(cell.sheet).campaign||sheets.get(cell.sheet).campaign===map.campaign)),'Ficha da célula não encontrada.');
      assert(!cell.encounter||encounters.get(cell.encounter)?.campaign===map.campaign,'Encontro da célula pertence a outra campanha.');
@@ -6881,7 +6882,7 @@ function getNode(ref){
 class AtlasView extends ItemView{
  constructor(leaf,plugin){
    super(leaf);this.plugin=plugin;this.panel='maps';this.campaign='';this.mapId='';this.selected='';
-   this.mode='inspect';this.terrain='forest';this.brush=0;this.zoom=1;this.gm=true;
+   this.mode='inspect';this.terrain='forest';this.tile='';this.brush=0;this.zoom=1;this.gm=true;this.regions=true;this.factions=true;
    this.route=[];this.token='';this.focus='';this.relationType='';this.depth=2;this.graphStyle='radial';
  }
  getViewType(){return ATLAS_VIEW;}
@@ -6974,7 +6975,7 @@ class AtlasView extends ItemView{
    },{icon:'corner-up-left',iconOnly:true,disabled:!map.parent});
    const main=panel(root,map.name,map.grid==='hex'?'Hexágonos · exploração e regiões':'Quadrados · ambientes, cidades e masmorras');
    const basic=row(main);
-   const modes=[['inspect','Explorar','mouse-pointer-2'],['terrain','Terreno','paintbrush'],['fog','Névoa','cloud'],['route','Rota','route'],['token','Tokens','users']];
+   const modes=[['inspect','Explorar','mouse-pointer-2'],['terrain','Terreno','paintbrush'],['tile','Textura','image'],['fog','Névoa','cloud'],['route','Rota','route'],['token','Tokens','users']];
    for(const [id,label,icon]of modes){
      const b=button(basic,label,()=>{this.mode=id;this.render();},{icon,iconOnly:true});
      b.setAttribute('aria-pressed',String(this.mode===id));
@@ -6985,6 +6986,11 @@ class AtlasView extends ItemView{
        v=>{this.terrain=v;});
      labelled(more,'Tamanho do pincel',[['0','1 célula'],['1','Até 3 células'],['3','Até 7 células']],String(this.brush),
        v=>{this.brush=Number(v);});
+   }else if(this.mode==='tile'){
+     const files=(this.plugin.app.vault.getFiles?.()||[]).filter(x=>/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(x.path)).slice(0,200);
+     labelled(more,'Textura do cofre',[['','Remover textura'],...files.map(f=>[f.path,f.path])],this.tile,v=>{this.tile=v;});
+     input(more,'Caminho direto da imagem',this.tile,v=>{this.tile=v;},{maxLength:500});
+     labelled(more,'Tamanho do pincel',[['0','1 célula'],['1','Até 3 células'],['3','Até 7 células']],String(this.brush),v=>{this.brush=Number(v);});
    }else if(this.mode==='fog')info(more,'Toque ou arraste para cobrir ou revelar células. Na visualização dos jogadores, os detalhes cobertos ficam ocultos.');
    else if(this.mode==='route')info(more,'Toque nas células em sequência para traçar uma rota. O custo considera o terreno de destino.');
    else if(this.mode==='token'){
@@ -6995,12 +7001,15 @@ class AtlasView extends ItemView{
    }
    const switches=row(main);
    checkbox(switches,'Visualização do mestre',this.gm,v=>{this.gm=v;this.render();});
+   checkbox(switches,'Regiões',this.regions,v=>{this.regions=v;this.render();});
+   checkbox(switches,'Facções',this.factions,v=>{this.factions=v;this.render();});
    button(switches,'Ampliar',()=>{this.zoom=Math.min(2,+(this.zoom+.2).toFixed(1));this.render();},{icon:'zoom-in',iconOnly:true,disabled:this.zoom>=2});
    button(switches,'Reduzir',()=>{this.zoom=Math.max(.7,+(this.zoom-.2).toFixed(1));this.render();},{icon:'zoom-out',iconOnly:true,disabled:this.zoom<=.7});
    const canvas=el(main,'div','brpg-atlas-canvas');
    const backgroundFile=map.background?this.plugin.app.vault.getAbstractFileByPath(map.background):null;
    const background=backgroundFile instanceof TFile?this.plugin.app.vault.getResourcePath(backgroundFile):'';
    renderMapCanvas(canvas,map,{background,mode:this.mode,gm:this.gm,zoom:this.zoom,selected:this.selected,paintTerrain:this.terrain,
+     regions:this.regions,factions:this.factions,getTileUrl:path=>{const f=this.plugin.app.vault.getAbstractFileByPath(path);return f instanceof TFile?this.plugin.app.vault.getResourcePath(f):'';},
      onPick:at=>this.pickCell(map,at),onPaint:coords=>this.paintCells(map,coords)});
    const board=row(main);
    if(this.mode==='route'){
@@ -7041,14 +7050,19 @@ class AtlasView extends ItemView{
  }
  paintCells(map,points){
    const all=new Set();
+   if(this.mode==='tile'&&this.tile){
+     const file=this.plugin.app.vault.getAbstractFileByPath(this.tile);
+     if(!(file instanceof TFile))return this.plugin.attempt(()=>{throw new Error('Selecione uma imagem existente no cofre.');});
+   }
    for(const at of points){const center=unpack(at);if(!center)continue;
-     for(const p of around(map,center.col,center.row,this.mode==='terrain'?this.brush:0))
+     for(const p of around(map,center.col,center.row,['terrain','tile'].includes(this.mode)?this.brush:0))
        all.add(place(p.col,p.row));
    }
    return this.plugin.attempt(()=>this.save(a=>{
      const target=a.maps.find(x=>x.id===map.id);if(!target)return;
      for(const at of all){const p=unpack(at),cell=getCell(target,p.col,p.row);
        if(this.mode==='terrain')setCell(target,p.col,p.row,{terrain:this.terrain});
+       else if(this.mode==='tile')setCell(target,p.col,p.row,{tile:this.tile});
        else if(this.mode==='fog')setCell(target,p.col,p.row,{fog:!cell.fog});
      }
    }));
@@ -7121,7 +7135,7 @@ class AtlasView extends ItemView{
      for(const [name,label,max,multi]of [
        ['label','Nome do lugar',120],['region','Região',120],['faction','Facção',120],
        ['text','Descrição',3000,true],['secret','Segredo do mestre',3000,true],
-       ['icon','Símbolo',10],['note','Caminho de nota existente',500],['table','Tabela de encontros (nota)',500]
+       ['icon','Símbolo',10],['tile','Textura da célula (imagem do cofre)',500],['note','Caminho de nota existente',500],['table','Tabela de encontros (nota)',500]
      ])input(root,label,c[name]||'',v=>{c[name]=v;},{multiline:!!multi,rows:multi?3:undefined,maxLength:max});
      const entries=this.m.entries.filter(x=>x.campaign===map.campaign);
      const sheets=this.m.sheets.filter(x=>!x.campaign||x.campaign===map.campaign);
@@ -7133,8 +7147,9 @@ class AtlasView extends ItemView{
      labelled(root,'Submapa',opts(submaps),c.submap||'',v=>{c.submap=v;});
      checkbox(root,'Ocultar atrás da neblina de guerra',c.fog||false,v=>{c.fog=v;});
    },async c=>{
-     for(const f of ['label','region','faction','text','secret','icon','note','table'])c[f]=trim(c[f],f==='text'||f==='secret'?3000:500);
+     for(const f of ['label','region','faction','text','secret','icon','tile','note','table'])c[f]=trim(c[f],f==='text'||f==='secret'?3000:500);
      requireMesa(safeNote(c.note),'Caminho de nota inválido.');
+     if(c.tile){const file=this.plugin.app.vault.getAbstractFileByPath(c.tile);requireMesa(file instanceof TFile,'Selecione uma imagem de textura existente no cofre.');}
      if(c.submap){
        const desc=this.atlas.maps.find(x=>x.id===c.submap);
        requireMesa(!desc.parent||desc.parent===map.id,'O submapa já pertence a outro mapa.');
@@ -7280,6 +7295,7 @@ function registerAtlasEmbeds(plugin){
              const mapCanvas=el(root,'div','brpg-atlas-canvas');
              const backgroundFile=map.background?plugin.app.vault.getAbstractFileByPath(map.background):null;
              renderMapCanvas(mapCanvas,map,{background:backgroundFile instanceof TFile?plugin.app.vault.getResourcePath(backgroundFile):'',gm:config.view!=='player',zoom:1,
+               getTileUrl:path=>{const file=plugin.app.vault.getAbstractFileByPath(path);return file instanceof TFile?plugin.app.vault.getResourcePath(file):'';},
                onPick:at=>plugin.attempt(async()=>{const view=await openAtlas(plugin,'maps',map.id);
                  view.selected=at;view.render();})});
              button(root,'Abrir Atlas',action(plugin,()=>openAtlas(plugin,'maps',map.id)),{icon:'map'});
@@ -7307,7 +7323,7 @@ function renameAtlasNotes(m,oldPath,newPath){
  for(const map of m.atlas.maps){
    const background=move(map.background);
    if(background!==map.background){map.background=background;changed=true;}
-   for(const c of Object.values(map.cells))for(const field of ['note','table']){
+   for(const c of Object.values(map.cells))for(const field of ['note','table','tile']){
      const next=move(c[field]);if(next!==c[field]){c[field]=next;changed=true;}
    }
  }
@@ -7354,7 +7370,7 @@ function hexPoints(x,y,unit){
     return (x+unit*Math.cos(a)).toFixed(2)+','+(y+unit*Math.sin(a)).toFixed(2);
   }).join(' ');
 }
-function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background=''}) {
+function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true}) {
   host.replaceChildren();
   const viewport=host.ownerDocument.createElement('div');
   viewport.className='brpg-atlas-map-scroll';host.appendChild(viewport);
@@ -7363,9 +7379,12 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
     width:Math.round(bounds.width*zoom),height:Math.round(bounds.height*zoom),
     role:'img','aria-label':map.name+', '+map.width+' por '+map.height+' células'});
   svg.classList.add('brpg-atlas-svg');
-  if(mode==='terrain'||mode==='fog')svg.classList.add('is-painting');
+  if(mode==='terrain'||mode==='fog'||mode==='tile')svg.classList.add('is-painting');
   if(background){const image=svgEl(svg,'image',{href:background,x:0,y:0,width:bounds.width,height:bounds.height,
     preserveAspectRatio:'xMidYMid slice',opacity:.68});image.style.pointerEvents='none';}
+  const defs=svgEl(svg,'defs');
+  const prefix='brpg-atlas-'+Math.random().toString(36).slice(2)+'-';
+  const tint=(text)=>{const colors=['#9dd6b5','#dfb67c','#9cb9e6','#d1a2ce','#7fc9d2','#e9cc8c'];let n=0;for(const c of text)n=(Math.imul(n,31)+c.charCodeAt(0))>>>0;return colors[n%colors.length];};
   const floor=svgEl(svg,'g',{'class':'brpg-atlas-floor'});
   const cellNodes=new Map();
   for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
@@ -7373,9 +7392,16 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
     const blocked=c.fog&&!gm,terrain=blocked?'':(c.terrain||map.defaultTerrain),swatch=TERRAIN[terrain]||TERRAIN.plains;
     const g=svgEl(floor,'g',{'data-pos':at,'class':'brpg-atlas-tile'+(at===selected?' is-selected':'')+
       (blocked?' is-fog':'')+(c.entry||c.sheet||c.note?' has-link':'')});
-    const common={fill:blocked?'#17171d':swatch.color,'fill-opacity':background&&!blocked?.74:1,stroke:at===selected?'var(--interactive-accent)':'var(--background-modifier-border)', 'stroke-width':at===selected?3:1.1};
+    const common={fill:blocked?'#17171d':swatch.color,'fill-opacity':background&&!blocked?.74:1,stroke:at===selected?'var(--interactive-accent)':regions&&c.region?tint(c.region):'var(--background-modifier-border)', 'stroke-width':at===selected?3:regions&&c.region?2.5:1.1};
     const shape=map.grid==='square'?svgEl(g,'rect',{x:pos.x-unit+1,y:pos.y-unit+1,width:unit*2-2,height:unit*2-2,...common}):
       svgEl(g,'polygon',{points:hexPoints(pos.x,pos.y,unit-1),...common});
+    if(c.tile&&!blocked&&getTileUrl){const url=getTileUrl(c.tile);if(url){
+       const id=prefix+col+'-'+row,clip=svgEl(defs,'clipPath',{id});
+       if(map.grid==='square')svgEl(clip,'rect',{x:pos.x-unit+1,y:pos.y-unit+1,width:unit*2-2,height:unit*2-2});
+       else svgEl(clip,'polygon',{points:hexPoints(pos.x,pos.y,unit-1)});
+       const image=svgEl(g,'image',{href:url,x:pos.x-unit,y:pos.y-unit,width:unit*2,height:unit*2,
+         preserveAspectRatio:'xMidYMid slice','clip-path':'url(#'+id+')'});image.style.pointerEvents='none';
+     }}
     const label=blocked?'?':c.icon||swatch.icon||'';
     if(label)svgEl(g,'text',{x:pos.x,y:pos.y+2,'text-anchor':'middle',
       'dominant-baseline':'middle','font-size':(c.icon?'15':'13'),
@@ -7385,8 +7411,8 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
       svgEl(g,'text',{x:pos.x,y:pos.y+16,'text-anchor':'middle','font-size':'7.5',
         'pointer-events':'none',fill:'var(--text-normal)'},short);
     }
-    if((c.faction||c.submap)&&!blocked){
-      svgEl(g,'circle',{cx:pos.x+unit*.62,cy:pos.y-unit*.57,r:3.2,fill:c.submap?'#f6b65c':'#ad82da',
+    if(((factions&&c.faction)||c.submap)&&!blocked){
+      svgEl(g,'circle',{cx:pos.x+unit*.62,cy:pos.y-unit*.57,r:3.2,fill:c.submap?'#f6b65c':tint(c.faction),
         'pointer-events':'none'});
     }
     svgEl(g,'title',{},(blocked?'Inexplorado':c.label||swatch.name)+' · '+at);
@@ -7432,7 +7458,7 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
     const coords=[...pending];pending=new Set();
     if(coords.length)onPaint?.(coords);
   };
-  if(mode==='terrain'||mode==='fog'){
+  if(mode==='terrain'||mode==='fog'||mode==='tile'){
     svg.addEventListener('pointerdown',e=>{
       if(e.button!==0)return;
       const at=posFromEvent(e);

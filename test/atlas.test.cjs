@@ -132,3 +132,13 @@ test('vínculo automático entre registros respeita limites de profundidade',()=
  const local=subgraph(g,nodeRef('entry',entry.id),1);
  assert.ok(local.nodes.some(n=>n.id===nodeRef('entry',next.id)));
 });
+
+test('células com imagens de textura têm caminho validado',()=>{
+  const {m,map}=setup();
+  setCell(map,2,2,{tile:'Mapas/Floresta.png'});
+  assert.equal(checkAtlas(m.atlas,m),m.atlas);
+  setCell(map,2,2,{tile:'../segredo.png'});
+  assert.throws(()=>checkAtlas(m.atlas,m),/Textura/);
+  setCell(map,2,2,{tile:'arquivo.exe'});
+  assert.throws(()=>checkAtlas(m.atlas,m),/Textura/);
+});

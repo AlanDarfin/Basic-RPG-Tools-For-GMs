@@ -331,3 +331,5 @@ Campanhas, fichas, encontros e notas compartilham referências com o Atlas. A Me
 - [Relations](https://github.com/obsidian-ttrpg-community/Relations): relações tipadas entre notas, filtros, exploração de vizinhança e grafos incorporados.
 
 Esta é uma implementação nova e independente. **Ainda não** oferece importação automática de mapas dos dois plugins, pacotes Dungeondraft, pintura por imagem com múltiplas camadas, rotas Bezier, medição em sistemas de jogo ou editor de árvore genealógica equivalente ao Relations. Os mapas são armazenados no `data.json` do Basic RPG e as notas criadas permanecem arquivos Markdown normais.
+
+**Texturas de imagem (v1.4.0):** além de cores, o modo **Textura** permite escolher imagens do cofre como revestimento de células, com recorte hexagonal ou quadrado. O editor da célula também aceita caminho de textura individual. A caixa de ferramentas oferece pincéis de vários tamanhos, e os modos **Regiões** e **Facções** destacam áreas identificadas no mapa. Texturas são apenas caminhos para imagens existentes; não há importação automática de tilesets, brushes contínuos ou pacotes Dungeondraft nesta versão.
