@@ -68,8 +68,13 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll) button(line,'Rolar ' + a.roll,() => plugin.attempt(() => {
-      const r=rollDice(a.roll); outcome.textContent = a.name + ' · ' + r.total + ' (' + r.values.join(', ') + ')';
+    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+      if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        outcome.textContent=result.entry.detail;
+      }else {
+        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+      }
     }), { icon:'dice-5' });
   }
   if (plugin.ultra && !compact) plugin.ultra.renderSheetTools(box,sheet);

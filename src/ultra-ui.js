@@ -5,7 +5,7 @@ const { el,button,select,input,info }=require('./ui');
 const { find,newEntry,newSheet,resource,requireMesa }=require('./mesa');
 const { key,clean }=require('./solo');
 const {
-  CONTENT,roll,activeResources,updateSheetResource,restSheet,executeAction,randomContent,
+  CONTENT,roll,activeResources,updateSheetResource,restSheet,executeAction,executeSheetAction,randomContent,
   getAssets,formatAsset,configObject
 }=require('./ultra');
 const { art }=require('./solo-ui');
@@ -248,7 +248,7 @@ function registerBlocks(plugin){
   }
 }
 function setup(plugin){
-  plugin.ultra={render:(view,root)=>view.tab==='library'?renderAssetLibrary(view,root):renderGenerator(view,root),
+  plugin.ultra={executeSheetAction,render:(view,root)=>view.tab==='library'?renderAssetLibrary(view,root):renderGenerator(view,root),
     renderSheetTools:(root,sheet)=>renderSheetTools(plugin,root,sheet),
     renderCombat:(view,root,running)=>renderCombat(plugin,view,root,running)};
   registerBlocks(plugin);

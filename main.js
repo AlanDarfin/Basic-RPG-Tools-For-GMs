@@ -6057,7 +6057,7 @@ const { el,button,select,input,info }=load("ui.js");
 const { find,newEntry,newSheet,resource,requireMesa }=load("mesa.js");
 const { key,clean }=load("solo.js");
 const {
-  CONTENT,roll,activeResources,updateSheetResource,restSheet,executeAction,randomContent,
+  CONTENT,roll,activeResources,updateSheetResource,restSheet,executeAction,executeSheetAction,randomContent,
   getAssets,formatAsset,configObject
 }=load("ultra.js");
 const { art }=load("solo-ui.js");
@@ -6300,7 +6300,7 @@ function registerBlocks(plugin){
   }
 }
 function setup(plugin){
-  plugin.ultra={render:(view,root)=>view.tab==='library'?renderAssetLibrary(view,root):renderGenerator(view,root),
+  plugin.ultra={executeSheetAction,render:(view,root)=>view.tab==='library'?renderAssetLibrary(view,root):renderGenerator(view,root),
     renderSheetTools:(root,sheet)=>renderSheetTools(plugin,root,sheet),
     renderCombat:(view,root,running)=>renderCombat(plugin,view,root,running)};
   registerBlocks(plugin);
@@ -6373,10 +6373,33 @@ function restResources(resources) {
 function restSheet(m,id) {
   const s=m.sheets.find(x=>x.id===id);
   requireMesa(!!s,'Ficha não encontrada.');
-  const resources=restResources(activeResources(m,s));
+  const resources=activeResources(m,s);
+  for(const r of resources){
+    if(!r.rest){ const original=s.resources.find(x=>key(x.name)===key(r.name));r.rest=original?.value===0?'zero':'max'; }
+  }
+  restResources(resources);
   m.sheetStates ||= {};m.sheetStates[id]=resources;
   record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
   return resources;
+}
+function executeSheetAction(m,id,actionIndex,rng=Math.random) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const action=s.actions[actionIndex];
+  requireMesa(!!action,'Ação não encontrada.');
+  const cost=actionCost(action);
+  const resources=activeResources(m,s);
+  const meter=cost&&resources.find(r=>key(r.name)===key(cost.name));
+  if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const check=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  if(meter)meter.value-=cost.amount;
+  if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
+  const detail=[s.name+' usa '+action.name,
+    check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
+    damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
+    cost?'gastou '+cost.amount+' '+cost.name:''].filter(Boolean).join(' · ');
+  return {check,damage,entry:record(m,s.name+' · '+action.name,detail,'ação')};
 }
 function armor(target) {
   if(!target?.sheet?.attributes) return null;
@@ -6468,7 +6491,7 @@ function configObject(source,parseYaml) {
   return obj;
 }
 module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restResources,restSheet,
-  executeAction,randomContent,getAssets,formatAsset,configObject };
+  executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
 
     },
     "mesa-view.js": function (module, exports, load, require) {
@@ -6542,8 +6565,13 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll) button(line,'Rolar ' + a.roll,() => plugin.attempt(() => {
-      const r=rollDice(a.roll); outcome.textContent = a.name + ' · ' + r.total + ' (' + r.values.join(', ') + ')';
+    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+      if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        outcome.textContent=result.entry.detail;
+      }else {
+        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+      }
     }), { icon:'dice-5' });
   }
   if (plugin.ultra && !compact) plugin.ultra.renderSheetTools(box,sheet);

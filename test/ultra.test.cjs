@@ -86,3 +86,23 @@ test('motor aceita dados fixos e dados comuns',()=>{
   assert.equal(roll('1d6+2',()=>0).total,3);
   assert.throws(()=>roll('1d0'),/expressão/);
 });
+
+test('descanso padrão é calculado pela ficha-base e não pelo recurso esgotado',()=>{
+  const {m,hero}=fixture();
+  delete hero.resources[1].rest;
+  updateSheetResource(m,hero.id,'Esforço',-2);
+  assert.equal(activeResources(m,hero)[1].value,0);
+  restSheet(m,hero.id);
+  assert.equal(activeResources(m,hero)[1].value,2);
+});
+test('ação da ficha rola teste/dano, usa recurso persistido e não altera modelo',()=>{
+  const {m,hero}=fixture();
+  const {executeSheetAction}=require('../src/ultra');
+  const random=[0.7,0.5];
+  const result=executeSheetAction(m,hero.id,0,()=>random.shift());
+  assert.equal(result.check.total,18);
+  assert.equal(result.damage.total,5);
+  assert.equal(activeResources(m,hero)[1].value,1);
+  assert.equal(hero.resources[1].value,2);
+  assert.equal(checkMesa(m),m);
+});

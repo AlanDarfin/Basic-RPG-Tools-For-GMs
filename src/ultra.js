@@ -58,10 +58,33 @@ function restResources(resources) {
 function restSheet(m,id) {
   const s=m.sheets.find(x=>x.id===id);
   requireMesa(!!s,'Ficha não encontrada.');
-  const resources=restResources(activeResources(m,s));
+  const resources=activeResources(m,s);
+  for(const r of resources){
+    if(!r.rest){ const original=s.resources.find(x=>key(x.name)===key(r.name));r.rest=original?.value===0?'zero':'max'; }
+  }
+  restResources(resources);
   m.sheetStates ||= {};m.sheetStates[id]=resources;
   record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
   return resources;
+}
+function executeSheetAction(m,id,actionIndex,rng=Math.random) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const action=s.actions[actionIndex];
+  requireMesa(!!action,'Ação não encontrada.');
+  const cost=actionCost(action);
+  const resources=activeResources(m,s);
+  const meter=cost&&resources.find(r=>key(r.name)===key(cost.name));
+  if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const check=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  if(meter)meter.value-=cost.amount;
+  if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
+  const detail=[s.name+' usa '+action.name,
+    check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
+    damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
+    cost?'gastou '+cost.amount+' '+cost.name:''].filter(Boolean).join(' · ');
+  return {check,damage,entry:record(m,s.name+' · '+action.name,detail,'ação')};
 }
 function armor(target) {
   if(!target?.sheet?.attributes) return null;
@@ -153,4 +176,4 @@ function configObject(source,parseYaml) {
   return obj;
 }
 module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restResources,restSheet,
-  executeAction,randomContent,getAssets,formatAsset,configObject };
+  executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
