@@ -19,6 +19,7 @@ const { SOLO_VIEW, TABS, SoloView, openSolo } = require('./solo-ui');
 const { registerSoloInline } = require('./solo-inline');
 const { renameImages } = require('./solo-vault');
 const { blankMesa, checkMesa } = require('./mesa');
+const { setup: setupUltra } = require('./ultra-ui');
 const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = require('./mesa-view');
 
 class Settings extends PluginSettingTab {
@@ -206,6 +207,7 @@ class BasicRPG extends Plugin {
     registerEmbeds(this);
     registerSoloInline(this);
     registerMesaEmbeds(this);
+    setupUltra(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,

@@ -227,3 +227,50 @@ npm test
 O código-fonte fica em `src/`. O arquivo `main.js` é gerado a partir dele e pode ser copiado direto para a pasta do plugin.
 
 O Basic RPG é uma implementação independente inspirada no [Calendarium](https://github.com/javalent/calendarium), de Javalent. O preset Arkanis usa os dados do [Arkanis Calendar](https://github.com/AlanDarfin/Arkanis-Calendar).
+
+
+## Ultra RPG: Estúdio e Biblioteca (1.3.0)
+
+A **Mesa** passa a reunir Campanhas, Fichas, Encontros, Estúdio e Biblioteca. O plugin funciona sem depender dos três projetos usados como inspiração, e integra-se opcionalmente aos plugins originais quando instalados.
+
+### Ações, recursos e descanso
+
+- Em **Fichas**, configure uma ação com **Rolagem / ataque** (por exemplo, `1d20+3`), **Dano automático** (`1d8+2`) e **Custo do recurso** (`Esforço:2`). Os campos são opcionais.
+- Inicie um encontro e use **Rolar e resolver**. O Basic RPG rola o teste, verifica a CA disponível e aplica o dano na Vida do alvo somente quando a defesa é conhecida e o teste acerta. Se não existir CA e houver teste de ataque, o dano não é aplicado automaticamente.
+- Os gastos afetam apenas os recursos da instância em combate. A ficha-base continua intacta. As ações são registradas no histórico da Mesa.
+- A ficha cadastrada apresenta recursos com botões −/+ e **Descanso / restaurar**. Configure por recurso a recuperação: ao máximo, zerar ou manter. Esses valores de jogo ficam separados do modelo da ficha e sobrevivem à reabertura do Obsidian.
+
+### Estúdio
+
+O Estúdio tem seis geradores locais: NPCs, lugares, tavernas, ganchos de aventura, tesouros e ideias de encontros. Os resultados podem ser copiados, inseridos em uma nota, cadastrados como registros de campanha ou transformados em uma ficha simples de NPC. Dados aleatórios e tabelas continuam disponíveis no Kit Solo.
+
+Quando o plugin original **TTRPG Content Generator** estiver instalado, a Mesa detecta a API dele e oferece os seus geradores junto aos locais. O Basic RPG usa a API pública do plugin existente, sem tentar reproduzir a linguagem avançada de scripts.
+
+### Biblioteca
+
+A Biblioteca pesquisa imagens, tokens, áudios e notas **já presentes no cofre**. Pode copiar links internos, inseri-los em notas ou atribuir uma imagem como retrato de ficha.
+
+Se o plugin Moulinette original estiver habilitado, a Biblioteca identifica e pode executar o comando para abrir o navegador dele. **Não** inclui uma integração independente com a nuvem Moulinette, nem contorna autenticação, pagamentos ou licenças de criadores.
+
+### Blocos Markdown
+
+```brpg-painel
+ref: Nome da ficha salva
+```
+
+```brpg-gerador
+type: npc
+campaign: Nome da campanha
+```
+
+O primeiro exibe atributos e contadores persistentes de uma ficha da biblioteca. O segundo gera conteúdo e, quando uma campanha é indicada, permite salvá-lo como registro.
+
+### Referências, escopo e compatibilidade
+
+- [Moulinette Search for TTRPG](https://github.com/svenwerlen/moulinette-obsidian-plugin)
+- [TTRPG UI Toolkit](https://github.com/hay-kot/obsidian-ttrpg-ui-toolkit)
+- [TTRPG Content Generator](https://github.com/gregory-jagermeister/TTRPG-Content-Generator)
+
+Esta implementação é independente e não redistribui conteúdo dos catálogos externos. A versão 1.3.0 não substitui as regras completas de D&D, não importa automaticamente os componentes do UI Toolkit, não executa downloads diretos do Moulinette Cloud e não interpreta integralmente todos os modelos avançados do TTRPG Content Generator.
+
+Execute `npm test` para validar o núcleo do plugin e `npm run build` para reconstruir `main.js` a partir de `src/`.
