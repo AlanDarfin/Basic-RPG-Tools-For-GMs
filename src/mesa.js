@@ -9,7 +9,7 @@ const SIDES = Object.freeze({ players: 'Jogadores', enemies: 'Adversários', all
 const LIMITS = { campaigns: 100, entries: 1000, sheets: 700, encounters: 300, members: 120, fields: 30 };
 const whole = (v, min = -999999, max = 999999) => Number.isSafeInteger(v) && v >= min && v <= max;
 function requireMesa(ok, message) { if (!ok) throw new Error(message); }
-function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null }; }
+function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null, activity: [], sheetStates: {} }; }
 function newCampaign() { return { id: uid('camp'), name: '', note: '', summary: '', calendar: '' }; }
 function newEntry(campaign) { return { id: uid('entry'), campaign, name: '', kind: 'session', note: '', summary: '', links: [], date: null }; }
 function newSheet(campaign = '') {
@@ -71,7 +71,7 @@ function yamlSheet(data, campaign = '') {
   }
   for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
     for (const x of rows(items)) {
-      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), group });
+      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
     }
   }
   d.actions = d.actions.slice(0, LIMITS.fields);
@@ -80,7 +80,7 @@ function yamlSheet(data, campaign = '') {
 function isInit(s) { return !!parseDice(s) || /^[-+]?\d{1,6}$/.test(s); }
 function calcInit(formula, rng) { return parseDice(formula) ? rollDice(formula, rng).total : Number(formula); }
 function checkResource(r) {
-  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max), 'Cada recurso precisa de nome e de um valor entre zero e o máximo.');
+  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome e de um valor entre zero e o máximo, com regra de descanso válida.');
 }
 function checkSheet(s) {
   requireMesa(s && clean(s.id) && clean(s.name) && Object.hasOwn(KINDS, s.kind), 'Preencha o nome e o tipo da ficha.');
@@ -89,7 +89,7 @@ function checkSheet(s) {
   for (const a of s.attributes) requireMesa(a && clean(a.name) && typeof a.value === 'string', 'Cada atributo precisa de um nome.');
   s.resources.forEach(checkResource);
   requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
-  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)), 'Cada ação precisa de um nome e, se houver rolagem, de uma expressão válida.');
+  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
   return s;
 }
 function checkEncounter(e) {
@@ -113,6 +113,8 @@ function checkMesa(m) {
     requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
       new Set(a.map(x => x.id)).size === a.length, 'Biblioteca da Mesa inválida ou cheia.');
   }
+  if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
+  if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
   const campaigns = new Set(m.campaigns.map(c => c.id));
   const entries = new Map(m.entries.map(e => [e.id,e]));
   const sheets = new Map(m.sheets.map(s => [s.id,s]));

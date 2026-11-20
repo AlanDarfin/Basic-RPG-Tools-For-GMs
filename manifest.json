@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "minAppVersion": "1.7.2",
-  "description": "Calendário de fantasia, kit solo, fichas e encontros para campanhas de RPG.",
+  "description": "Ferramentas integradas de RPG: campanhas, fichas, dados, encontros, geradores e biblioteca.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false

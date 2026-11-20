@@ -50,6 +50,7 @@ const { SOLO_VIEW, TABS, SoloView, openSolo } = load("solo-ui.js");
 const { registerSoloInline } = load("solo-inline.js");
 const { renameImages } = load("solo-vault.js");
 const { blankMesa, checkMesa } = load("mesa.js");
+const { setup: setupUltra } = load("ultra-ui.js");
 const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = load("mesa-view.js");
 
 class Settings extends PluginSettingTab {
@@ -237,6 +238,7 @@ class BasicRPG extends Plugin {
     registerEmbeds(this);
     registerSoloInline(this);
     registerMesaEmbeds(this);
+    setupUltra(this);
     // Stable, read-only access for companions such as Basic.
     this.api = Object.freeze({
       version: 1,
@@ -5853,7 +5855,7 @@ const SIDES = Object.freeze({ players: 'Jogadores', enemies: 'Adversários', all
 const LIMITS = { campaigns: 100, entries: 1000, sheets: 700, encounters: 300, members: 120, fields: 30 };
 const whole = (v, min = -999999, max = 999999) => Number.isSafeInteger(v) && v >= min && v <= max;
 function requireMesa(ok, message) { if (!ok) throw new Error(message); }
-function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null }; }
+function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null, activity: [], sheetStates: {} }; }
 function newCampaign() { return { id: uid('camp'), name: '', note: '', summary: '', calendar: '' }; }
 function newEntry(campaign) { return { id: uid('entry'), campaign, name: '', kind: 'session', note: '', summary: '', links: [], date: null }; }
 function newSheet(campaign = '') {
@@ -5915,7 +5917,7 @@ function yamlSheet(data, campaign = '') {
   }
   for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
     for (const x of rows(items)) {
-      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), group });
+      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
     }
   }
   d.actions = d.actions.slice(0, LIMITS.fields);
@@ -5924,7 +5926,7 @@ function yamlSheet(data, campaign = '') {
 function isInit(s) { return !!parseDice(s) || /^[-+]?\d{1,6}$/.test(s); }
 function calcInit(formula, rng) { return parseDice(formula) ? rollDice(formula, rng).total : Number(formula); }
 function checkResource(r) {
-  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max), 'Cada recurso precisa de nome e de um valor entre zero e o máximo.');
+  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome e de um valor entre zero e o máximo, com regra de descanso válida.');
 }
 function checkSheet(s) {
   requireMesa(s && clean(s.id) && clean(s.name) && Object.hasOwn(KINDS, s.kind), 'Preencha o nome e o tipo da ficha.');
@@ -5933,7 +5935,7 @@ function checkSheet(s) {
   for (const a of s.attributes) requireMesa(a && clean(a.name) && typeof a.value === 'string', 'Cada atributo precisa de um nome.');
   s.resources.forEach(checkResource);
   requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
-  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)), 'Cada ação precisa de um nome e, se houver rolagem, de uma expressão válida.');
+  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
   return s;
 }
 function checkEncounter(e) {
@@ -5957,6 +5959,8 @@ function checkMesa(m) {
     requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
       new Set(a.map(x => x.id)).size === a.length, 'Biblioteca da Mesa inválida ou cheia.');
   }
+  if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
+  if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
   const campaigns = new Set(m.campaigns.map(c => c.id));
   const entries = new Map(m.entries.map(e => [e.id,e]));
   const sheets = new Map(m.sheets.map(s => [s.id,s]));
@@ -6045,6 +6049,451 @@ module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa
   newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
 
     },
+    "ultra-ui.js": function (module, exports, load, require) {
+'use strict';
+const { MarkdownRenderChild, MarkdownView, parseYaml }=require('obsidian');
+const { copy,uid }=load("calendar.js");
+const { el,button,select,input,info }=load("ui.js");
+const { find,newEntry,newSheet,resource,requireMesa }=load("mesa.js");
+const { key,clean }=load("solo.js");
+const {
+  CONTENT,roll,activeResources,updateSheetResource,restSheet,executeAction,executeSheetAction,randomContent,
+  getAssets,formatAsset,configObject
+}=load("ultra.js");
+const { art }=load("solo-ui.js");
+
+function row(root){return el(root,'div','brpg-toolbar brpg-ultra-row');}
+function section(root,title,note){
+  const box=el(root,'section','brpg-mesa-panel brpg-ultra-panel');
+  el(box,'h3','brpg-section-title',title);
+  if(note)info(box,note);
+  return box;
+}
+function labelled(root,title,items,value,update) {
+  const holder=el(root,'label','brpg-field');
+  el(holder,'span','brpg-label',title);
+  return select(holder,items,value,update,title);
+}
+function run(plugin,fn){return ()=>plugin.attempt(fn);}
+function activeEditor(plugin){
+  const ws=plugin.app.workspace;
+  const view=ws.getActiveViewOfType?.(MarkdownView);
+  if(view?.editor) return view.editor;
+  const editors=(ws.getLeavesOfType?.('markdown')||[]).map(l=>l.view?.editor).filter(Boolean);
+  return editors.length===1?editors[0]:null;
+}
+function output(plugin,root,value,after){
+  const controls=row(root);
+  button(controls,'Copiar',run(plugin,async()=>{
+    if(typeof navigator==='undefined'||!navigator.clipboard?.writeText) throw new Error('Área de transferência indisponível.');
+    await navigator.clipboard.writeText(value); if(after)after();
+  }),{icon:'copy'});
+  button(controls,'Inserir na nota',run(plugin,async()=>{
+    const editor=activeEditor(plugin);
+    if(!editor)throw new Error('Abra uma nota em edição para inserir o resultado.');
+    editor.replaceSelection(value); if(after)after();
+  }),{icon:'file-pen-line'});
+}
+function saveGenerated(plugin,campaign,result){
+  requireMesa(!!campaign,'Selecione uma campanha antes de salvar um registro.');
+  return plugin.changeMesa(m=>{
+    const entry=newEntry(campaign);
+    entry.name=clean(result.title);
+    entry.kind=result.entryKind||'event';
+    entry.summary=clean(result.body,10000);
+    m.entries.push(entry);
+  });
+}
+function newGeneratedSheet(plugin,campaign,result){
+  requireMesa(result.kind==='npc','Apenas o gerador de NPCs cria fichas diretamente.');
+  return plugin.changeMesa(m=>{
+    const s=newSheet(campaign||'');
+    s.name=clean(result.title);s.kind='npc';s.type='NPC gerado';s.description=clean(result.body,12000);
+    s.resources=[resource('Vida',10)];s.initiative='1d20';
+    m.sheets.push(s);
+  });
+}
+function externalGenerator(plugin){
+  const api=plugin.app.plugins?.plugins?.['fantasy-content-generator']?.api;
+  return api && typeof api.generate==='function' && typeof api.keys==='function' ? api:null;
+}
+function renderGenerator(view,root){
+  const plugin=view.plugin,box=section(root,'Geradores conectados',
+    'Crie material e salve diretamente na Mesa. O gerador externo é opcional; os modelos locais funcionam sem rede.');
+  const state=view.ultraState ||= {kind:'npc',external:'',result:null,assetQuery:'',assetType:'all',assetSheetId:''};
+  const ext=externalGenerator(plugin);
+  const options=[...Object.entries(CONTENT).map(([id,label])=>[id,label])];
+  const xkeys=ext?ext.keys().slice(0,200).filter(x=>typeof x==='string'):[];
+  for(const name of xkeys)options.push(['fcg:'+name,'Conteúdo externo · '+name]);
+  const selectBox=labelled(box,'Tipo de conteúdo',options,state.kind,v=>{state.kind=v;state.result=null;drawResult();});
+  selectBox.value=options.some(x=>x[0]===state.kind)?state.kind:'npc';
+  const actions=row(box);
+  button(actions,'Gerar conteúdo',run(plugin,async()=>{
+    const kind=state.kind;
+    if(kind.startsWith('fcg:')){
+      requireMesa(!!ext,'O TTRPG Content Generator não está disponível.');
+      const name=kind.slice(4);
+      const content=String(await ext.generate(name));
+      state.result={kind:'external',entryKind:'event',title:name+' · '+(new Date()).toLocaleTimeString('pt-BR'),
+        body:clean(content,10000)};
+    }else state.result=randomContent(kind);
+    drawResult();
+  }),{icon:'sparkles',className:'brpg-button mod-cta'});
+  const display=el(box,'div','brpg-ultra-output');
+  const drawResult=()=>{
+    display.replaceChildren();
+    const result=state.result;
+    if(!result)return info(display,'Selecione um gerador e clique em Gerar conteúdo.');
+    el(display,'h4','',result.title);
+    el(display,'p','brpg-mesa-prose',result.body);
+    output(plugin,display,result.title+'\n'+result.body);
+    const current=view.campaign||view.m.campaigns[0]?.id||'';
+    const buttons=row(display);
+    button(buttons,'Salvar como registro',run(plugin,()=>saveGenerated(plugin,current,result)),
+      {icon:'bookmark',disabled:!current});
+    if(result.kind==='npc')
+      button(buttons,'Criar ficha de NPC',run(plugin,()=>newGeneratedSheet(plugin,current,result)),{icon:'contact-round'});
+    if(!current)info(display,'Crie uma campanha para salvar o conteúdo na Mesa.');
+  };
+  drawResult();
+  const trail=section(root,'Da ideia à campanha');
+  info(trail,'Fluxo: gerar NPC, salvar ficha, adicionar a um encontro e executar uma ação pelo painel de combate.');
+  button(row(trail),'Abrir fichas',()=>view.show('sheets'),{icon:'contact-round'});
+  button(row(trail),'Abrir encontros',()=>view.show('encounters'),{icon:'swords'});
+}
+function renderAssetLibrary(view,root){
+  const plugin=view.plugin, s=view.ultraState ||= {kind:'npc',assetQuery:'',assetType:'all',assetSheetId:''};
+  const box=section(root,'Biblioteca de recursos','Imagens, tokens, trilhas e notas locais. A busca no Moulinette Cloud usa o plugin externo, se instalado.');
+  const query=input(box,'Buscar no cofre',s.assetQuery||'',v=>{s.assetQuery=v;paint();},{maxLength:200});
+  query.placeholder='Retrato, mapa, trilha, regras...';
+  labelled(box,'Tipo',[['all','Tudo'],['image','Imagens e tokens'],['audio','Áudio'],['note','Notas']],s.assetType||'all',
+    v=>{s.assetType=v;paint();});
+  const cloud=row(box);
+  const commands=plugin.app.commands?.listCommands?.()||[];
+  const moulinette=commands.find(cmd=>/moulinette/i.test(cmd.id)&&/browser|browse|open/i.test(cmd.id))
+    ||commands.find(cmd=>/moulinette/i.test(cmd.id));
+  if(moulinette){
+    button(cloud,'Abrir Moulinette',run(plugin,async()=>{
+      const result=plugin.app.commands.executeCommandById(moulinette.id);
+      if(result===false)throw new Error('O comando do Moulinette não foi executado.');
+    }),{icon:'cloud'});
+  }else info(box,'Moulinette Cloud: instale e configure o plugin original para navegar no catálogo externo.');
+  const sheets=view.m.sheets.filter(x=>!view.campaign||!x.campaign||x.campaign===view.campaign);
+  const sheetOption=labelled(box,'Associar retrato à ficha',[['','Selecionar ficha'],...sheets.map(x=>[x.id,x.name])],
+    s.assetSheetId||'',v=>{s.assetSheetId=v;});
+  const results=el(box,'div','brpg-ultra-assets');
+  function paint(){
+    results.replaceChildren();
+    const files=getAssets(plugin.app.vault,s.assetQuery,s.assetType,80);
+    info(results,files.length+' resultados (máximo 80).');
+    for(const f of files){
+      const asset=el(results,'div','brpg-ultra-asset');
+      const name=el(asset,'div','brpg-ultra-asset-name');
+      el(name,'strong','',f.path.split('/').at(-1));
+      el(name,'small','brpg-hint',f.path);
+      if(/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(f.path)){
+        const img=el(asset,'img','brpg-ultra-thumb');img.loading='lazy';img.alt=f.basename||f.path;
+        img.src=plugin.app.vault.getResourcePath(f);
+      }
+      const toolbar=row(asset);
+      button(toolbar,'Copiar link',run(plugin,async()=>{
+        if(typeof navigator==='undefined'||!navigator.clipboard?.writeText)throw new Error('Área de transferência indisponível.');
+        await navigator.clipboard.writeText(formatAsset(f.path));
+      }),{icon:'copy',iconOnly:true});
+      button(toolbar,'Inserir na nota',run(plugin,()=>{
+        const editor=activeEditor(plugin);if(!editor)throw new Error('Abra uma nota para inserir o recurso.');
+        editor.replaceSelection(formatAsset(f.path));
+      }),{icon:'file-pen-line',iconOnly:true});
+      if(/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(f.path)){
+        button(toolbar,'Usar como retrato',run(plugin,()=>{
+          const id=sheetOption.value;
+          requireMesa(!!id,'Selecione uma ficha para associar o retrato.');
+          return plugin.changeMesa(m=>{
+            const target=m.sheets.find(x=>x.id===id);requireMesa(!!target,'Ficha não encontrada.');
+            target.image=f.path;
+          });
+        }),{icon:'image',iconOnly:true,disabled:!sheets.length});
+      }
+    }
+  }
+  paint();
+}
+function renderSheetTools(plugin,root,sheet){
+  if(!plugin.mesa().sheets.some(x=>x.id===sheet.id))return;
+  const body=section(root,'Recursos ao vivo','As alterações ficam separadas do modelo original da ficha.');
+  const resources=activeResources(plugin.mesa(),sheet);
+  if(!resources.length) info(body,'Adicione recursos na edição da ficha para ter contadores interativos.');
+  for(const r of resources){
+    const line=el(body,'div','brpg-ultra-resource');
+    el(line,'strong','',r.name);el(line,'span','brpg-chip',r.value+'/'+r.max);
+    button(line,'Diminuir '+r.name,run(plugin,()=>plugin.changeMesa(m=>updateSheetResource(m,sheet.id,r.name,-1))),
+      {icon:'minus',iconOnly:true,disabled:r.value===0});
+    button(line,'Aumentar '+r.name,run(plugin,()=>plugin.changeMesa(m=>updateSheetResource(m,sheet.id,r.name,1))),
+      {icon:'plus',iconOnly:true,disabled:r.value>=r.max});
+  }
+  button(row(body),'Descanso / restaurar',run(plugin,()=>plugin.changeMesa(m=>restSheet(m,sheet.id))),
+    {icon:'moon',disabled:!resources.length});
+}
+function renderCombat(plugin,view,root,running){
+  const box=section(root,'Ações automáticas','Rolagem, custo de recurso, CA e dano são resolvidos juntos quando a ficha os define.');
+  const actor=running.members.find(x=>x.id===running.turn);
+  if(!actor)return;
+  const actions=actor.sheet?.actions||[];
+  if(!actions.length)return info(box,actor.name+' não possui ações configuradas. Edite a ficha de origem.');
+  const usable=actions.map((a,i)=>[String(i),a.name+(a.damage?' · '+a.damage:'')]);
+  const chosen={action:usable[0][0],target:running.members.find(x=>x.id!==actor.id)?.id||''};
+  labelled(box,'Ação',usable,chosen.action,v=>{chosen.action=v;});
+  labelled(box,'Alvo',[['','Sem alvo'],...running.members.map(x=>[x.id,x.name])],chosen.target,v=>{chosen.target=v;});
+  button(row(box),'Rolar e resolver',run(plugin,()=>plugin.changeMesa(m=>{
+    executeAction(m,actor.id,Number(chosen.action),chosen.target);
+  })),{icon:'dice-5',className:'brpg-button mod-cta'});
+  const log=plugin.mesa().activity||[];
+  if(log.length){
+    const history=el(box,'details','brpg-disclosure');
+    el(history,'summary','brpg-summary','Histórico de ações · '+log.length);
+    for(const entry of log.slice(0,12)){
+      const item=el(history,'article','brpg-ultra-log');
+      el(item,'strong','',entry.title);
+      el(item,'p','brpg-mesa-prose',entry.detail);
+    }
+  }
+}
+function registerBlocks(plugin){
+  const Child=MarkdownRenderChild||class {};
+  for(const name of ['brpg-painel','brpg-gerador']){
+    plugin.registerMarkdownCodeBlockProcessor(name,(source,host,ctx)=>{
+      class Panel extends Child {
+        constructor(){super(host);}
+        onload(){plugin.mesaEmbeds.add(this);this.render();}
+        onunload(){plugin.mesaEmbeds.delete(this);}
+        render(){
+          host.replaceChildren();
+          const root=el(host,'section','brpg brpg-mesa-embed brpg-ultra-embed');
+          try {
+            const config=configObject(source,parseYaml);
+            if(name==='brpg-painel'){
+              const sheet=find(plugin.mesa().sheets,config.ref||config.sheet);
+              requireMesa(!!sheet,'Ficha não encontrada. Informe ref: Nome ou ID.');
+              el(root,'h3','brpg-section-title',sheet.name);
+              const stats=el(root,'div','brpg-metadata');
+              for(const attr of sheet.attributes)el(stats,'span','brpg-chip',attr.name+' '+attr.value);
+              renderSheetTools(plugin,root,sheet);
+            }else{
+              const type=config.type||'npc';
+              requireMesa(Object.hasOwn(CONTENT,type),'Tipo de gerador inválido.');
+              const result=el(root,'div','brpg-ultra-output');
+              const rollNext=()=>{
+                const generated=randomContent(type);
+                result.replaceChildren();el(result,'strong','',generated.title);
+                el(result,'p','brpg-mesa-prose',generated.body);
+                const campaign=config.campaign?find(plugin.mesa().campaigns,config.campaign):null;
+                if(campaign)button(row(result),'Salvar na campanha',run(plugin,()=>saveGenerated(plugin,campaign.id,generated)),{icon:'bookmark'});
+              };
+              button(root,'Gerar '+CONTENT[type],rollNext,{icon:'sparkles'});
+              rollNext();
+            }
+          }catch(err){info(root,err?.message||'Erro ao processar bloco.');}
+        }
+      }
+      ctx.addChild(new Panel());
+    });
+  }
+}
+function setup(plugin){
+  plugin.ultra={executeSheetAction,render:(view,root)=>view.tab==='library'?renderAssetLibrary(view,root):renderGenerator(view,root),
+    renderSheetTools:(root,sheet)=>renderSheetTools(plugin,root,sheet),
+    renderCombat:(view,root,running)=>renderCombat(plugin,view,root,running)};
+  registerBlocks(plugin);
+  plugin.addCommand({id:'ultra-generate',name:'Estúdio · Gerar conteúdo de RPG',
+    callback:()=>plugin.attempt(()=>plugin.openMesa('studio'))});
+  plugin.addCommand({id:'ultra-assets',name:'Biblioteca · Buscar recursos de RPG',
+    callback:()=>plugin.attempt(()=>plugin.openMesa('library'))});
+}
+module.exports={setup,renderGenerator,renderAssetLibrary,renderSheetTools,renderCombat};
+
+    },
+    "ultra.js": function (module, exports, load, require) {
+'use strict';
+const { copy, uid } = load("calendar.js");
+const { key, clean, clamp, rollDice, parseDice, pick } = load("solo.js");
+const { DICT } = load("solo-tables.js");
+const { requireMesa } = load("mesa.js");
+
+const CONTENT = Object.freeze({
+ npc: 'Personagem / NPC', site: 'Local / Povoado', tavern: 'Taverna', hook: 'Gancho de aventura', loot: 'Tesouro', encounter: 'Ideia de encontro'
+});
+const FIRST = ['Arlen','Vera','Eldric','Liora','Nara','Darian','Mira','Thorne','Kael','Ysara','Malek','Serin','Rhana','Lys','Fenric'];
+const LAST = ['dos Vales','da Ponte','Noctis','da Névoa','Ventor','de Cinzabruma','do Norte','Auri','do Ferro'];
+const ADJ = ['antiga','perdida','silenciosa','escondida','amaldiçoada','esquecida','radiante','abandonada'];
+const NAMES = ['Coroa','Ponte','Lanterna','Vale','Corvo','Carvalho','Rosa','Luar','Último Sol','Viajante'];
+const LOCATION = ['vale coberto de névoa','porto distante','passagem entre montanhas','estrada esquecida','vilarejo fortificado','floresta de pinheiros'];
+const DETAILS = ['um segredo da família real','uma dívida não paga','um mapa desaparecido','uma relíquia selada','um crime nunca resolvido','um pacto proibido'];
+function roll(formula,rng=Math.random) {
+  const text=String(formula||'').trim();
+  requireMesa(text.length>0 && text.length<=60, 'Expressão de dado inválida.');
+  if (/^[-+]?\d{1,7}$/.test(text)) return {total:Number(text),values:[Number(text)]};
+  requireMesa(!!parseDice(text), 'Use uma expressão como 1d20+3.');
+  return rollDice(text,rng);
+}
+function record(m, title, detail, type='sistema') {
+  m.activity ||= [];
+  const item={id:uid('log'),time:new Date().toISOString(),title:clean(title,160),detail:clean(detail,1000),type};
+  m.activity.unshift(item);
+  m.activity=m.activity.slice(0,150);
+  return item;
+}
+function activeResources(m,sheet) {
+  m.sheetStates ||= {};
+  const saved=m.sheetStates[sheet.id];
+  return sheet.resources.map((r,i) => {
+    const found=Array.isArray(saved) ? saved.find(v=>key(v.name)===key(r.name)) : null;
+    return {name:r.name,max:r.max,value:clamp(Number.isInteger(found?.value)?found.value:r.value,0,r.max),rest:r.rest||''};
+  });
+}
+function updateSheetResource(m,id,name,delta) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada na biblioteca.');
+  requireMesa(Number.isSafeInteger(delta)&&Math.abs(delta)<=100000,'Ajuste de recurso inválido.');
+  const resources=activeResources(m,s);
+  const r=resources.find(x=>key(x.name)===key(name));
+  requireMesa(!!r,'Recurso não encontrado.');
+  r.value=clamp(r.value+delta,0,r.max);
+  m.sheetStates ||= {}; m.sheetStates[id]=resources;
+  record(m,s.name, r.name+': '+r.value+'/'+r.max,'recurso');
+  return r;
+}
+function restResources(resources) {
+  for(const r of resources) {
+    const strategy=r.rest || (r.value===0 && r.max>0 ? 'zero':'max');
+    if(strategy==='max') r.value=r.max;
+    if(strategy==='zero') r.value=0;
+  }
+  return resources;
+}
+function restSheet(m,id) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const resources=activeResources(m,s);
+  for(const r of resources){
+    if(!r.rest){ const original=s.resources.find(x=>key(x.name)===key(r.name));r.rest=original?.value===0?'zero':'max'; }
+  }
+  restResources(resources);
+  m.sheetStates ||= {};m.sheetStates[id]=resources;
+  record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
+  return resources;
+}
+function executeSheetAction(m,id,actionIndex,rng=Math.random) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const action=s.actions[actionIndex];
+  requireMesa(!!action,'Ação não encontrada.');
+  const cost=actionCost(action);
+  const resources=activeResources(m,s);
+  const meter=cost&&resources.find(r=>key(r.name)===key(cost.name));
+  if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const check=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  if(meter)meter.value-=cost.amount;
+  if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
+  const detail=[s.name+' usa '+action.name,
+    check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
+    damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
+    cost?'gastou '+cost.amount+' '+cost.name:''].filter(Boolean).join(' · ');
+  return {check,damage,entry:record(m,s.name+' · '+action.name,detail,'ação')};
+}
+function armor(target) {
+  if(!target?.sheet?.attributes) return null;
+  const stat=target.sheet.attributes.find(a=>['ca','ac','armadura','classe de armadura'].includes(key(a.name)));
+  const n=stat?Number(stat.value):NaN;
+  return Number.isFinite(n)?n:null;
+}
+function actionCost(action){
+  if(!action?.cost) return null;
+  const match=String(action.cost).trim().match(/^([^:]{1,100}):([1-9]\d{0,3})$/);
+  requireMesa(!!match,'Custo inválido. Use Recurso:quantidade, como Esforço:2.');
+  return {name:clean(match[1]),amount:Number(match[2])};
+}
+function executeAction(m,actorId,actionIndex,targetId='',rng=Math.random) {
+  const run=m.running;
+  requireMesa(!!run,'Nenhum encontro em andamento.');
+  const actor=run.members.find(x=>x.id===actorId);
+  requireMesa(!!actor,'Participante não encontrado.');
+  const actions=actor.sheet?.actions||[];
+  const action=actions[actionIndex];
+  requireMesa(!!action,'Escolha uma ação presente na ficha do participante.');
+  const target=targetId ? run.members.find(x=>x.id===targetId) : null;
+  requireMesa(!targetId||!!target,'Alvo não encontrado.');
+  const cost=actionCost(action);
+  let resource;
+  if(cost) {
+    resource=actor.resources.find(r=>key(r.name)===key(cost.name));
+    requireMesa(resource && resource.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  }
+  // All validation is performed before anything is mutated.
+  const attack=action.roll ? roll(action.roll,rng) : null;
+  const damage=action.damage ? roll(action.damage,rng) : null;
+  const defence=armor(target);
+  const hit=target && attack ? (defence===null?null:attack.total>=defence) : null;
+  if(resource) resource.value-=cost.amount;
+  const shouldApply=!!(damage && target && (!attack || hit===true));
+  let damaged=null;
+  if(shouldApply) {
+    const hp=target.resources.find(r=>['vida','hp','pv','pontos de vida'].includes(key(r.name)));
+    requireMesa(!!hp,'Alvo sem recurso Vida/HP/PV. Configure a ficha para aplicar dano.');
+    hp.value=clamp(hp.value-Math.max(0,damage.total),0,hp.max); damaged=hp.value;
+  }
+  const parts=[
+    actor.name+' usa '+action.name,
+    attack?'teste '+attack.total+' ('+attack.values.join(', ')+')':'sem teste',
+    target?'em '+target.name:'',
+    target&&attack?(defence===null?'CA desconhecida: dano não aplicado':hit?'acertou CA '+defence:'errou CA '+defence):'',
+    damage?'dano rolado '+damage.total:'',
+    shouldApply?'Vida restante '+damaged:'',
+    cost?'gastou '+cost.amount+' '+cost.name:''
+  ].filter(Boolean);
+  const item=record(m,actor.name+' · '+action.name,parts.join(' · '),'ação');
+  return {attack,damage,hit,applied:shouldApply,entry:item};
+}
+function randomContent(kind,rng=Math.random) {
+  requireMesa(Object.hasOwn(CONTENT,kind),'Gerador desconhecido.');
+  const one=(list)=>pick(list,rng);
+  const person=one(FIRST)+' '+one(LAST);
+  let title='', lines=[],entryKind='event';
+  if(kind==='npc') { title=person;lines=['Ocupação: '+one(DICT.job),'Traço: '+one(DICT.aspect),'Motivação: '+one(DETAILS)];entryKind='npc'; }
+  if(kind==='site') { title=one(NAMES)+' '+one(['da Névoa','de Pedra','do Norte','dos Corvos']);lines=['Localização: '+one(LOCATION),'Marca do lugar: '+one(DETAILS)];entryKind='site'; }
+  if(kind==='tavern') { title='A '+one(['Lanterna','Rosa','Coroa','Sombra'])+' '+one(['Partida','Dourada','Quebrada','Silenciosa']);lines=['Dono: '+person,'Especialidade: '+one(DICT.food||['ensopado','vinho de frutas','pão quente']),'Rumor: '+one(DETAILS)];entryKind='site'; }
+  if(kind==='hook') {title='O '+one(NAMES)+' '+one(['Desaparecido','Silencioso','Partido']);lines=['Missão: '+one(DICT.job)+' precisa '+one(DICT.verb)+' '+one(DICT.noun),'Complicação: '+one(DETAILS)];entryKind='adventure';}
+  if(kind==='loot') {title=one(['Anel','Chave','Máscara','Diário','Espada','Pergaminho'])+' '+one(['Antigo','de Prata','Esquecido','Selado']);lines=['Propriedade: '+one(DICT.adjective),'Origem: '+one(LOCATION)];entryKind='item';}
+  if(kind==='encounter') {title='Encontro na '+one(NAMES);lines=['Cenário: '+one(LOCATION),'Obstáculo: '+one(DETAILS),'Grau de ameaça: a definir pelo mestre'];entryKind='scene';}
+  return {kind,entryKind,title,body:lines.join('\n')};
+}
+function getAssets(vault,term='',kind='all',limit=100) {
+  const list=vault.getFiles?.() || vault.getMarkdownFiles?.() || [];
+  const allowed={
+    image:/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i,
+    audio:/\.(mp3|ogg|wav|flac|m4a|opus)$/i,
+    note:/\.md$/i
+  };
+  return list.filter(f=>typeof f.path==='string'&&
+    (kind==='all'?Object.values(allowed).some(rx=>rx.test(f.path)):allowed[kind]?.test(f.path))&&
+    key(f.path).includes(key(term))).slice(0,limit);
+}
+function formatAsset(path) {
+  const cleanPath=String(path).replace(/[\]\r\n]/g,'');
+  const embed=!/\.md$/i.test(cleanPath);
+  return (embed?'!':'')+'[['+cleanPath+']]';
+}
+function configObject(source,parseYaml) {
+  const text=String(source||'').trim();
+  requireMesa(text.length>0&&text.length<=10000,'Bloco vazio ou muito grande.');
+  const obj=text.startsWith('{')?JSON.parse(text):parseYaml(text);
+  requireMesa(obj&&typeof obj==='object'&&!Array.isArray(obj),'Use YAML ou JSON de objeto.');
+  return obj;
+}
+module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restResources,restSheet,
+  executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
+
+    },
     "mesa-view.js": function (module, exports, load, require) {
 'use strict';
 const { ItemView, Modal, MarkdownRenderChild, parseYaml } = require('obsidian');
@@ -6058,7 +6507,7 @@ const {
 } = load("mesa.js");
 
 const MESA_VIEW = 'basic-rpg-mesa';
-const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords']];
+const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
   const section = el(root, 'section', 'brpg-mesa-panel');
@@ -6116,10 +6565,16 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll) button(line,'Rolar ' + a.roll,() => plugin.attempt(() => {
-      const r=rollDice(a.roll); outcome.textContent = a.name + ' · ' + r.total + ' (' + r.values.join(', ') + ')';
+    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+      if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        outcome.textContent=result.entry.detail;
+      }else {
+        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+      }
     }), { icon:'dice-5' });
   }
+  if (plugin.ultra && !compact) plugin.ultra.renderSheetTools(box,sheet);
   return box;
 }
 
@@ -6212,7 +6667,8 @@ class MesaView extends ItemView {
     const content=el(root,'div','brpg-mesa-content');
     if (this.tab==='campaigns') this.campaignsPane(content);
     else if (this.tab==='sheets') this.sheetsPane(content);
-    else this.encountersPane(content);
+    else if (this.tab==='encounters') this.encountersPane(content);
+    else this.plugin.ultra?.render(this,content);
     root.scrollTop=scroll;
   }
   campaignEditor(current) {
@@ -6343,10 +6799,11 @@ class MesaView extends ItemView {
         const limits=row(fields);
         inlineNumber(limits,'Atual',r.value,v => { r.value=v; },0,999999);
         inlineNumber(limits,'Máximo',r.max,v => { r.max=v; },0,999999);
+        labelSelect(fields,'Descanso',[['','Automático'],['max','Restaurar ao máximo'],['zero','Zerar'],['keep','Manter valor']],r.rest||'',v => { r.rest=v; });
       });
-      editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',group:'Ação'}),(fields,a) => {
+      editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',damage:'',cost:'',group:'Ação'}),(fields,a) => {
         labelSelect(fields,'Grupo',[['Ação','Ação'],['Traço','Traço'],['Reação','Reação']],a.group,v => { a.group=v; });
-        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem (opcional)',60],['text','Descrição da ação',5000,true]]);
+        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano automático (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
       });
     },s => {
       normalized(s,['name','description','note','image','initiative','type']);
@@ -6484,6 +6941,7 @@ class MesaView extends ItemView {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
       m.running=null;
     }),{icon:'square',iconOnly:true});
+    this.plugin.ultra?.renderCombat(this,where,running);
     const orderList=el(where,'div','brpg-mesa-list');
     for (const member of running.members) {
       const card=el(orderList,'article','brpg-mesa-card'+(member.id===running.turn?' is-current':''));

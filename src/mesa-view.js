@@ -10,7 +10,7 @@ const {
 } = require('./mesa');
 
 const MESA_VIEW = 'basic-rpg-mesa';
-const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords']];
+const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
   const section = el(root, 'section', 'brpg-mesa-panel');
@@ -68,10 +68,16 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll) button(line,'Rolar ' + a.roll,() => plugin.attempt(() => {
-      const r=rollDice(a.roll); outcome.textContent = a.name + ' · ' + r.total + ' (' + r.values.join(', ') + ')';
+    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+      if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        outcome.textContent=result.entry.detail;
+      }else {
+        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+      }
     }), { icon:'dice-5' });
   }
+  if (plugin.ultra && !compact) plugin.ultra.renderSheetTools(box,sheet);
   return box;
 }
 
@@ -164,7 +170,8 @@ class MesaView extends ItemView {
     const content=el(root,'div','brpg-mesa-content');
     if (this.tab==='campaigns') this.campaignsPane(content);
     else if (this.tab==='sheets') this.sheetsPane(content);
-    else this.encountersPane(content);
+    else if (this.tab==='encounters') this.encountersPane(content);
+    else this.plugin.ultra?.render(this,content);
     root.scrollTop=scroll;
   }
   campaignEditor(current) {
@@ -295,10 +302,11 @@ class MesaView extends ItemView {
         const limits=row(fields);
         inlineNumber(limits,'Atual',r.value,v => { r.value=v; },0,999999);
         inlineNumber(limits,'Máximo',r.max,v => { r.max=v; },0,999999);
+        labelSelect(fields,'Descanso',[['','Automático'],['max','Restaurar ao máximo'],['zero','Zerar'],['keep','Manter valor']],r.rest||'',v => { r.rest=v; });
       });
-      editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',group:'Ação'}),(fields,a) => {
+      editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',damage:'',cost:'',group:'Ação'}),(fields,a) => {
         labelSelect(fields,'Grupo',[['Ação','Ação'],['Traço','Traço'],['Reação','Reação']],a.group,v => { a.group=v; });
-        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem (opcional)',60],['text','Descrição da ação',5000,true]]);
+        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano automático (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
       });
     },s => {
       normalized(s,['name','description','note','image','initiative','type']);
@@ -436,6 +444,7 @@ class MesaView extends ItemView {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
       m.running=null;
     }),{icon:'square',iconOnly:true});
+    this.plugin.ultra?.renderCombat(this,where,running);
     const orderList=el(where,'div','brpg-mesa-list');
     for (const member of running.members) {
       const card=el(orderList,'article','brpg-mesa-card'+(member.id===running.turn?' is-current':''));
