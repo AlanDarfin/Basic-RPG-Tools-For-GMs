@@ -3491,21 +3491,22 @@ function overviewGroup(parent, name, bodies, type, horizonLabel) {
   el(group, 'h3', 'brpg-section-title', name);
   const grid = el(group, 'div', 'brpg-celestial-grid');
   return bodies.map((body) => {
-    const tile = el(grid, 'article', 'brpg-celestial-tile is-' + type);
-    const paint = type === 'sun' ? sunDisc(tile, body) : moonDisc(tile);
-    el(tile, 'strong', '', body.name);
-    const label = el(tile, 'small', 'brpg-celestial-state');
-    const light = type === 'moon' ? el(tile, 'small', 'brpg-celestial-illumination') : null;
-    if (horizonLabel) el(tile, 'small', 'brpg-horizon-time', horizonLabel(body));
-    if (light) el(tile, 'small', 'brpg-celestial-size', 'Diâmetro ' + angularSize(body));
+    const tile = el(grid, 'details', 'brpg-celestial-tile is-' + type);
+    const header = el(tile, 'summary', 'brpg-celestial-toggle');
+    const paint = type === 'sun' ? sunDisc(header, body) : moonDisc(header);
+    el(header, 'strong', '', body.name);
+    const arrow = el(header, 'span', 'brpg-celestial-chevron');
+    arrow.setAttribute('aria-hidden', 'true');
+    const details = el(tile, 'div', 'brpg-celestial-details');
+    const label = el(details, 'small', 'brpg-celestial-state');
+    const light = type === 'moon' ? el(details, 'small', 'brpg-celestial-illumination') : null;
+    if (horizonLabel) el(details, 'small', 'brpg-horizon-time', horizonLabel(body));
+    if (light) el(details, 'small', 'brpg-celestial-size', 'Diâmetro ' + angularSize(body));
     return (next) => {
       paint(next);
       label.textContent = type === 'sun' ? sunLabel(next) : moonLabel(next);
       tile.classList.toggle('is-above', next.visibleNow);
-      if (light) {
-        light.textContent = next.phase + ' · ' + lightPercent(next);
-        tile.title = moonLabel(next) + ' · ' + next.phase + ' · diâmetro aparente ' + angularSize(next);
-      } else tile.title = next.label;
+      if (light) light.textContent = next.phase + ' · ' + lightPercent(next);
     };
   });
 }

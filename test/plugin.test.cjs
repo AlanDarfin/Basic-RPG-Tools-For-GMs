@@ -17,12 +17,18 @@ class Element {
         this.className = items.join(' ');
       },
     }; }
-  appendChild(c) { this.children.push(c); return c; }
+  appendChild(c) { this.children.push(c); c.parentElement = this; return c; }
   replaceChildren() { this.children = []; this.text = ''; }
   setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener(name, fn) { this.listeners[name] ||= []; this.listeners[name].push(fn); }
   async emit(name) { for (const fn of this.listeners[name] || []) await fn({ target: this }); }
-  click() { return this.emit('click'); }
+  async click() {
+    await this.emit('click');
+    if (this.tag === 'summary' && this.parentElement?.tag === 'details' && this.parentElement.children[0] === this) {
+      this.parentElement.open = !this.parentElement.open;
+      await this.parentElement.emit('toggle');
+    }
+  }
   focus() {}
   set textContent(v) { this.text = String(v); this.children = []; }
   get textContent() { return this.text + this.children.map((x) => x.textContent).join(''); }
@@ -630,4 +636,34 @@ test('editar o tamanho de uma lua atualiza seu disco e preserva o raio usado em 
   assert.equal(m.p.saved.calendars[0].moons[0].eclipse.radius, .6);
   assert.equal(m.p.api.day('Arkanis').moons[0].apparentRadius, .6);
   assert.match(root.querySelector('.brpg-celestial-overview').textContent, /Verika.*Diâmetro 1,2°/);
+});
+
+test('sóis e luas mostram apenas o nome nos resumos e mantêm detalhes independentes ao simular', async () => {
+  const m = mock();
+  await m.p.onload(); await m.p.open(false);
+  const root = m.leaves[0].view.contentEl;
+  await pickButton(root, 'Céu').click();
+  const tiles = root.querySelector('.brpg-celestial-overview')
+    .all((node) => node.className.split(' ').includes('brpg-celestial-tile'));
+  assert.equal(tiles.length, 6);
+  assert.deepEqual(tiles.map((card) => card.children[0].textContent), ['Innart', 'Dinart', 'Reart', 'Verika', 'Neurika', 'Menrika']);
+  assert.ok(tiles.every((card) => card.tag === 'details' && !card.open && card.children[0].tag === 'summary' && !card.title));
+
+  const sun = tiles[2], moon = tiles[5];
+  await sun.children[0].click();
+  assert.equal(sun.open, true);
+  assert.match(sun.querySelector('.brpg-celestial-details').textContent, /Nasce.*Põe-se/);
+  await moon.children[0].click();
+  assert.equal(moon.open, true);
+  assert.match(moon.querySelector('.brpg-celestial-details').textContent, /Diâmetro/);
+
+  const time = root.all((node) => node.attributes['aria-label'] === 'Hora simulada (HH:MM)')[0];
+  time.value = '29:52'; await time.emit('change');
+  assert.match(moon.querySelector('.brpg-celestial-details').textContent, /No céu.*Cheia.*Nasce.*Diâmetro/);
+  assert.equal(moon.open, true);
+  assert.equal(sun.open, true);
+  assert.equal(tiles[0].open, undefined);
+  await moon.children[0].click();
+  assert.equal(moon.open, false);
+  assert.equal(sun.open, true);
 });

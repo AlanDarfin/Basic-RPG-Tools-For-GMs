@@ -304,22 +304,37 @@
 .brpg .brpg-sky-axis .brpg-sky-point:not(:disabled):hover { color: var(--brpg-ink); border-color: var(--brpg-border); }
 .brpg-sky-shortcuts { margin-top: 4px; justify-content: space-between; }
 .brpg-sky-controls .brpg-button[aria-pressed="true"] { border-color: var(--brpg-accent); }
-.brpg-celestial-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem),1fr)); gap: 8px; }
+.brpg-celestial-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem),1fr)); align-items: start; gap: 8px; }
 .brpg-celestial-group {
   min-width: 0; padding: 7px; border: 1px solid var(--brpg-border);
   border-radius: var(--brpg-radius); background: var(--brpg-surface);
 }
 .brpg-celestial-group > .brpg-section-title { margin: 0 0 5px; }
-.brpg-celestial-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 4.6rem), 1fr)); gap: 4px; }
+.brpg-celestial-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 4.6rem), 1fr));
+  align-items: start; gap: 4px;
+}
 .brpg-celestial-tile {
-  min-width: 0; padding: 3px 2px 5px; min-height: 4.25rem; display: flex;
-  flex-direction: column; align-items: center; justify-content: start; gap: 1px;
-  text-align: center; border: 1px solid var(--brpg-border); border-radius: 7px;
+  min-width: 0; text-align: center; border: 1px solid var(--brpg-border); border-radius: 7px;
 }
 .brpg-celestial-tile.is-sun.is-above { background: color-mix(in srgb, #d89655 17%, var(--brpg-surface)); }
-.brpg-celestial-tile > strong { font-size: .82em; overflow-wrap: anywhere; }
-.brpg-celestial-tile > small { font-size: .70em; color: var(--brpg-muted); line-height: 1.17; overflow-wrap: anywhere; }
-.brpg-celestial-state { min-height: 2.15em; display: grid; align-content: start; }
+.brpg-celestial-toggle {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  min-height: 59px; padding: 4px 3px 6px;
+  list-style: none; cursor: pointer; border-radius: 6px;
+}
+.brpg-celestial-toggle::-webkit-details-marker { display: none; }
+.brpg-celestial-toggle::marker { content: ''; }
+.brpg-celestial-toggle:focus-visible { outline: 2px solid var(--brpg-accent); outline-offset: -2px; }
+.brpg-celestial-toggle > strong { font-size: .82em; overflow-wrap: anywhere; }
+.brpg-celestial-chevron {
+  width: 6px; height: 6px; border: solid var(--brpg-muted); border-width: 0 1px 1px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+.brpg-celestial-tile[open] .brpg-celestial-chevron { transform: translateY(2px) rotate(225deg); }
+.brpg-celestial-details { display: grid; gap: 3px; padding: 4px 4px 6px; border-top: 1px solid var(--brpg-border); }
+.brpg-celestial-tile:not([open]) > .brpg-celestial-details { display: none; }
+.brpg-celestial-details > small { font-size: .72em; color: var(--brpg-muted); line-height: 1.2; overflow-wrap: anywhere; }
 .brpg-celestial-illumination { font-variant-numeric: tabular-nums; }
 .brpg-sun-disc { width: 32px; height: 32px; display: inline-grid; place-items: center; }
 .brpg-sun-disc > span {
@@ -336,7 +351,7 @@
   background: color-mix(in srgb, var(--brpg-lunar-accent) 17%, var(--brpg-surface));
   border-color: color-mix(in srgb, var(--brpg-lunar-accent) 55%, var(--brpg-border));
 }
-.brpg-celestial-tile.is-moon.is-above > .brpg-celestial-state { color: var(--brpg-ink); }
+.brpg-celestial-tile.is-moon.is-above .brpg-celestial-state { color: var(--brpg-ink); }
 .brpg-moon-disc[data-visible="true"] { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--brpg-lunar-accent) 78%, transparent)); }
 .brpg-moon-disc[data-visible="true"] .brpg-moon-outline { stroke: var(--brpg-lunar-accent); }
 .brpg-celestial-size { font-variant-numeric: tabular-nums; }
@@ -561,7 +576,7 @@
 
 .brpg-horizon-settings { margin-block: 6px; }
 .brpg-horizon-settings .brpg-form-row { margin-top: 5px; }
-.brpg-celestial-tile > .brpg-horizon-time { font-variant-numeric: tabular-nums; margin: 3px 2px 0; color: var(--brpg-ink); }
+.brpg-celestial-details > .brpg-horizon-time { font-variant-numeric: tabular-nums; color: var(--brpg-ink); }
 .brpg-calendar-subviews { width: 100%; }
 .brpg-calendar-subviews .brpg-button[aria-pressed="true"], .brpg-year-month[aria-current="date"], .brpg-embed-days button[aria-current="date"] {
   border-color: var(--brpg-accent); background: var(--brpg-active, var(--brpg-surface));
