@@ -6,6 +6,7 @@ const { key,clean }=require('./solo');
 const { newEntry,find,requireMesa,buildRunning }=require('./mesa');
 const { randomContent }=require('./ultra');
 const {setSessionLocation}=require('./session');
+const {previewTravel}=require('./exploration');
 const { parseTable,tableEngine }=require('./solo-tables');
 const { MAP_TEMPLATES, createMapTemplate }=require('./map-presets');
 const {
@@ -248,6 +249,7 @@ class AtlasView extends ItemView{
    const backgroundFile=map.background?this.plugin.app.vault.getAbstractFileByPath(map.background):null;
    const background=backgroundFile instanceof TFile?this.plugin.app.vault.getResourcePath(backgroundFile):'';
    renderMapCanvas(canvas,map,{background,mode:this.mode,gm:this.gm,zoom:this.zoom,selected:this.selected,paintTerrain:this.terrain,
+     partyAt:this.m.session?.map===map.id?this.m.session.cell:'',
      regions:this.regions,factions:this.factions,getTileUrl:path=>{const f=this.plugin.app.vault.getAbstractFileByPath(path);return f instanceof TFile?this.plugin.app.vault.getResourcePath(f):'';},
      onPick:at=>this.pickCell(map,at),onPaint:coords=>this.paintCells(map,coords)});
    const board=row(main);
@@ -356,6 +358,15 @@ class AtlasView extends ItemView{
      if(child)button(links,'Entrar em '+child.name,()=>this.chooseMap(child.id),{icon:'corner-down-right'});
    }
    const controls=row(detail);
+   if(this.m.session?.status==='active'&&this.m.session.map===map.id&&this.m.session.cell&&this.m.session.cell!==this.selected)
+     button(controls,'Planejar viagem até aqui',action(this.plugin,async()=>{
+       const target=this.selected;
+       const dashboard=await this.plugin.openMesa('dashboard');
+       dashboard.campaign=map.campaign;
+       dashboard.travelToDraft=target;
+       dashboard.travelPreview=null;
+       dashboard.render();
+     }),{icon:'route'});
    if(this.m.session?.campaign===map.campaign)button(controls,'Marcar como local da sessão',action(this.plugin,()=>this.plugin.changeMesa(m=>setSessionLocation(m,map.id,this.selected))),{icon:'map-pin'});
    button(controls,'Editar célula',()=>this.editCell(map,this.selected),{icon:'pencil'});
    button(controls,cell.note?'Abrir/criar nota':'Criar nota do hex',action(this.plugin,()=>makeHexNote(this.plugin,map,this.selected)),{icon:'file-plus'});

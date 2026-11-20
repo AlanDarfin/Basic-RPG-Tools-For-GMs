@@ -38,6 +38,7 @@ const { VIEW, CalendarView } = load("view.js");
 const { ensureSky } = load("sky.js");
 const { ensureEclipseOrbits } = load("eclipse.js");
 const { worldDate, linkedDate, mode: clockMode, anchor, ensureClock, transferDate } = load("world-clock.js");
+const {previewTravel,executeTravel}=load("exploration.js");
 const { el, button, select, info, CalendarEditor, EventEditor, WorldDateEditor, Confirm } = load("ui.js");
 const arkanis = load("arkanis.json");
 const { NoteIndex, parseDate } = load("note-events.js");
@@ -210,6 +211,7 @@ class BasicRPG extends Plugin {
     this.addRibbonIcon('swords', 'Basic RPG · Mesa', () => this.attempt(() => this.openMesa()));
     this.addCommand({ id:'open-mesa', name:'Abrir Mesa', callback:() => this.attempt(() => this.openMesa()) });
     this.addCommand({ id:'open-session-dashboard', name:'Abrir Central de Sessão', callback:() => this.attempt(() => this.openMesa('dashboard')) });
+    this.addCommand({ id:'open-exploration', name:'Exploração · Planejar viagem do grupo', callback:()=>this.attempt(()=>this.openMesa('dashboard')) });
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
@@ -378,6 +380,20 @@ class BasicRPG extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(MESA_VIEW)) if (leaf.view instanceof MesaView) leaf.view.render();
     for (const view of this.mesaEmbeds) view.render();
     this.redrawAtlas();
+  }
+  planTravel(options){
+    const s=this.mesa().session;
+    assert(s,'Inicie uma sessão primeiro.');
+    const camp=this.mesa().campaigns.find(x=>x.id===s.campaign);
+    const cal=this.state.calendars.find(x=>x.id===camp?.calendar);
+    return previewTravel(this.mesa(),cal,options);
+  }
+  travelSession(options){
+    return this.change(state=>{
+      const plan=executeTravel(state,options,this.clockNow());
+      checkMesa(state.mesa);
+      return plan;
+    });
   }
   changeMesa(fn) {
     return this.change(state => {
@@ -3975,6 +3991,1054 @@ function renderSeasons(root, view, c, e) {
 module.exports = { renderSeasons };
 
     },
+    "exploration.js": function (module, exports, load, require) {
+'use strict';
+const {CalendarEngine, MAX_YEAR, validateCalendar, uid}=load("calendar.js");
+const {TERRAIN, place, unpack, inMap, getCell, distance}=load("atlas.js");
+const {readMinute, splitMinute, mode:clockMode, anchor}=load("world-clock.js");
+const {requireMesa}=load("mesa.js");
+const {setSessionLocation}=load("session.js");
+
+const MODES=Object.freeze({
+ walk:{name:'A pé',multiplier:1}, mount:{name:'Montado',multiplier:.65},fly:{name:'Voando',multiplier:.5}
+});
+const MAX_TRIPS=120,MAX_STOPS=24;
+function terrain(map,at){const p=unpack(at);return getCell(map,p.col,p.row).terrain||map.defaultTerrain;}
+function cellCost(map,at,travelMode){
+ const type=terrain(map,at);
+ if(type==='wall'||(type==='water'&&travelMode!=='fly'))return Infinity;
+ return travelMode==='fly'?1:TERRAIN[type]?.speed??1;
+}
+function neighbors(map,at,travelMode){
+ const p=unpack(at),list=[];
+ for(let row=Math.max(0,p.row-1);row<=Math.min(map.height-1,p.row+1);row++)
+  for(let col=Math.max(0,p.col-1);col<=Math.min(map.width-1,p.col+1);col++){
+   if(row===p.row&&col===p.col)continue;
+   const to=place(col,row);
+   if(distance(map,at,to)!==1)continue;
+   const cost=cellCost(map,to,travelMode);
+   if(Number.isFinite(cost))list.push({to,cost});
+  }
+ return list;
+}
+function shortestRoute(map,from,to,travelMode='walk'){
+ requireMesa(Object.hasOwn(MODES,travelMode),'Modo de deslocamento inválido.');
+ const a=unpack(from),b=unpack(to);
+ requireMesa(a&&b&&inMap(map,a.col,a.row)&&inMap(map,b.col,b.row),'Coordenadas de viagem inválidas.');
+ requireMesa(from!==to,'Escolha outra célula para viajar.');
+ requireMesa(Number.isFinite(cellCost(map,to,travelMode)),'O destino não é transitável neste modo.');
+ const costs=new Map([[from,0]]),previous=new Map(),todo=new Set([from]);
+ let expansions=0;
+ while(todo.size){
+   let node=null,best=Infinity;
+   for(const item of todo)if(costs.get(item)<best){node=item;best=costs.get(item);}
+   if(node===null)break;
+   todo.delete(node);
+   if(node===to)break;
+   if(++expansions>1600)throw new Error('O mapa excede o limite de busca da rota.');
+   for(const edge of neighbors(map,node,travelMode)){
+     const total=best+edge.cost;
+     if(total<(costs.get(edge.to)??Infinity)){
+       costs.set(edge.to,total);previous.set(edge.to,node);todo.add(edge.to);
+     }
+   }
+ }
+ requireMesa(costs.has(to),'Não existe caminho transitável até esse destino.');
+ const route=[to];while(route[0]!==from){
+   const parent=previous.get(route[0]);
+   requireMesa(parent,'Não foi possível reconstruir a rota.');
+   route.unshift(parent);
+ }
+ return {path:route,steps:route.length-1,cost:Math.round(costs.get(to)*100)/100};
+}
+function stopSummary(map,path){
+ const result=[];
+ for(const at of path.slice(1)){
+   const p=unpack(at),c=getCell(map,p.col,p.row);
+   if(!c.label&&!c.entry&&!c.encounter&&!c.table&&!c.submap)continue;
+   if(result.length>=MAX_STOPS)break;
+   result.push({at,label:c.label||c.region||'Ponto de interesse',
+     entry:c.entry||'',encounter:c.encounter||'',table:c.table||'',submap:c.submap||''});
+ }
+ return result;
+}
+function previewTravel(m,calendar,options){
+ const session=m.session;
+ requireMesa(session?.status==='active','Inicie ou retome a sessão antes de viajar.');
+ const map=m.atlas?.maps.find(x=>x.id===session.map);
+ requireMesa(map&&map.campaign===session.campaign,'Selecione um mapa da campanha na Central de Sessão.');
+ requireMesa(!!session.cell,'Marque a posição inicial do grupo no Atlas.');
+ const method=options?.travelMode||'walk';
+ const destination=String(options?.destination||'');
+ const route=shortestRoute(map,session.cell,destination,method);
+ const minutesPerUnit=Number(options?.minutesPerUnit??60);
+ requireMesa(Number.isSafeInteger(minutesPerUnit)&&minutesPerUnit>=1&&minutesPerUnit<=1440,
+   'Use entre 1 e 1440 minutos do mundo por unidade de terreno.');
+ const elapsed=Math.max(1,Math.ceil(route.cost*minutesPerUnit*MODES[method].multiplier));
+ requireMesa(elapsed<=300000,'Viagem muito longa. Reduza a escala de tempo ou divida a rota em etapas.');
+ const advance=options?.advance===true;
+ let arrival=null,events=[];
+ if(advance){
+   requireMesa(!!calendar,'Vincule um calendário à campanha antes de avançar o tempo.');
+   requireMesa(!calendar.clockLink&&clockMode(calendar)==='manual',
+     'Este calendário usa relógio em tempo real ou vinculado. Altere para modo manual ou viaje sem avançar a data.');
+   const engine=new CalendarEngine(calendar),start=engine.epoch(calendar.current)*calendar.clock.hours*calendar.clock.minutes+readMinute(calendar,calendar.current);
+   const total=calendar.clock.hours*calendar.clock.minutes;
+   const end=start+elapsed;
+   requireMesa(Number.isSafeInteger(end)&&end>=0,'Data futura inválida.');
+   const date={...engine.fromEpoch(Math.floor(end/total)),...splitMinute(calendar,end%total)};
+   arrival=date;
+   const startDay=Math.floor(start/total),endDay=Math.floor(end/total);
+   const seen=new Set();
+   for(let day=startDay+1;day<=endDay&&day<=startDay+14;day++){
+     const current=engine.fromEpoch(day);
+     for(const event of engine.eventsOn(current)){
+       if(!seen.has(event.id)){seen.add(event.id);events.push({id:event.id,title:String(event.title||'Evento').slice(0,160)});}
+       if(events.length>=16)break;
+     }
+     if(events.length>=16)break;
+   }
+   if(startDay===endDay)for(const event of engine.eventsOn(date)){
+     if(!seen.has(event.id)){seen.add(event.id);events.push({id:event.id,title:String(event.title||'Evento').slice(0,160)});}
+     if(events.length>=16)break;
+   }
+ }
+ return {...route,from:session.cell,to:destination,map:map.id,minutes:elapsed,minutesPerUnit,
+   travelMode:method,advance,arrival,events,stops:stopSummary(map,route.path)};
+}
+function executeTravel(state,options,now=Date.now()){
+ const m=state.mesa,session=m?.session;
+ requireMesa(session,'Não há sessão de RPG em andamento.');
+ const camp=m.campaigns.find(x=>x.id===session.campaign);
+ const cal=state.calendars?.find(x=>x.id===camp?.calendar);
+ const plan=previewTravel(m,cal,options);
+ // All route checks and clock calculations are finished before any state is changed.
+ if(plan.advance){
+   const actual=state.calendars.find(x=>x.id===cal.id);
+   anchor(actual,plan.arrival,'manual',now);
+   validateCalendar(actual);
+ }
+ const map=m.atlas.maps.find(x=>x.id===plan.map);
+ const moveTokens=options.moveTokens===true;
+ if(moveTokens){
+   const partyIds=new Set(m.sheets.filter(x=>x.kind==='player'&&
+     (!x.campaign||x.campaign===session.campaign)).map(x=>x.id));
+   for(const token of map.tokens)if(token.at===plan.from&&partyIds.has(token.sheet))token.at=plan.to;
+ }
+ if(options.reveal===true)
+   for(const at of plan.path){const c=map.cells[at];if(c?.fog)delete c.fog;}
+ setSessionLocation(m,plan.map,plan.to);
+ session.travelLog ||= [];
+ requireMesa(session.travelLog.length<MAX_TRIPS,'Histórico de viagens cheio. Encerre a sessão para arquivá-lo.');
+ const travel={id:uid('trip'),time:new Date(now).toISOString(),map:map.id,
+   from:plan.from,to:plan.to,travelMode:plan.travelMode,steps:plan.steps,
+   cost:plan.cost,minutes:plan.minutes,advance:plan.advance,path:plan.path,
+   events:plan.events,stops:plan.stops};
+ session.travelLog.push(travel);
+ session.lastTravel=travel.id;
+ return plan;
+}
+function validateTravel(m){
+ const validateList=items=>Array.isArray(items)&&items.length<=10000&&items.every(x=>
+   x&&typeof x.id==='string'&&x.id.length<=150&&
+   typeof x.time==='string'&&x.time.length<=40&&
+   typeof x.map==='string'&&x.map.length<=150&&
+   typeof x.from==='string'&&!!unpack(x.from)&&typeof x.to==='string'&&!!unpack(x.to)&&
+   Object.hasOwn(MODES,x.travelMode)&&Number.isSafeInteger(x.minutes)&&x.minutes>=1&&x.minutes<=300000&&
+   Number.isSafeInteger(x.steps)&&x.steps>=1&&x.steps<=1600&&
+   Array.isArray(x.path)&&x.path.length>=2&&x.path.length<=1600&&
+   x.path[0]===x.from&&x.path.at(-1)===x.to&&x.path.every(y=>!!unpack(y))&&
+   Array.isArray(x.events)&&x.events.length<=16&&Array.isArray(x.stops)&&x.stops.length<=MAX_STOPS);
+ if(m.session?.travelLog!==undefined)
+   requireMesa(validateList(m.session.travelLog)&&m.session.travelLog.length<=MAX_TRIPS,'Histórico de viagens da sessão inválido.');
+ if(m.session?.lastTravel)
+   requireMesa(m.session.travelLog?.some(x=>x.id===m.session.lastTravel),'Última viagem inválida.');
+ for(const entry of m.entries||[])if(entry.sessionTravel!==undefined)
+   requireMesa(validateList(entry.sessionTravel),'Histórico de viagens arquivado inválido.');
+ return true;
+}
+module.exports={MODES,MAX_TRIPS,shortestRoute,stopSummary,previewTravel,executeTravel,validateTravel};
+
+    },
+    "atlas.js": function (module, exports, load, require) {
+'use strict';
+const { uid } = load("calendar.js");
+const { clean, key } = load("solo.js");
+const TERRAIN=Object.freeze({
+  plains:{name:'Planície',color:'#ac9b63',icon:'·',speed:1},
+  forest:{name:'Floresta',color:'#456e54',icon:'♣',speed:1.5},
+  hills:{name:'Colinas',color:'#92785c',icon:'⌃',speed:1.5},
+  mountain:{name:'Montanha',color:'#655c67',icon:'▲',speed:3},
+  water:{name:'Água',color:'#3a6384',icon:'≈',speed:4},
+  swamp:{name:'Pântano',color:'#66775b',icon:'≋',speed:2},
+  desert:{name:'Deserto',color:'#c49d64',icon:'☼',speed:2},
+  road:{name:'Estrada',color:'#9e866a',icon:'═',speed:.75},
+  wall:{name:'Parede',color:'#514b52',icon:'▧',speed:999},
+  ice:{name:'Gelo e neve',color:'#c8dce3',icon:'❄',speed:3},
+  floor:{name:'Piso',color:'#b0a496',icon:'',speed:1}
+});
+const RELATION_TYPES=Object.freeze({
+ ally:'Aliado',enemy:'Inimigo',friend:'Amigo',rival:'Rival',
+ family:'Família',parent:'Progenitor',child:'Filho',spouse:'Cônjuge',
+ mentor:'Mentor',student:'Aprendiz',member:'Membro',leader:'Líder',
+ controls:'Controla',located:'Localizado em',knows:'Conhece',link:'Conexão'
+});
+const RELATION_KEYS=Object.freeze(['ally','enemy','friend','rival','family','parent','child','spouse','mentor','student','member','leader','controls','located','knows']);
+const MAX_MAPS=60,MAX_CELLS=1600,MAX_LINKS=1500;
+const assert=(test,msg)=>{if(!test)throw new Error(msg);};
+const int=(n,a,b)=>Number.isInteger(n)&&n>=a&&n<=b;
+const place=(col,row)=>col+','+row;
+const unpack=(p)=>{const m=/^(\d{1,2}),(\d{1,2})$/.exec(p||'');return m?{col:+m[1],row:+m[2]}:null;};
+const blankAtlas=()=>({maps:[],relations:[]});
+function newMap(campaign='',grid='hex'){
+ return {id:uid('map'),campaign,name:'',grid,width:12,height:10,defaultTerrain:grid==='square'?'wall':'plains',
+  parent:'',parentCell:'',background:'',cells:{},paths:[],tokens:[],playerCell:'',revealed:false};
+}
+function inMap(map,col,row){return int(col,0,map.width-1)&&int(row,0,map.height-1);}
+function getCell(map,col,row){return map.cells[place(col,row)]||{};}
+function setCell(map,col,row,patch){
+ assert(inMap(map,col,row),'Coordenadas fora do mapa.');
+ const code=place(col,row),existing=map.cells[code]||{};
+ const next={...existing,...patch};
+ for(const [k,v] of Object.entries(next))if(v===undefined||v===null||v===''||(k==='fog'&&v===false))delete next[k];
+ if(!Object.keys(next).length)delete map.cells[code];else map.cells[code]=next;
+ return next;
+}
+function axial(col,row){return {q:col-(row-(row&1))/2,r:row};}
+function distance(map,a,b){
+ const x=typeof a==='string'?unpack(a):a,y=typeof b==='string'?unpack(b):b;
+ assert(x&&y,'Coordenadas inválidas.');
+ if(map.grid==='square')return Math.abs(x.col-y.col)+Math.abs(x.row-y.row);
+ const h=axial(x.col,x.row),t=axial(y.col,y.row);
+ return (Math.abs(h.q-t.q)+Math.abs(h.r-t.r)+Math.abs(h.q+h.r-t.q-t.r))/2;
+}
+function around(map,col,row,radius=0){
+ const coords=[];
+ for(let r=Math.max(0,row-radius);r<=Math.min(map.height-1,row+radius);r++)
+  for(let q=Math.max(0,col-radius);q<=Math.min(map.width-1,col+radius);q++)
+   if(map.grid==='square'?Math.max(Math.abs(q-col),Math.abs(r-row))<=radius:distance(map,{col,row},{col:q,row:r})<=radius)
+    coords.push({col:q,row:r});
+ return coords;
+}
+function terrainSeed(map,seed=1234){
+ let state=(Number(seed)>>>0)||1;
+ const random=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
+ const keys=['plains','plains','forest','forest','hills','mountain','water','swamp','desert'];
+ const initial=new Array(map.width*map.height);
+ for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+   const n=Math.max(0,Math.min(8,Math.floor(random()*9)));
+   initial[row*map.width+col]=keys[n];
+ }
+ const next=initial.map((type,i)=>{
+   const row=Math.floor(i/map.width),col=i%map.width;
+   const neighbors=around(map,col,row,1).map(n=>initial[n.row*map.width+n.col]);
+   const count=new Map();
+   for(const x of neighbors)count.set(x,(count.get(x)||0)+1);
+   const common=[...count].sort((a,b)=>b[1]-a[1])[0];
+   return common&&common[1]>=4?common[0]:type;
+ });
+ const cell={};
+ for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
+   const type=next[row*map.width+col];
+   if(type!==map.defaultTerrain)cell[place(col,row)]={terrain:type};
+ }
+ return cell;
+}
+function dungeonSeed(map,seed=1234){
+ assert(map.grid==='square','Masmorras usam mapas quadrados.');
+ const cells={}; let state=(Number(seed)>>>0)||1;
+ const rand=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
+ const rooms=[];const count=Math.min(10,Math.max(2,Math.floor(map.width*map.height/45)));
+ for(let i=0;i<count;i++){
+   const w=Math.min(2+Math.floor(rand()*4),map.width-2),h=Math.min(2+Math.floor(rand()*4),map.height-2);
+   if(w<2||h<2)break;
+   const col=1+Math.floor(rand()*Math.max(1,map.width-w-1)),row=1+Math.floor(rand()*Math.max(1,map.height-h-1));
+   for(let r=row;r<row+h;r++)for(let q=col;q<col+w;q++)cells[place(q,r)]={terrain:'floor'};
+   rooms.push({col:Math.floor(col+w/2),row:Math.floor(row+h/2)});
+ }
+ for(let i=1;i<rooms.length;i++){
+   const a=rooms[i-1],b=rooms[i];let q=a.col,r=a.row;
+   while(q!==b.col){cells[place(q,r)]={terrain:'floor'};q+=Math.sign(b.col-q);}
+   while(r!==b.row){cells[place(q,r)]={terrain:'floor'};r+=Math.sign(b.row-r);}
+   cells[place(q,r)]={terrain:'floor'};
+ }
+ if(rooms.length){cells[place(rooms[0].col,rooms[0].row)]={terrain:'floor',label:'Entrada'};
+  const last=rooms.at(-1);cells[place(last.col,last.row)]={terrain:'floor',label:'Saída'};}
+ return cells;
+}
+function mapPathDistance(map,path){
+ if(!Array.isArray(path)||path.length<2)return 0;
+ return path.slice(1).reduce((sum,p,i)=>sum+distance(map,path[i],p),0);
+}
+function routeCost(map,waypoints){
+ if(!waypoints?.length)return 0;
+ let total=0;
+ for(let i=1;i<waypoints.length;i++){
+   const b=unpack(waypoints[i]),a=unpack(waypoints[i-1]);
+   assert(a&&b&&inMap(map,a.col,a.row)&&inMap(map,b.col,b.row),'Rota possui coordenadas inválidas.');
+   const unit=distance(map,a,b),terrain=getCell(map,b.col,b.row).terrain||map.defaultTerrain;
+   total+=unit*(TERRAIN[terrain]?.speed||1);
+ }
+ return Math.round(total*100)/100;
+}
+function safeNote(s){
+ return typeof s==='string'&&s.length<=500&&!s.split('/').includes('..')&&!/[\\\x00-\x1f]/.test(s);
+}
+function checkAtlas(atlas,m){
+ assert(atlas&&Array.isArray(atlas.maps)&&Array.isArray(atlas.relations)&&atlas.maps.length<=MAX_MAPS&&atlas.relations.length<=MAX_LINKS,'Atlas inválido ou cheio.');
+ assert(new Set(atlas.maps.map(x=>x.id)).size===atlas.maps.length,'Mapas duplicados.');
+ const maps=new Map(atlas.maps.map(x=>[x.id,x])),campaigns=new Set(m.campaigns.map(x=>x.id)),
+  entries=new Map(m.entries.map(x=>[x.id,x])),sheets=new Map(m.sheets.map(x=>[x.id,x])),encounters=new Map(m.encounters.map(x=>[x.id,x]));
+ for(const map of atlas.maps){
+   assert(clean(map.id)&&clean(map.name)&&['hex','square'].includes(map.grid)&&int(map.width,3,40)&&int(map.height,3,40)&&map.width*map.height<=MAX_CELLS,'Configuração de mapa inválida.');
+   assert(!map.campaign||campaigns.has(map.campaign),'Campanha do mapa não encontrada.');
+   assert(Object.hasOwn(TERRAIN,map.defaultTerrain),'Terreno padrão inválido.');
+   assert(safeNote(map.background||'')&& (!map.parent||maps.has(map.parent)), 'Vínculo do mapa inválido.');
+   assert(map.parent!==map.id,'Um mapa não pode ser seu próprio submapa.');
+   const visited=new Set([map.id]);let ancestor=map.parent;
+   while(ancestor){
+     assert(!visited.has(ancestor),'Ciclo de submapas detectado. Remova a referência circular.');
+     visited.add(ancestor);
+     const next=maps.get(ancestor);
+     assert(!!next,'Mapa pai não encontrado.');
+     ancestor=next.parent||'';
+   }
+   if(map.parentCell){const parent=maps.get(map.parent),cell=unpack(map.parentCell);assert(parent&&cell&&inMap(parent,cell.col,cell.row),'Coordenadas do mapa pai inválidas.');}
+   if(map.parent)assert(maps.get(map.parent).campaign===map.campaign,'Submapas precisam pertencer à mesma campanha.');
+   assert(map.cells&&typeof map.cells==='object'&&!Array.isArray(map.cells)&&Object.keys(map.cells).length<=MAX_CELLS,'Mapa possui células inválidas.');
+   for(const [pos,cell]of Object.entries(map.cells)){
+     const at=unpack(pos);assert(at&&inMap(map,at.col,at.row)&&cell&&typeof cell==='object'&&!Array.isArray(cell),'Célula fora dos limites.');
+     assert(!cell.terrain||Object.hasOwn(TERRAIN,cell.terrain),'Terreno inválido.');
+     for(const field of ['label','region','faction','text','secret','icon','table'])assert(!cell[field]||(typeof cell[field]==='string'&&cell[field].length<=(field==='text'||field==='secret'?3000:500)), 'Texto de célula inválido.');
+     assert(!cell.note||safeNote(cell.note),'Nota da célula inválida.');
+     assert(!cell.tile||(safeNote(cell.tile)&&/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(cell.tile)), 'Textura da célula inválida.');
+     assert(!cell.entry||entries.get(cell.entry)?.campaign===map.campaign,'Registro da célula pertence a outra campanha.');
+     assert(!cell.sheet||(sheets.has(cell.sheet)&&(!sheets.get(cell.sheet).campaign||sheets.get(cell.sheet).campaign===map.campaign)),'Ficha da célula não encontrada.');
+     assert(!cell.encounter||encounters.get(cell.encounter)?.campaign===map.campaign,'Encontro da célula pertence a outra campanha.');
+     assert(!cell.submap||(maps.has(cell.submap)&&maps.get(cell.submap).campaign===map.campaign&&cell.submap!==map.id),'Submapa da célula inválido.');
+     assert(!cell.fog||typeof cell.fog==='boolean','Névoa inválida.');
+     assert(!cell.secret||typeof cell.secret==='string','Segredo de célula inválido.');
+   }
+   assert(Array.isArray(map.paths)&&map.paths.length<=100&&map.paths.every(x=>Array.isArray(x)&&x.length<=200&&x.every(pos=>{const a=unpack(pos);return a&&inMap(map,a.col,a.row);})), 'Rotas inválidas.');
+   assert(Array.isArray(map.tokens)&&map.tokens.length<=80,'Tokens do mapa inválidos.');
+   for(const token of map.tokens){
+     const at=unpack(token.at);
+     assert(clean(token.id)&&clean(token.name)&&at&&inMap(map,at.col,at.row)&&(!token.sheet||sheets.has(token.sheet)),'Token do mapa inválido.');
+   }
+ }
+ const ids=new Set(atlas.relations.map(x=>x.id));assert(ids.size===atlas.relations.length,'Relações duplicadas.');
+ const validRef=(ref,campaign)=>{
+   if(typeof ref!=='string'||ref.length>600)return false;
+   const i=ref.indexOf(':');if(i<=0)return false;
+   const type=ref.slice(0,i),id=ref.slice(i+1);
+   if(type==='entry')return entries.get(id)?.campaign===campaign;
+   if(type==='sheet')return !!sheets.get(id)&&(!sheets.get(id).campaign||sheets.get(id).campaign===campaign);
+   if(type==='map')return maps.get(id)?.campaign===campaign;
+   if(type==='note')return !!id&&safeNote(id);
+   return false;
+ };
+ for(const edge of atlas.relations)
+   assert(clean(edge.id)&&Object.hasOwn(RELATION_TYPES,edge.type)&&campaigns.has(edge.campaign)&&
+     validRef(edge.from,edge.campaign)&&validRef(edge.to,edge.campaign)&&edge.from!==edge.to,'Relação inválida ou desconectada da campanha.');
+ return atlas;
+}
+const nodeRef=(type,id)=>type+':'+id;
+function allNodes(m,atlas,campaign){
+ const nodes=[];
+ for(const x of m.entries)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('entry',x.id),label:x.name,kind:x.kind,note:x.note,campaign:x.campaign});
+ for(const x of m.sheets)if(!campaign||!x.campaign||x.campaign===campaign)nodes.push({id:nodeRef('sheet',x.id),label:x.name,kind:'sheet',note:x.note,campaign:x.campaign});
+ for(const x of atlas.maps)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('map',x.id),label:x.name,kind:'map',note:'',campaign:x.campaign});
+ return nodes;
+}
+function noteLink(value){
+ if(typeof value!=='string')return '';
+ const match=/!?\[\[([^\]]+)\]\]/.exec(value);
+ return match?match[1].split('|')[0].split('#')[0].trim():'';
+}
+function noteRelations(notes,allowed=RELATION_KEYS){
+ const output=[];
+ for(const note of notes){
+   if(!note?.path||!note.frontmatter)continue;
+   for(const kind of allowed){
+     const v=note.frontmatter[kind],list=Array.isArray(v)?v:v?[v]:[];
+     for(const item of list){
+       const path=noteLink(item);
+       if(path)output.push({from:nodeRef('note',note.path),to:nodeRef('note',path),type:kind,automatic:true});
+     }
+   }
+ }
+ return output;
+}
+function relationGraph(m,atlas,campaign='',notes=[]){
+ const map=new Map(allNodes(m,atlas,campaign).map(x=>[x.id,x]));
+ const edges=[];
+ const noteIndex=new Map(notes.map(x=>[key(x.path.replace(/\.md$/i,'')),x.path]));
+ const getNote=(path)=>{
+   const short=path.replace(/\.md$/i,'');
+   return noteIndex.get(key(short))||noteIndex.get(key(short.split('/').at(-1)))||path;
+ };
+ const add=(from,to,type,automatic=false)=>{
+   if(from===to)return;
+   if(from.startsWith('note:'))from=nodeRef('note',getNote(from.slice(5)));
+   if(to.startsWith('note:'))to=nodeRef('note',getNote(to.slice(5)));
+   for(const id of [from,to])if(!map.has(id)){
+     const [kind,...rest]=id.split(':'),raw=rest.join(':');
+     map.set(id,{id,label:raw.split('/').at(-1).replace(/\.md$/i,''),kind,note:kind==='note'?raw:''});
+   }
+   edges.push({from,to,type,automatic});
+ };
+ for(const x of m.entries){
+   if(campaign&&x.campaign!==campaign)continue;
+   for(const link of x.links||[])if(m.entries.some(e=>e.id===link))
+     add(nodeRef('entry',x.id),nodeRef('entry',link),'link',true);
+   if(x.note)add(nodeRef('entry',x.id),nodeRef('note',x.note),'link',true);
+ }
+ for(const x of m.sheets)if(x.note&&(!campaign||!x.campaign||x.campaign===campaign))
+   add(nodeRef('sheet',x.id),nodeRef('note',x.note),'link',true);
+ for(const x of atlas.maps)if(!campaign||x.campaign===campaign){
+   for(const cell of Object.values(x.cells)){
+     const from=nodeRef('map',x.id);
+     if(cell.entry)add(from,nodeRef('entry',cell.entry),'located',true);
+     if(cell.sheet)add(from,nodeRef('sheet',cell.sheet),'located',true);
+     if(cell.note)add(from,nodeRef('note',cell.note),'located',true);
+   }
+ }
+ for(const r of atlas.relations)if(!campaign||r.campaign===campaign)add(r.from,r.to,r.type,false);
+ const knownNotes=new Set();
+ for(const n of map.values())if(n.note)knownNotes.add(key(n.note.replace(/\.md$/i,'')));
+ for(const edge of noteRelations(notes))if(knownNotes.has(key(edge.from.slice(5).replace(/\.md$/i,'')))||!campaign)
+   add(edge.from,edge.to,edge.type,true);
+ const unique=new Map();
+ for(const e of edges){
+  const code=e.from+'|'+e.to+'|'+e.type;
+  if(!unique.has(code))unique.set(code,e);
+ }
+ return {nodes:[...map.values()],edges:[...unique.values()]};
+}
+function subgraph(graph,focus='',depth=2,filter=[]){
+ const filtered=graph.edges.filter(e=>!filter.length||filter.includes(e.type));
+ if(!focus){
+   const active=new Set();
+   for(const e of filtered){active.add(e.from);active.add(e.to);}
+   const nodes=graph.nodes.filter(n=>active.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
+   return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
+ }
+ const seen=new Set([focus]);
+ let frontier=new Set([focus]);
+ for(let level=0;level<Math.min(5,Math.max(0,depth));level++){
+   const next=new Set();
+   for(const e of filtered){
+     if(frontier.has(e.from)&&!seen.has(e.to))next.add(e.to);
+     if(frontier.has(e.to)&&!seen.has(e.from))next.add(e.from);
+   }
+   if(!next.size)break;
+   for(const id of next)seen.add(id);
+   frontier=next;
+ }
+ const nodes=graph.nodes.filter(n=>seen.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
+ return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
+}
+module.exports={TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,axial,distance,around,
+ terrainSeed,dungeonSeed,mapPathDistance,routeCost,safeNote,checkAtlas,nodeRef,allNodes,noteLink,noteRelations,relationGraph,subgraph};
+
+    },
+    "solo.js": function (module, exports, load, require) {
+'use strict';
+
+const MAX_FACES = 1000, MAX_CARDS = 1000;
+const IMAGE_EXT = /\.(?:avif|gif|jpe?g|png|svg|webp|bmp|ico)$/i;
+const DICE = [4, 6, 8, 10, 12, 20, 100, 'F'];
+const fail = (message) => { throw new Error(message); };
+const clean = (v, n = 120) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+const key = (v) => clean(v, 500).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+const integer = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
+const roll = (max, rng = Math.random) => Math.floor(rng() * max) + 1;
+const pick = (arr, rng) => arr[roll(arr.length, rng) - 1];
+const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+function imageRef(v) {
+  let s = clean(v, 2000);
+  if (/^!?\[\[.*\]\]$/.test(s)) s = s.replace(/^!?\[\[|\]\]$/g, '').split('|')[0];
+  if (/^https?:\/\//i.test(s)) {
+    try { const url = new URL(s); return url.username || url.password ? '' : url.href; } catch { return ''; }
+  }
+  return !/[:\\\x00-\x1f]/.test(s) && !s.split('/').includes('..') && IMAGE_EXT.test(s) ? s.replace(/^\/+/, '') : '';
+}
+function pathValue(v, fallback) {
+  const s = clean(v, 300).replace(/^\/+|\/+$/g, '');
+  return s && !/[:\\\x00-\x1f]/.test(s) && !s.split('/').some((p) => !p || p === '..' || p === '.') ? s : fallback;
+}
+function defaultSolo() {
+  return { dice: [], decks: [], piles: {}, settings: { tableRoot: 'Tables', deckRoot: 'Decks', home: 'dice', inline: false,
+    inlineTrack: 'clock', remote: false, jokers: false, tarotFlip: true, bias: false, events: false, chaos: 5,
+    hideIdeas: false, templatePrefix: 'template', copyDice: 'plain', copyText: 'plain', copyCard: 'md',
+    oracleLanguage: 'pt', highlightBoxes: true } };
+}
+function validateSolo(s) {
+  if (!s || !Array.isArray(s.dice) || !Array.isArray(s.decks) || !s.settings || !s.piles || Array.isArray(s.piles))
+    fail('Dados das ferramentas solo inválidos.');
+  if (s.dice.length > 100 || s.decks.length > 100 || new Set(s.dice.map(x => x.id)).size !== s.dice.length ||
+      new Set(s.decks.map(x => x.id)).size !== s.decks.length) fail('Biblioteca solo inválida ou cheia.');
+  s.dice.forEach(validateDie); s.decks.forEach(validateDeck);
+  return s;
+}
+function validateDie(die) {
+  if (!clean(die.id) || !clean(die.name)) fail('Dê um nome ao dado.');
+  if (!Array.isArray(die.faces) || !integer(die.faces.length, 2, MAX_FACES)) fail('Escolha de 2 a ' + MAX_FACES + ' faces.');
+  for (const f of die.faces) {
+    if (!f || !['number', 'text', 'image'].includes(f.kind)) fail('Tipo de face inválido.');
+    if (f.kind === 'number' && (typeof f.value !== 'number' || !Number.isFinite(f.value) || Math.abs(f.value) > 1e9)) fail('Digite um número entre −1 bilhão e 1 bilhão para a face.');
+    if (f.kind === 'text' && !clean(f.label)) fail('Preencha todas as faces de texto.');
+    if (f.kind === 'image' && !imageRef(f.image)) fail('Escolha um arquivo de imagem ou uma URL HTTP(S) para cada face de imagem.');
+  }
+  return die;
+}
+function numberFace(n) { return { kind: 'number', value: n }; }
+function dieRoll(die, quantity, rng = Math.random) {
+  validateDie(die);
+  if (!integer(quantity, 1, 100)) fail('Role de 1 a 100 dados por vez.');
+  const faces = Array.from({ length: quantity }, () => pick(die.faces, rng));
+  return { faces, total: faces.every(f => f.kind === 'number') ? faces.reduce((sum, f) => sum + f.value, 0) : null };
+}
+function parseDice(s) {
+  const m = s.trim().match(/^(\d{0,3})d(\d{1,7}|f)(?:\s*([+-])\s*(\d{1,7}))?(?:\/([ad]))?(?:,\s*(#[\da-f]{3,8}|[a-z]{1,20}))?$/i);
+  if (!m || !integer(Number(m[1] || 1), 1, 100) || (m[2].toLowerCase() !== 'f' && !integer(Number(m[2]), 2, 1000000))) return null;
+  return { amount: Number(m[1] || 1), sides: +m[2] || 3, fudge: m[2].toLowerCase() === 'f', modifier: (m[3] === '-' ? -1 : 1) * (+(m[4] || 0)), mode: (m[5] || '').toLowerCase(), color: m[6] || '' };
+}
+function rollDice(notation, rng = Math.random) {
+  const d = parseDice(notation);
+  if (!d) fail('Use uma expressão como 2d20+3 ou 2d6/a.');
+  const values = Array.from({ length: d.amount }, () => roll(d.sides, rng) - (d.fudge ? 2 : 0));
+  const selected = d.mode === 'a' ? Math.max(...values) : d.mode === 'd' ? Math.min(...values) : values.reduce((a, b) => a + b, 0);
+  return { values, total: selected + d.modifier, color: d.color };
+}
+const sections = { main: 'Principal', extra: 'Extra', side: 'Reserva' };
+function makeCard(raw = {}, id = 'card') {
+  const title = clean(raw.title || raw.nome);
+  const common = { id, title, section: Object.hasOwn(sections, raw.section || '') ? raw.section : 'main' };
+  for (const [to, from, length] of [['image','imagem',2000],['type','tipo',120],['text','descricao',8000],['cost','custo',200],
+    ['element','elemento',120],['level','nivel',20],['attack','ataque',40],['defense','defesa',40],['source','source',500],['symbol','symbol',8]]) {
+    const value = clean(String(raw[to] ?? raw[from] ?? ''), length);
+    if (value) common[to] = to === 'image' ? imageRef(value) : value;
+  }
+  if (!common.title && common.image) common.title = imageTitle(common.image);
+  return common;
+}
+function imageTitle(path) {
+  const name = path.split(/[?#]/)[0].split('/').at(-1).replace(/\.[a-z0-9]+$/i, '');
+  try { return clean(decodeURIComponent(name)) || 'Carta'; } catch { return clean(name) || 'Carta'; }
+}
+function validateDeck(d) {
+  if (!d || !clean(d.id) || !clean(d.name)) fail('Dê um nome ao baralho.');
+  if (!integer(d.orientations, 1, 5)) fail('Modo de rotação inválido.');
+  if (!Array.isArray(d.cards) || !integer(d.cards.length, 1, MAX_CARDS)) fail('Um baralho precisa ter de 1 a ' + MAX_CARDS + ' cartas.');
+  if (new Set(d.cards.map(x => x.id)).size !== d.cards.length) fail('As cartas precisam ter identificadores distintos.');
+  if (d.cards.some(c => !c || !clean(c.id) || !clean(c.title) || !Object.hasOwn(sections, c.section) || (c.image && !imageRef(c.image))))
+    fail('Cada carta precisa ter um nome e uma imagem válida, se indicada.');
+  if (d.back && !imageRef(d.back)) fail('O verso precisa apontar para uma imagem válida.');
+  return d;
+}
+const ARCANA = [
+  ['O Louco','✧','Começos, liberdade, salto de fé'], ['O Mago','⚡','Iniciativa, recursos, transformação'],
+  ['A Sacerdotisa','☾','Intuição, silêncio, mistério'], ['A Imperatriz','❋','Criação, abundância, cuidado'],
+  ['O Imperador','♜','Estrutura, disciplina, autoridade'], ['O Hierofante','⚿','Tradição, ensino, crenças'],
+  ['Os Enamorados','♡','Escolha, vínculo, valores'], ['O Carro','⬖','Direção, determinação, movimento'],
+  ['A Força','♌','Coragem, paciência, firmeza'], ['O Eremita','✦','Recolhimento, busca, orientação'],
+  ['A Roda da Fortuna','◎','Mudança, sorte, repetição'], ['A Justiça','⚖','Consequências, equilíbrio, verdade'],
+  ['O Enforcado','♧','Espera, renúncia, nova perspectiva'], ['A Morte','♰','Fim, transição, renovação'],
+  ['A Temperança','≈','Integração, moderação, adaptação'], ['O Diabo','♟','Apego, tentação, sombra'],
+  ['A Torre','♜','Ruptura, surpresa, revelação'], ['A Estrela','☆','Esperança, inspiração, recuperação'],
+  ['A Lua','☽','Sonhos, insegurança, ilusão'], ['O Sol','☀','Clareza, alegria, vitalidade'],
+  ['O Julgamento','♬','Chamado, avaliação, despertar'], ['O Mundo','◉','Conclusão, integração, pertencimento'],
+];
+function builtinDeck(id, settings) {
+  if (id === 'tarot') return { id, name: 'Tarô · Arcanos Maiores', orientations: settings.tarotFlip ? 2 : 1,
+    cards: ARCANA.map(([title, symbol, text], i) => makeCard({ title, symbol, text, type: 'Arcano ' + i }, 'arc-' + i)) };
+  const cards = ['♠ Espadas','♥ Copas','♦ Ouros','♣ Paus'].flatMap(suit => {
+    const [symbol, name] = suit.split(' ');
+    return ['A','2','3','4','5','6','7','8','9','10','J','Q','K'].map(rank => makeCard({ title: rank + ' de ' + name, symbol, type: name }, symbol + rank));
+  });
+  if (settings.jokers) cards.push(makeCard({ title: 'Coringa vermelho', symbol: '★' }, 'joker-red'), makeCard({ title: 'Coringa preto', symbol: '☆' }, 'joker-black'));
+  return { id: 'standard', name: 'Baralho padrão', cards, orientations: 1 };
+}
+function shuffled(list, rng = Math.random) {
+  const arr = [...list];
+  for (let i = arr.length - 1; i > 0; i--) { const j = roll(i + 1, rng) - 1; [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+}
+function deckIds(deck, section = 'main') { return deck.cards.filter(c => c.section === section).map(c => c.id); }
+function freshPile(deck, section, rng) { return { remaining: shuffled(deckIds(deck, section), rng), drawn: [] }; }
+function validPile(pile, deck, section) {
+  if (!pile || !Array.isArray(pile.remaining) || !Array.isArray(pile.drawn)) return false;
+  const ids = new Set(deckIds(deck, section));
+  const current = [...pile.remaining, ...pile.drawn.map(x => x?.id)];
+  return current.length === ids.size && new Set(current).size === ids.size && current.every(id => ids.has(id)) &&
+    pile.drawn.every(x => x && [0, 90, 180, 270].includes(x.angle));
+}
+function draw(pile, deck, section, number, rng = Math.random) {
+  if (!validPile(pile, deck, section)) pile = freshPile(deck, section, rng);
+  const angles = [[], [0], [0, 180], [0, 90, 270], [0, 90, 180, 270], [0, 90]][deck.orientations];
+  const drawn = pile.remaining.slice(0, number).map(id => ({ id, angle: angles.length === 1 ? 0 : pick(angles, rng) }));
+  return { remaining: pile.remaining.slice(drawn.length), drawn: [...drawn.reverse(), ...pile.drawn] };
+}
+function returnCard(pile, id, rng = Math.random) {
+  if (!pile?.drawn?.some(c => c.id === id)) return pile;
+  return { remaining: shuffled([...pile.remaining, id], rng), drawn: pile.drawn.filter(c => c.id !== id) };
+}
+function parseBlocks(markdown) {
+  const found = { cards: [], lists: [] };
+  if (!/DeckCard|FullDeck/i.test(markdown)) return found;
+  const rows = markdown.split(/\r?\n/);
+  for (let row = 0; row < rows.length; row++) {
+    const m = rows[row].match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (!m) continue;
+    const first = row;
+    while (++row < rows.length && !(rows[row].trim().length >= m[1].length &&
+      [...rows[row].trim()].every(ch => ch === m[1][0]))) {}
+    if (row >= rows.length) break;
+    const kind = m[2].trim().toLowerCase();
+    const value = rows.slice(first + 1, row).join('\n');
+    if (kind === 'deckcard') found.cards.push(value);
+    if (kind === 'fulldeck') found.lists.push(value);
+  }
+  return found;
+}
+function legacyCard(source, path, id) {
+  const data = Object.create(null);
+  for (const line of source.split(/\r?\n/)) {
+    const m = line.match(/^([^:]+):\s*(.*)$/);
+    if (m) data[key(m[1])] = m[2].trim();
+  }
+  return makeCard({ ...data, source: path }, id);
+}
+function legacyDeck(source, cards, idFor) {
+  const index = new Map();
+  for (const c of cards) if (c.title && !index.has(key(c.title))) index.set(key(c.title), c);
+  const missing = [], result = [];
+  let section = 'main';
+  const labels = { main: 'main', principal: 'main', extra: 'extra', side: 'side', reserva: 'side' };
+  for (let line of source.split(/\r?\n/)) {
+    line = line.trim(); if (!line) continue;
+    const title = key(line.replace(/^#+\s*/, ''));
+    if (line.startsWith('#') && Object.hasOwn(labels, title)) { section = labels[title]; continue; }
+    const card = index.get(key(line));
+    if (card) result.push({ ...card, id: idFor(), section });
+    else missing.push(line);
+  }
+  return { cards: result, missing };
+}
+function folderDeck(name, paths, noteSources) {
+  const ordered = [...new Set(paths.map(imageRef).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+  const urls = [];
+  let orientations = 1;
+  for (const note of noteSources) {
+    const flip = note.match(/^\s*flip([234]?)\s*$/im);
+    if (flip) orientations = flip[1] === '2' ? 5 : Number(flip[1]) || 2;
+    for (const url of note.match(/https?:\/\/[^\s<>)\]]+/gi) || []) {
+      const normalized = imageRef(url);
+      if (normalized && !urls.includes(normalized)) urls.push(normalized);
+    }
+  }
+  return { name, orientations, cards: [...ordered, ...urls].slice(0, MAX_CARDS).map(image => ({ title: imageTitle(image), image, section: 'main' })) };
+}
+
+const LANGUAGES = { pt: ['Português','Sim','Não','e','mas','excepcional','Evento aleatório'],
+  en: ['English','Yes','No','and','but','exceptional','Random event'],
+  es: ['Español','Sí','No','y','pero','excepcional','Evento aleatorio'],
+  fr: ['Français','Oui','Non','et','mais','exceptionnel','Événement aléatoire'],
+  de: ['Deutsch','Ja','Nein','und','aber','außergewöhnlich','Zufälliges Ereignis'],
+  zh: ['中文','是','不是','和','但是','极端','随机事件'],
+  ja: ['日本語','はい','いいえ','と','でも','極端','ランダムイベント'],
+  hi: ['हिन्दी','हाँ','नहीं','और','लेकिन','असाधारण','यादृच्छिक घटना'] };
+const SIX = ['', 'Não, e', 'Não', 'Não, mas', 'Sim, mas', 'Sim', 'Sim, e'];
+const ODDS = ['Impossível', 'Quase impossível', 'Muito improvável', 'Improvável', '50/50', 'Provável', 'Muito provável', 'Quase certo', 'Certo'];
+// Fate Chart values used by Solo RPG Toolkit. See THIRD-PARTY-SOLO-LICENSE.
+const FATE = [[0,1,81],[1,5,82],[2,10,83],[3,15,84],[5,25,86],[7,35,88],[10,50,91],[13,65,94],[15,75,96],[17,85,98],[18,90,99],[19,95,100],[20,99,101]];
+function oracle(type, odds, options, previous = {}, rng = Math.random) {
+  const state = { events: previous.events || 0, factor: previous.factor || 0 };
+  let answer, values, event = false;
+  const check = (n) => roll(100, rng) <= n;
+  if (type === 'mythic') {
+    const chaos = clamp(Number(options.chaos) || 5, 1, 9), n = roll(100, rng);
+    const [low, yes, high] = FATE[clamp(6 + chaos - 5 + Number(odds) - 4, 0, 12)] || FATE[6];
+    answer = (n <= yes ? 'Sim' : 'Não') + (n <= low || n >= high ? ' excepcional' : '');
+    values = [n]; event = n < 100 && n % 11 === 0 && n % 10 <= chaos;
+  } else if (type === 'standard') {
+    const extra = options.bias && odds === 'mid';
+    const n = roll(100, rng), yes = n <= ({ low: 30, mid: 50, high: 70 }[odds] ?? 50) + (extra ? state.factor : 0);
+    if (extra) state.factor = clamp(state.factor + (yes ? -20 : 20), 0, 80);
+    answer = yes ? 'Sim' : 'Não'; values = [n];
+    const qualifier = check(50) ? (check(50) ? ', e' : ', mas') : '';
+    if (check(10)) answer += ' excepcional';
+    answer += qualifier;
+    if (options.events && check(20)) event = ++state.events >= 3;
+  } else {
+    values = [roll(6, rng)];
+    if (type !== 'standard2' && odds !== 'mid') values.push(roll(6, rng));
+    const n = type === 'standard2' ? clamp(values[0] + (Number(odds) || 0), 1, 6) :
+      odds === 'low' ? Math.min(...values) : Math.max(...values);
+    answer = SIX[n];
+    if (type === 'mune' && values.includes(6)) event = ++state.events >= 3;
+    if (type === 'standard2' && roll(6, rng) === 6) event = ++state.events >= 3;
+  }
+  if (event) state.events = 0;
+  const detail = event && options.events && /standard/.test(type) ? [
+    pick(['positivo','negativo','neutro'], rng), pick(['personagem','facção','ambiente'], rng),
+  ].join(' · ') : '';
+  const [language, yesWord, noWord, andWord, butWord, extremeWord, eventLabel] =
+    (Object.hasOwn(LANGUAGES, options.oracleLanguage) && LANGUAGES[options.oracleLanguage]) || LANGUAGES.pt;
+  if (language !== 'Português') {
+    answer = answer.replace(/^Sim/, yesWord).replace(/^Não/, noWord).replace(' excepcional', ' ' + extremeWord)
+      .replace(/, e$/, ', ' + andWord).replace(/, mas$/, ', ' + butWord);
+  }
+  return { answer, values, event, eventLabel, detail, state };
+}
+module.exports = { MAX_FACES, MAX_CARDS, IMAGE_EXT, DICE, ODDS, LANGUAGES, clean, key, clamp, integer, pick, roll, cap, imageRef, pathValue,
+  defaultSolo, validateSolo, validateDie, numberFace, dieRoll, parseDice, rollDice, sections, makeCard, validateDeck, imageTitle,
+  builtinDeck, deckIds, freshPile, validPile, draw, returnCard, parseBlocks, legacyCard, legacyDeck, folderDeck, oracle };
+
+    },
+    "mesa.js": function (module, exports, load, require) {
+'use strict';
+const { copy, uid } = load("calendar.js");
+const { key, clean, clamp, parseDice, rollDice } = load("solo.js");
+
+const KINDS = Object.freeze({ player: 'Personagem de jogador', npc: 'NPC', creature: 'Criatura' });
+const ELEMENTS = Object.freeze({ adventure: 'Aventura', chapter: 'Capítulo', session: 'Sessão', scene: 'Cena', event: 'Evento',
+  npc: 'NPC', faction: 'Facção', site: 'Local', clue: 'Pista', item: 'Objeto', subplot: 'Subtrama' });
+const SIDES = Object.freeze({ players: 'Jogadores', enemies: 'Adversários', allies: 'Aliados', neutral: 'Neutros' });
+const LIMITS = { campaigns: 100, entries: 1000, sheets: 700, encounters: 300, members: 120, fields: 30 };
+const whole = (v, min = -999999, max = 999999) => Number.isSafeInteger(v) && v >= min && v <= max;
+function requireMesa(ok, message) { if (!ok) throw new Error(message); }
+function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null, activity: [], sheetStates: {} }; }
+function newCampaign() { return { id: uid('camp'), name: '', note: '', summary: '', calendar: '' }; }
+function newEntry(campaign) { return { id: uid('entry'), campaign, name: '', kind: 'session', note: '', summary: '', links: [], date: null }; }
+function newSheet(campaign = '') {
+  return { id: uid('sheet'), campaign, name: '', kind: 'creature', type: '', note: '', description: '', image: '', initiative: '1d20',
+    attributes: [], resources: [], actions: [] };
+}
+function resource(name, max, value = max) { return { name, max, value }; }
+function arkanisSheet(campaign) {
+  return { ...newSheet(campaign), name: 'Ficha de Arkanis', kind: 'player', resources: [
+    resource('Vida', 10), resource('Esforço', 5), resource('Impulso', 5, 0), resource('Estresse', 5, 0),
+  ] };
+}
+function newEncounter(campaign = '') { return { id: uid('enc'), campaign, entry: '', name: '', grouped: false, roster: [] }; }
+const find = (items, identifier, predicate = () => true) => {
+  const k = key(identifier);
+  const matched = items.filter(e => predicate(e) && (e.id === identifier || key(e.name) === k));
+  const exact = matched.find(e => e.id === identifier);
+  if (!exact && matched.length > 1) throw new Error('Há mais de um resultado com esse nome. Use o ID.');
+  return exact || matched[0];
+};
+function need(items, identifier, message) {
+  const data = items.find(x => x.id === identifier);
+  requireMesa(data, message);
+  return data;
+}
+function numeric(v, fallback) {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
+  if (typeof v !== 'string' || !v.trim()) return fallback;
+  const m = v.trim().match(/^[+-]?\d{1,8}/);
+  return m ? Number(m[0]) : fallback;
+}
+function rows(items) { return Array.isArray(items) ? items.slice(0, LIMITS.fields) : []; }
+function textPath(v) { return clean(v, 500).replace(/^!?\[\[|\]\]$/g, '').split('|')[0]; }
+function yamlSheet(data, campaign = '') {
+  requireMesa(data !== null && typeof data === 'object' && !Array.isArray(data), 'Use um objeto YAML ou JSON para a ficha.');
+  const d = { ...newSheet(campaign), name: clean(data.name || data.nome), kind: Object.hasOwn(KINDS, data.kind) ? data.kind : 'creature',
+    type: clean(data.type || data.tipo), description: clean(data.description || data.descricao, 12000),
+    note: textPath(data.note || data.nota), image: textPath(Array.isArray(data.image) ? data.image[0] : data.image),
+    initiative: clean(typeof data.initiative === 'number' ? String(data.initiative) : data.initiative || '1d20', 60) };
+  for (const x of rows(data.attributes)) {
+    if (x?.name && ['number','string'].includes(typeof x.value)) d.attributes.push({ name: clean(x.name), value: clean(String(x.value), 160) });
+  }
+  for (const [label, attr] of [['CA','ac'],['Nível','level'],['ND','cr'],['XP','xp'],['Deslocamento','speed']]) {
+    const value = data[attr];
+    if (typeof value === 'number' || typeof value === 'string') d.attributes.push({ name: label, value: clean(String(value), 160) });
+  }
+  if (Array.isArray(data.stats)) ['FOR','DES','CON','INT','SAB','CAR'].forEach((name,i) => {
+    if (typeof data.stats[i] === 'number') d.attributes.push({ name, value: String(data.stats[i]) });
+  });
+  d.attributes = d.attributes.slice(0, LIMITS.fields);
+  for (const x of rows(data.resources)) {
+    if (!x?.name) continue;
+    const max = numeric(x.max, 0);
+    d.resources.push(resource(clean(x.name), max, numeric(x.value, max)));
+  }
+  if (data.hp != null && !d.resources.some(r => ['vida','pv','hp'].includes(key(r.name)))) {
+    const hp = numeric(data.hp, null);
+    if (hp !== null && d.resources.length < LIMITS.fields) d.resources.unshift(resource('Vida', hp));
+  }
+  for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
+    for (const x of rows(items)) {
+      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
+    }
+  }
+  d.actions = d.actions.slice(0, LIMITS.fields);
+  return checkSheet(d);
+}
+function isInit(s) { return !!parseDice(s) || /^[-+]?\d{1,6}$/.test(s); }
+function calcInit(formula, rng) { return parseDice(formula) ? rollDice(formula, rng).total : Number(formula); }
+function checkResource(r) {
+  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome e de um valor entre zero e o máximo, com regra de descanso válida.');
+}
+function checkSheet(s) {
+  requireMesa(s && clean(s.id) && clean(s.name) && Object.hasOwn(KINDS, s.kind), 'Preencha o nome e o tipo da ficha.');
+  requireMesa(typeof s.initiative === 'string' && isInit(s.initiative), 'Use iniciativa como 1d20+2 ou um número fixo.');
+  for (const field of ['attributes','resources','actions']) requireMesa(Array.isArray(s[field]) && s[field].length <= LIMITS.fields, 'Limite de campos da ficha atingido.');
+  for (const a of s.attributes) requireMesa(a && clean(a.name) && typeof a.value === 'string', 'Cada atributo precisa de um nome.');
+  s.resources.forEach(checkResource);
+  requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
+  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
+  return s;
+}
+function checkEncounter(e) {
+  requireMesa(e && clean(e.id) && clean(e.name), 'Dê um nome ao encontro.');
+  requireMesa(Array.isArray(e.roster) && e.roster.length > 0 && e.roster.length <= LIMITS.members, 'Inclua pelo menos um participante.');
+  e.roster.forEach(r => {
+    requireMesa(r && (clean(r.sheet) || clean(r.name)), 'Escolha uma ficha ou dê um nome ao participante.');
+    requireMesa(Object.hasOwn(SIDES, r.side), 'Lado do participante inválido.');
+    const formula = typeof r.count === 'string' && parseDice(r.count);
+    requireMesa((/^\d{1,3}$/.test(r.count) && whole(+r.count, 1, LIMITS.members)) ||
+      (formula && !formula.fudge && !formula.mode && formula.amount * formula.sides + formula.modifier <= LIMITS.members &&
+      formula.amount + formula.modifier >= 1), 'Use de 1 a 120 participantes por linha ou uma expressão de quantidade válida, como 1d4.');
+    requireMesa(!r.initiative || (typeof r.initiative === 'string' && isInit(r.initiative)), 'Iniciativa inválida. Use 1d20+2 ou um número.');
+  });
+  return e;
+}
+function checkMesa(m) {
+  requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
+  load("session.js").checkSession(m);
+  if(m.atlas !== undefined)load("atlas.js").checkAtlas(m.atlas,m);
+  for (const field of ['campaigns','entries','sheets','encounters']) {
+    const a = m[field];
+    requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
+      new Set(a.map(x => x.id)).size === a.length, 'Biblioteca da Mesa inválida ou cheia.');
+  }
+  if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
+  if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
+  const campaigns = new Set(m.campaigns.map(c => c.id));
+  const entries = new Map(m.entries.map(e => [e.id,e]));
+  const sheets = new Map(m.sheets.map(s => [s.id,s]));
+  for (const e of m.entries) {
+    requireMesa(campaigns.has(e.campaign) && Object.hasOwn(ELEMENTS,e.kind), 'O registro precisa pertencer a uma campanha.');
+    requireMesa(Array.isArray(e.links) && e.links.length <= 80 && e.links.every(id => id !== e.id && entries.get(id)?.campaign === e.campaign),
+      'Os vínculos precisam apontar para registros diferentes da mesma campanha.');
+    if (e.date) {
+      const { calendar, date, label } = e.date;
+      requireMesa(clean(calendar) && clean(label) && date && whole(date.year,-100000,100000) &&
+        clean(date.month) && whole(date.day,1,100000), 'Data do registro inválida.');
+    }
+  }
+  m.sheets.forEach(s => { checkSheet(s); requireMesa(!s.campaign || campaigns.has(s.campaign), 'Campanha da ficha não encontrada.'); });
+  m.encounters.forEach(e => {
+    checkEncounter(e);
+    requireMesa(!e.campaign || campaigns.has(e.campaign), 'Campanha do encontro não encontrada.');
+    requireMesa(!e.entry || entries.get(e.entry)?.campaign === e.campaign, 'Escolha um registro da campanha deste encontro.');
+    for (const line of e.roster) requireMesa(!line.sheet || (sheets.has(line.sheet) && (!sheets.get(line.sheet).campaign || sheets.get(line.sheet).campaign === e.campaign)),
+      'Ficha do encontro não encontrada na biblioteca compartilhada ou na campanha.');
+  });
+  if (m.running !== null) {
+    const f = m.running, list = f?.members;
+    requireMesa(f && clean(f.name) && Array.isArray(list) && list.length > 0 && list.length <= LIMITS.members &&
+      whole(f.round, 1, 999999) && list.some(p => p?.id === f.turn) && new Set(list.map(p => p.id)).size === list.length, 'Encontro em andamento inválido.');
+    for (const p of list) {
+      requireMesa(p && clean(p.name) && whole(p.initiative, -20000000, 20000000) && Object.hasOwn(SIDES,p.side) &&
+        Array.isArray(p.conditions) && p.conditions.length <= 20 && Array.isArray(p.resources) && p.resources.length <= LIMITS.fields, 'Participante inválido.');
+      p.resources.forEach(checkResource);
+      if (p.sheet) checkSheet(p.sheet);
+    }
+  }
+  return m;
+}
+function sourceRoster(list, m, campaign = '') {
+  const asRow = (name, count = '1', fields = {}) => {
+    const sheet = find(m.sheets, name, s => !s.campaign || s.campaign === campaign);
+    return { sheet: sheet?.id || '', name: clean(fields.name || (!sheet && name) || ''), count: String(count),
+      side: Object.hasOwn(SIDES, fields.side) ? fields.side : 'enemies',
+      initiative: fields.initiative === undefined ? '' : String(fields.initiative) };
+  };
+  requireMesa(Array.isArray(list) && list.length <= LIMITS.members, 'Use uma lista de participantes.');
+  return list.map(x => {
+    if (typeof x === 'string') return asRow(x);
+    requireMesa(x && typeof x === 'object' && !Array.isArray(x), 'Participante inválido no bloco.');
+    if (x.sheet || x.name) return asRow(x.sheet || x.name, x.count ?? '1', x);
+    const pairs = Object.entries(x);
+    requireMesa(pairs.length === 1 && typeof pairs[0][1] === 'string', 'Use nome da ficha ou uma entrada como 3: Goblin.');
+    return asRow(pairs[0][1], pairs[0][0]);
+  });
+}
+function order(members) { return members.sort((a,b) => (b.initiative - a.initiative) || (a.seed - b.seed)); }
+function buildRunning(data, m, rng = Math.random) {
+  checkEncounter(data);
+  const members = [];
+  for (const line of data.roster) {
+    const s = line.sheet ? need(m.sheets, line.sheet, 'Ficha de participante não encontrada.') : null;
+    const n = parseDice(line.count) ? rollDice(line.count, rng).total : +line.count;
+    requireMesa(whole(n, 1, LIMITS.members) && members.length + n <= LIMITS.members, 'Um encontro tem no máximo 120 participantes.');
+    const initiative = line.initiative || s?.initiative || '1d20', label = clean(line.name || s?.name);
+    const shared = data.grouped ? calcInit(initiative, rng) : null;
+    for (let i = 0; i < n; i++) {
+      members.push({ id: uid('turn'), name: n === 1 ? label : label + ' ' + (i + 1), initiative: shared ?? calcInit(initiative, rng),
+        seed: members.length, side: line.side, resources: copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
+    }
+  }
+  order(members);
+  return { id: uid('run'), from: data.id, campaign: data.campaign, entry: data.entry, name: data.name, round: 1, turn: members[0].id, members };
+}
+function step(r, direction = 1) {
+  const at = r.members.findIndex(p => p.id === r.turn), next = at + direction;
+  if (next < 0) {
+    if (r.round === 1) return;
+    r.round--; r.turn = r.members.at(-1).id;
+  } else if (next >= r.members.length) {
+    requireMesa(r.round < 999999, 'O encontro atingiu o limite de rodadas.');
+    r.round++; r.turn = r.members[0].id;
+  } else r.turn = r.members[next].id;
+}
+function changeResource(r, id, i, delta) {
+  const p = need(r.members, id, 'Participante não encontrado.'), meter = p.resources[i];
+  requireMesa(meter && whole(delta), 'Ajuste de recurso inválido.');
+  meter.value = clamp(meter.value + delta, 0, meter.max);
+}
+module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa, newCampaign, newEntry, newSheet, resource, arkanisSheet,
+  newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
+
+    },
+    "session.js": function (module, exports, load, require) {
+'use strict';
+const {uid}=load("calendar.js");
+const {clean}=load("solo.js");
+const {requireMesa,newEntry}=load("mesa.js");
+const {unpack,inMap}=load("atlas.js");
+
+const MAX_JOURNAL=120;
+const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.parse(s));
+const nowString=()=>new Date().toISOString();
+
+function checkSession(m){
+ load("exploration.js").validateTravel(m);
+ for(const entry of m.entries||[]){
+   if(entry.sessionJournal!==undefined)
+     requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
+       entry.sessionJournal.every(x=>x&&clean(x.id)&&validTimestamp(x.time)&&
+         typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+       'Diário arquivado inválido.');
+ }
+ const s=m.session;
+ if(s===undefined||s===null)return true;
+ requireMesa(s&&typeof s==='object'&&!Array.isArray(s)&&clean(s.id)&&
+   ['active','paused'].includes(s.status)&&validTimestamp(s.startedAt),'Sessão ativa inválida.');
+ const camp=m.campaigns.find(x=>x.id===s.campaign);
+ requireMesa(!!camp,'Campanha da sessão não encontrada.');
+ const entry=m.entries.find(x=>x.id===s.entry);
+ requireMesa(!!entry&&entry.campaign===s.campaign&&entry.kind==='session','O registro de sessão deve existir na mesma campanha.');
+ if(s.map){
+   const map=m.atlas?.maps.find(x=>x.id===s.map);
+   requireMesa(!!map&&map.campaign===s.campaign,'Mapa da sessão não encontrado nessa campanha.');
+   if(s.cell){
+     const at=unpack(s.cell);
+     requireMesa(at&&inMap(map,at.col,at.row),'Localização da sessão inválida.');
+   }
+ }else requireMesa(!s.cell,'Uma célula da sessão requer um mapa.');
+ requireMesa(Array.isArray(s.journal)&&s.journal.length<=MAX_JOURNAL&&s.journal.every(x=>
+   x&&clean(x.id)&&validTimestamp(x.time)&&typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+   'Anotações da sessão inválidas.');
+ return true;
+}
+function nextName(m,campaign){
+ const used=m.entries.filter(x=>x.campaign===campaign&&x.kind==='session');
+ return 'Sessão '+(used.length+1);
+}
+function newSessionEntry(m,campaign,options={}){
+ requireMesa(m.campaigns.some(c=>c.id===campaign),'Campanha não encontrada.');
+ const e=newEntry(campaign);
+ e.kind='session';e.name=clean(options.name,120)||nextName(m,campaign);
+ if(options.calendar&&options.date&&options.label)
+   e.date={calendar:options.calendar,date:options.date,label:clean(options.label,180)};
+ m.entries.push(e);
+ return e;
+}
+function startSession(m,campaign,entry='',options={}){
+ requireMesa(!m.session,'Finalize a sessão atual antes de iniciar outra.');
+ const c=m.campaigns.find(x=>x.id===campaign);
+ requireMesa(!!c,'Escolha uma campanha existente.');
+ const chosen=entry?m.entries.find(x=>x.id===entry):newSessionEntry(m,campaign,options);
+ requireMesa(chosen&&chosen.campaign===campaign&&chosen.kind==='session','Escolha um registro do tipo Sessão da campanha.');
+ m.session={id:uid('session'),status:'active',campaign,entry:chosen.id,
+   map:'',cell:'',startedAt:nowString(),journal:[]};
+ if(options.map)setSessionLocation(m,options.map,options.cell||'');
+ checkSession(m);
+ return m.session;
+}
+function setSessionStatus(m,status){
+ requireMesa(m.session,'Nenhuma sessão iniciada.');
+ requireMesa(['active','paused'].includes(status),'Estado da sessão inválido.');
+ m.session.status=status;return m.session;
+}
+function setSessionLocation(m,mapId='',cell=''){
+ requireMesa(m.session,'Inicie uma sessão para marcar a localização.');
+ requireMesa(!cell||!!mapId,'Selecione um mapa antes da célula.');
+ if(!mapId){m.session.map='';m.session.cell='';return m.session;}
+ const map=m.atlas?.maps.find(x=>x.id===mapId);
+ requireMesa(map&&map.campaign===m.session.campaign,'Este mapa não pertence à campanha da sessão.');
+ if(cell){
+   const p=unpack(cell);
+   requireMesa(p&&inMap(map,p.col,p.row),'Digite coordenadas válidas no formato coluna,linha.');
+ }
+ m.session.map=mapId;m.session.cell=cell;return m.session;
+}
+function addSessionNote(m,text){
+ const s=m.session;
+ requireMesa(s,'Nenhuma sessão iniciada.');
+ const note=clean(text,1200);
+ requireMesa(note&&typeof text==='string'&&text.trim().length<=1200,'A anotação precisa ter de 1 a 1200 caracteres.');
+ requireMesa(s.journal.length<MAX_JOURNAL,'Diário cheio. Encerre a sessão e comece outro registro.');
+ const entry={id:uid('note'),time:nowString(),text:note};
+ s.journal.unshift(entry);
+ return entry;
+}
+function finishSession(m){
+ const s=m.session;
+ requireMesa(!!s,'Nenhuma sessão em andamento.');
+ const entry=m.entries.find(e=>e.id===s.entry);
+ requireMesa(!!entry,'Registro da sessão não encontrado.');
+ const location=s.map?'\nLocal: '+(m.atlas?.maps.find(x=>x.id===s.map)?.name||s.map)+(s.cell?' ('+s.cell+')':''):'';
+ const lines=s.journal.slice().reverse().map(n=>'- '+n.time.slice(0,16).replace('T',' ')+' · '+n.text.replace(/\n/g,' / '));
+ // Archive the complete structured diary independently of summary size.
+ entry.sessionJournal ||= [];
+ requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
+ entry.sessionJournal.push(...s.journal.slice().reverse());
+ entry.sessionTravel ||= [];
+ requireMesa(entry.sessionTravel.length+(s.travelLog?.length||0)<=10000,
+   'Histórico de viagens arquivado está cheio. Exporte o registro antes de finalizar.');
+ entry.sessionTravel.push(...(s.travelLog||[]));
+ const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
+ const max=10000;
+ const previous=String(entry.summary||'').slice(0,max);
+ const space=Math.max(0,max-previous.length);
+ entry.summary=previous+(space>0?note.slice(-space):'');
+ m.session=null;
+ return entry;
+}
+function sessionInfo(m,calendars=[]){
+ const s=m.session;
+ if(!s)return null;
+ const campaign=m.campaigns.find(c=>c.id===s.campaign);
+ const entry=m.entries.find(e=>e.id===s.entry);
+ const map=m.atlas?.maps.find(x=>x.id===s.map)||null;
+ const cell=map&&s.cell?map.cells[s.cell]||{}:null;
+ const calendar=calendars.find(c=>c.id===campaign?.calendar)||null;
+ const running=m.running?.campaign===s.campaign?m.running:null;
+ const players=m.sheets.filter(x=>x.campaign===s.campaign&&x.kind==='player');
+ return {session:s,campaign,entry,map,cell,calendar,running,players};
+}
+module.exports={MAX_JOURNAL,checkSession,nextName,newSessionEntry,startSession,
+ setSessionStatus,setSessionLocation,addSessionNote,finishSession,sessionInfo};
+
+    },
     "arkanis.json": function (module, exports, load, require) {
 module.exports = {"id":"arkanis-preset","name":"Arkanis","description":"26 meses, semanas de 12 dias, três sóis, três luas e o relógio de Arkanis.","week":["Synlurge","Derlurge","Prelurge","Prolurge","Caplurge","Prylurge","Interlurge","Epylurge","Poslurge","Exlurge","Soblurge","Aplurge"],"firstWeekday":0,"weekOverflow":true,"months":[{"id":"mes-1","name":"Arkanis","length":36,"intercalary":false},{"id":"mes-2","name":"Barvesk","length":31,"intercalary":false},{"id":"mes-3","name":"Cyranark","length":31,"intercalary":false},{"id":"mes-4","name":"Darfryn","length":38,"intercalary":false},{"id":"mes-5","name":"Elyriz","length":43,"intercalary":false},{"id":"mes-6","name":"Faymort","length":39,"intercalary":false},{"id":"mes-7","name":"Gharvek","length":30,"intercalary":false},{"id":"mes-8","name":"Hysteria","length":36,"intercalary":false},{"id":"mes-9","name":"Inforty","length":37,"intercalary":false},{"id":"mes-10","name":"Jinxy","length":40,"intercalary":false},{"id":"mes-11","name":"Khaos","length":54,"intercalary":false},{"id":"mes-12","name":"Luary","length":39,"intercalary":false},{"id":"mes-13","name":"Myrian","length":46,"intercalary":false},{"id":"mes-14","name":"Northuz","length":33,"intercalary":false},{"id":"mes-15","name":"Orkan","length":30,"intercalary":false},{"id":"mes-16","name":"Pheraxy","length":45,"intercalary":false},{"id":"mes-17","name":"Quaryn","length":33,"intercalary":false},{"id":"mes-18","name":"Ravelyn","length":39,"intercalary":false},{"id":"mes-19","name":"Skaryel","length":42,"intercalary":false},{"id":"mes-20","name":"Termyna","length":30,"intercalary":false},{"id":"mes-21","name":"Umbrya","length":36,"intercalary":false},{"id":"mes-22","name":"Vektory","length":52,"intercalary":false},{"id":"mes-23","name":"Westeryuz","length":42,"intercalary":false},{"id":"mes-24","name":"Xiangyou","length":44,"intercalary":false},{"id":"mes-25","name":"Ydraven","length":33,"intercalary":false},{"id":"mes-26","name":"Zarknor","length":45,"intercalary":false}],"leapDays":[{"id":"extra-1","name":"Krusada Druor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-2","name":"Vryant Kor","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-3","name":"Cynfur Alkov","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0},{"id":"extra-4","name":"Khorq Dryart","month":"mes-1","intercalary":false,"every":1,"except":0,"also":0,"offset":0}],"moons":[{"id":"lua-1","name":"Verika","period":48,"offset":12,"granularity":16,"rounding":"round","hidden":false,"eclipse":{"inclination":5.1,"node":42,"radius":0.43,"shadow":0.88}},{"id":"lua-2","name":"Neurika","period":36,"offset":12,"granularity":8,"rounding":"round","hidden":false,"eclipse":{"inclination":9,"node":138,"radius":0.23,"shadow":0.82}},{"id":"lua-3","name":"Menrika","period":24,"offset":12,"granularity":8,"rounding":"round","hidden":false,"eclipse":{"inclination":7.2,"node":223,"radius":0.53,"shadow":0.97}}],"seasons":[{"id":"estacao-1","name":"Velanthir","color":"#852220","month":"mes-1","day":1,"duration":252},{"id":"estacao-2","name":"Solanarê","color":"#3f1601","month":"mes-1","day":1,"duration":252},{"id":"estacao-3","name":"Drosmy","color":"#ecad78","month":"mes-1","day":1,"duration":252},{"id":"estacao-4","name":"Kealyth","color":"#d75013","month":"mes-1","day":1,"duration":252}],"seasonMode":"periodic","seasonOffset":0,"eras":[],"clock":{"hours":32,"minutes":64},"current":{"year":1,"month":"mes-1","day":1,"hour":0,"minute":0},"events":[{"id":"evento-1","title":"Velanthir","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-1","start":null},{"id":"evento-2","title":"Solanarê","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-2","start":null},{"id":"evento-3","title":"Drosmy","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-3","start":null},{"id":"evento-4","title":"Kealyth","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"season","end":null,"seasonId":"estacao-4","start":null},{"id":"evento-5","title":"Arkas, A Criação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":1}},{"id":"evento-6","title":"Bereal, O Contexto","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":2}},{"id":"evento-7","title":"Cyrius, A Ideia","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":3}},{"id":"evento-8","title":"Dognar, A Ação","description":"","note":"","category":"","color":"#7866b3","hidden":false,"repeat":"none","end":null,"start":{"year":1,"month":"mes-1","day":4}}],"sky":{"latitude":48,"unitPeriod":1008,"referenceId":"reart","suns":[{"id":"innart","name":"Innart","orbit":0.36,"tilt":62,"phase":245,"size":0.42,"color":"#f4ce87"},{"id":"dinart","name":"Dinart","orbit":0.65,"tilt":55,"phase":105,"size":0.72,"color":"#f4a963"},{"id":"reart","name":"Reart","orbit":1,"tilt":19,"phase":0,"size":1,"color":"#f08163"}]}};
     },
@@ -4259,263 +5323,6 @@ function makeTemplate(id,now=new Date()){
  return validateCalendar(c);
 }
 module.exports={CALENDAR_TEMPLATES,makeTemplate};
-
-    },
-    "solo.js": function (module, exports, load, require) {
-'use strict';
-
-const MAX_FACES = 1000, MAX_CARDS = 1000;
-const IMAGE_EXT = /\.(?:avif|gif|jpe?g|png|svg|webp|bmp|ico)$/i;
-const DICE = [4, 6, 8, 10, 12, 20, 100, 'F'];
-const fail = (message) => { throw new Error(message); };
-const clean = (v, n = 120) => typeof v === 'string' ? v.trim().slice(0, n) : '';
-const key = (v) => clean(v, 500).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-const integer = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
-const roll = (max, rng = Math.random) => Math.floor(rng() * max) + 1;
-const pick = (arr, rng) => arr[roll(arr.length, rng) - 1];
-const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
-
-function imageRef(v) {
-  let s = clean(v, 2000);
-  if (/^!?\[\[.*\]\]$/.test(s)) s = s.replace(/^!?\[\[|\]\]$/g, '').split('|')[0];
-  if (/^https?:\/\//i.test(s)) {
-    try { const url = new URL(s); return url.username || url.password ? '' : url.href; } catch { return ''; }
-  }
-  return !/[:\\\x00-\x1f]/.test(s) && !s.split('/').includes('..') && IMAGE_EXT.test(s) ? s.replace(/^\/+/, '') : '';
-}
-function pathValue(v, fallback) {
-  const s = clean(v, 300).replace(/^\/+|\/+$/g, '');
-  return s && !/[:\\\x00-\x1f]/.test(s) && !s.split('/').some((p) => !p || p === '..' || p === '.') ? s : fallback;
-}
-function defaultSolo() {
-  return { dice: [], decks: [], piles: {}, settings: { tableRoot: 'Tables', deckRoot: 'Decks', home: 'dice', inline: false,
-    inlineTrack: 'clock', remote: false, jokers: false, tarotFlip: true, bias: false, events: false, chaos: 5,
-    hideIdeas: false, templatePrefix: 'template', copyDice: 'plain', copyText: 'plain', copyCard: 'md',
-    oracleLanguage: 'pt', highlightBoxes: true } };
-}
-function validateSolo(s) {
-  if (!s || !Array.isArray(s.dice) || !Array.isArray(s.decks) || !s.settings || !s.piles || Array.isArray(s.piles))
-    fail('Dados das ferramentas solo inválidos.');
-  if (s.dice.length > 100 || s.decks.length > 100 || new Set(s.dice.map(x => x.id)).size !== s.dice.length ||
-      new Set(s.decks.map(x => x.id)).size !== s.decks.length) fail('Biblioteca solo inválida ou cheia.');
-  s.dice.forEach(validateDie); s.decks.forEach(validateDeck);
-  return s;
-}
-function validateDie(die) {
-  if (!clean(die.id) || !clean(die.name)) fail('Dê um nome ao dado.');
-  if (!Array.isArray(die.faces) || !integer(die.faces.length, 2, MAX_FACES)) fail('Escolha de 2 a ' + MAX_FACES + ' faces.');
-  for (const f of die.faces) {
-    if (!f || !['number', 'text', 'image'].includes(f.kind)) fail('Tipo de face inválido.');
-    if (f.kind === 'number' && (typeof f.value !== 'number' || !Number.isFinite(f.value) || Math.abs(f.value) > 1e9)) fail('Digite um número entre −1 bilhão e 1 bilhão para a face.');
-    if (f.kind === 'text' && !clean(f.label)) fail('Preencha todas as faces de texto.');
-    if (f.kind === 'image' && !imageRef(f.image)) fail('Escolha um arquivo de imagem ou uma URL HTTP(S) para cada face de imagem.');
-  }
-  return die;
-}
-function numberFace(n) { return { kind: 'number', value: n }; }
-function dieRoll(die, quantity, rng = Math.random) {
-  validateDie(die);
-  if (!integer(quantity, 1, 100)) fail('Role de 1 a 100 dados por vez.');
-  const faces = Array.from({ length: quantity }, () => pick(die.faces, rng));
-  return { faces, total: faces.every(f => f.kind === 'number') ? faces.reduce((sum, f) => sum + f.value, 0) : null };
-}
-function parseDice(s) {
-  const m = s.trim().match(/^(\d{0,3})d(\d{1,7}|f)(?:\s*([+-])\s*(\d{1,7}))?(?:\/([ad]))?(?:,\s*(#[\da-f]{3,8}|[a-z]{1,20}))?$/i);
-  if (!m || !integer(Number(m[1] || 1), 1, 100) || (m[2].toLowerCase() !== 'f' && !integer(Number(m[2]), 2, 1000000))) return null;
-  return { amount: Number(m[1] || 1), sides: +m[2] || 3, fudge: m[2].toLowerCase() === 'f', modifier: (m[3] === '-' ? -1 : 1) * (+(m[4] || 0)), mode: (m[5] || '').toLowerCase(), color: m[6] || '' };
-}
-function rollDice(notation, rng = Math.random) {
-  const d = parseDice(notation);
-  if (!d) fail('Use uma expressão como 2d20+3 ou 2d6/a.');
-  const values = Array.from({ length: d.amount }, () => roll(d.sides, rng) - (d.fudge ? 2 : 0));
-  const selected = d.mode === 'a' ? Math.max(...values) : d.mode === 'd' ? Math.min(...values) : values.reduce((a, b) => a + b, 0);
-  return { values, total: selected + d.modifier, color: d.color };
-}
-const sections = { main: 'Principal', extra: 'Extra', side: 'Reserva' };
-function makeCard(raw = {}, id = 'card') {
-  const title = clean(raw.title || raw.nome);
-  const common = { id, title, section: Object.hasOwn(sections, raw.section || '') ? raw.section : 'main' };
-  for (const [to, from, length] of [['image','imagem',2000],['type','tipo',120],['text','descricao',8000],['cost','custo',200],
-    ['element','elemento',120],['level','nivel',20],['attack','ataque',40],['defense','defesa',40],['source','source',500],['symbol','symbol',8]]) {
-    const value = clean(String(raw[to] ?? raw[from] ?? ''), length);
-    if (value) common[to] = to === 'image' ? imageRef(value) : value;
-  }
-  if (!common.title && common.image) common.title = imageTitle(common.image);
-  return common;
-}
-function imageTitle(path) {
-  const name = path.split(/[?#]/)[0].split('/').at(-1).replace(/\.[a-z0-9]+$/i, '');
-  try { return clean(decodeURIComponent(name)) || 'Carta'; } catch { return clean(name) || 'Carta'; }
-}
-function validateDeck(d) {
-  if (!d || !clean(d.id) || !clean(d.name)) fail('Dê um nome ao baralho.');
-  if (!integer(d.orientations, 1, 5)) fail('Modo de rotação inválido.');
-  if (!Array.isArray(d.cards) || !integer(d.cards.length, 1, MAX_CARDS)) fail('Um baralho precisa ter de 1 a ' + MAX_CARDS + ' cartas.');
-  if (new Set(d.cards.map(x => x.id)).size !== d.cards.length) fail('As cartas precisam ter identificadores distintos.');
-  if (d.cards.some(c => !c || !clean(c.id) || !clean(c.title) || !Object.hasOwn(sections, c.section) || (c.image && !imageRef(c.image))))
-    fail('Cada carta precisa ter um nome e uma imagem válida, se indicada.');
-  if (d.back && !imageRef(d.back)) fail('O verso precisa apontar para uma imagem válida.');
-  return d;
-}
-const ARCANA = [
-  ['O Louco','✧','Começos, liberdade, salto de fé'], ['O Mago','⚡','Iniciativa, recursos, transformação'],
-  ['A Sacerdotisa','☾','Intuição, silêncio, mistério'], ['A Imperatriz','❋','Criação, abundância, cuidado'],
-  ['O Imperador','♜','Estrutura, disciplina, autoridade'], ['O Hierofante','⚿','Tradição, ensino, crenças'],
-  ['Os Enamorados','♡','Escolha, vínculo, valores'], ['O Carro','⬖','Direção, determinação, movimento'],
-  ['A Força','♌','Coragem, paciência, firmeza'], ['O Eremita','✦','Recolhimento, busca, orientação'],
-  ['A Roda da Fortuna','◎','Mudança, sorte, repetição'], ['A Justiça','⚖','Consequências, equilíbrio, verdade'],
-  ['O Enforcado','♧','Espera, renúncia, nova perspectiva'], ['A Morte','♰','Fim, transição, renovação'],
-  ['A Temperança','≈','Integração, moderação, adaptação'], ['O Diabo','♟','Apego, tentação, sombra'],
-  ['A Torre','♜','Ruptura, surpresa, revelação'], ['A Estrela','☆','Esperança, inspiração, recuperação'],
-  ['A Lua','☽','Sonhos, insegurança, ilusão'], ['O Sol','☀','Clareza, alegria, vitalidade'],
-  ['O Julgamento','♬','Chamado, avaliação, despertar'], ['O Mundo','◉','Conclusão, integração, pertencimento'],
-];
-function builtinDeck(id, settings) {
-  if (id === 'tarot') return { id, name: 'Tarô · Arcanos Maiores', orientations: settings.tarotFlip ? 2 : 1,
-    cards: ARCANA.map(([title, symbol, text], i) => makeCard({ title, symbol, text, type: 'Arcano ' + i }, 'arc-' + i)) };
-  const cards = ['♠ Espadas','♥ Copas','♦ Ouros','♣ Paus'].flatMap(suit => {
-    const [symbol, name] = suit.split(' ');
-    return ['A','2','3','4','5','6','7','8','9','10','J','Q','K'].map(rank => makeCard({ title: rank + ' de ' + name, symbol, type: name }, symbol + rank));
-  });
-  if (settings.jokers) cards.push(makeCard({ title: 'Coringa vermelho', symbol: '★' }, 'joker-red'), makeCard({ title: 'Coringa preto', symbol: '☆' }, 'joker-black'));
-  return { id: 'standard', name: 'Baralho padrão', cards, orientations: 1 };
-}
-function shuffled(list, rng = Math.random) {
-  const arr = [...list];
-  for (let i = arr.length - 1; i > 0; i--) { const j = roll(i + 1, rng) - 1; [arr[i], arr[j]] = [arr[j], arr[i]]; }
-  return arr;
-}
-function deckIds(deck, section = 'main') { return deck.cards.filter(c => c.section === section).map(c => c.id); }
-function freshPile(deck, section, rng) { return { remaining: shuffled(deckIds(deck, section), rng), drawn: [] }; }
-function validPile(pile, deck, section) {
-  if (!pile || !Array.isArray(pile.remaining) || !Array.isArray(pile.drawn)) return false;
-  const ids = new Set(deckIds(deck, section));
-  const current = [...pile.remaining, ...pile.drawn.map(x => x?.id)];
-  return current.length === ids.size && new Set(current).size === ids.size && current.every(id => ids.has(id)) &&
-    pile.drawn.every(x => x && [0, 90, 180, 270].includes(x.angle));
-}
-function draw(pile, deck, section, number, rng = Math.random) {
-  if (!validPile(pile, deck, section)) pile = freshPile(deck, section, rng);
-  const angles = [[], [0], [0, 180], [0, 90, 270], [0, 90, 180, 270], [0, 90]][deck.orientations];
-  const drawn = pile.remaining.slice(0, number).map(id => ({ id, angle: angles.length === 1 ? 0 : pick(angles, rng) }));
-  return { remaining: pile.remaining.slice(drawn.length), drawn: [...drawn.reverse(), ...pile.drawn] };
-}
-function returnCard(pile, id, rng = Math.random) {
-  if (!pile?.drawn?.some(c => c.id === id)) return pile;
-  return { remaining: shuffled([...pile.remaining, id], rng), drawn: pile.drawn.filter(c => c.id !== id) };
-}
-function parseBlocks(markdown) {
-  const found = { cards: [], lists: [] };
-  if (!/DeckCard|FullDeck/i.test(markdown)) return found;
-  const rows = markdown.split(/\r?\n/);
-  for (let row = 0; row < rows.length; row++) {
-    const m = rows[row].match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (!m) continue;
-    const first = row;
-    while (++row < rows.length && !(rows[row].trim().length >= m[1].length &&
-      [...rows[row].trim()].every(ch => ch === m[1][0]))) {}
-    if (row >= rows.length) break;
-    const kind = m[2].trim().toLowerCase();
-    const value = rows.slice(first + 1, row).join('\n');
-    if (kind === 'deckcard') found.cards.push(value);
-    if (kind === 'fulldeck') found.lists.push(value);
-  }
-  return found;
-}
-function legacyCard(source, path, id) {
-  const data = Object.create(null);
-  for (const line of source.split(/\r?\n/)) {
-    const m = line.match(/^([^:]+):\s*(.*)$/);
-    if (m) data[key(m[1])] = m[2].trim();
-  }
-  return makeCard({ ...data, source: path }, id);
-}
-function legacyDeck(source, cards, idFor) {
-  const index = new Map();
-  for (const c of cards) if (c.title && !index.has(key(c.title))) index.set(key(c.title), c);
-  const missing = [], result = [];
-  let section = 'main';
-  const labels = { main: 'main', principal: 'main', extra: 'extra', side: 'side', reserva: 'side' };
-  for (let line of source.split(/\r?\n/)) {
-    line = line.trim(); if (!line) continue;
-    const title = key(line.replace(/^#+\s*/, ''));
-    if (line.startsWith('#') && Object.hasOwn(labels, title)) { section = labels[title]; continue; }
-    const card = index.get(key(line));
-    if (card) result.push({ ...card, id: idFor(), section });
-    else missing.push(line);
-  }
-  return { cards: result, missing };
-}
-function folderDeck(name, paths, noteSources) {
-  const ordered = [...new Set(paths.map(imageRef).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
-  const urls = [];
-  let orientations = 1;
-  for (const note of noteSources) {
-    const flip = note.match(/^\s*flip([234]?)\s*$/im);
-    if (flip) orientations = flip[1] === '2' ? 5 : Number(flip[1]) || 2;
-    for (const url of note.match(/https?:\/\/[^\s<>)\]]+/gi) || []) {
-      const normalized = imageRef(url);
-      if (normalized && !urls.includes(normalized)) urls.push(normalized);
-    }
-  }
-  return { name, orientations, cards: [...ordered, ...urls].slice(0, MAX_CARDS).map(image => ({ title: imageTitle(image), image, section: 'main' })) };
-}
-
-const LANGUAGES = { pt: ['Português','Sim','Não','e','mas','excepcional','Evento aleatório'],
-  en: ['English','Yes','No','and','but','exceptional','Random event'],
-  es: ['Español','Sí','No','y','pero','excepcional','Evento aleatorio'],
-  fr: ['Français','Oui','Non','et','mais','exceptionnel','Événement aléatoire'],
-  de: ['Deutsch','Ja','Nein','und','aber','außergewöhnlich','Zufälliges Ereignis'],
-  zh: ['中文','是','不是','和','但是','极端','随机事件'],
-  ja: ['日本語','はい','いいえ','と','でも','極端','ランダムイベント'],
-  hi: ['हिन्दी','हाँ','नहीं','और','लेकिन','असाधारण','यादृच्छिक घटना'] };
-const SIX = ['', 'Não, e', 'Não', 'Não, mas', 'Sim, mas', 'Sim', 'Sim, e'];
-const ODDS = ['Impossível', 'Quase impossível', 'Muito improvável', 'Improvável', '50/50', 'Provável', 'Muito provável', 'Quase certo', 'Certo'];
-// Fate Chart values used by Solo RPG Toolkit. See THIRD-PARTY-SOLO-LICENSE.
-const FATE = [[0,1,81],[1,5,82],[2,10,83],[3,15,84],[5,25,86],[7,35,88],[10,50,91],[13,65,94],[15,75,96],[17,85,98],[18,90,99],[19,95,100],[20,99,101]];
-function oracle(type, odds, options, previous = {}, rng = Math.random) {
-  const state = { events: previous.events || 0, factor: previous.factor || 0 };
-  let answer, values, event = false;
-  const check = (n) => roll(100, rng) <= n;
-  if (type === 'mythic') {
-    const chaos = clamp(Number(options.chaos) || 5, 1, 9), n = roll(100, rng);
-    const [low, yes, high] = FATE[clamp(6 + chaos - 5 + Number(odds) - 4, 0, 12)] || FATE[6];
-    answer = (n <= yes ? 'Sim' : 'Não') + (n <= low || n >= high ? ' excepcional' : '');
-    values = [n]; event = n < 100 && n % 11 === 0 && n % 10 <= chaos;
-  } else if (type === 'standard') {
-    const extra = options.bias && odds === 'mid';
-    const n = roll(100, rng), yes = n <= ({ low: 30, mid: 50, high: 70 }[odds] ?? 50) + (extra ? state.factor : 0);
-    if (extra) state.factor = clamp(state.factor + (yes ? -20 : 20), 0, 80);
-    answer = yes ? 'Sim' : 'Não'; values = [n];
-    const qualifier = check(50) ? (check(50) ? ', e' : ', mas') : '';
-    if (check(10)) answer += ' excepcional';
-    answer += qualifier;
-    if (options.events && check(20)) event = ++state.events >= 3;
-  } else {
-    values = [roll(6, rng)];
-    if (type !== 'standard2' && odds !== 'mid') values.push(roll(6, rng));
-    const n = type === 'standard2' ? clamp(values[0] + (Number(odds) || 0), 1, 6) :
-      odds === 'low' ? Math.min(...values) : Math.max(...values);
-    answer = SIX[n];
-    if (type === 'mune' && values.includes(6)) event = ++state.events >= 3;
-    if (type === 'standard2' && roll(6, rng) === 6) event = ++state.events >= 3;
-  }
-  if (event) state.events = 0;
-  const detail = event && options.events && /standard/.test(type) ? [
-    pick(['positivo','negativo','neutro'], rng), pick(['personagem','facção','ambiente'], rng),
-  ].join(' · ') : '';
-  const [language, yesWord, noWord, andWord, butWord, extremeWord, eventLabel] =
-    (Object.hasOwn(LANGUAGES, options.oracleLanguage) && LANGUAGES[options.oracleLanguage]) || LANGUAGES.pt;
-  if (language !== 'Português') {
-    answer = answer.replace(/^Sim/, yesWord).replace(/^Não/, noWord).replace(' excepcional', ' ' + extremeWord)
-      .replace(/, e$/, ', ' + andWord).replace(/, mas$/, ', ' + butWord);
-  }
-  return { answer, values, event, eventLabel, detail, state };
-}
-module.exports = { MAX_FACES, MAX_CARDS, IMAGE_EXT, DICE, ODDS, LANGUAGES, clean, key, clamp, integer, pick, roll, cap, imageRef, pathValue,
-  defaultSolo, validateSolo, validateDie, numberFace, dieRoll, parseDice, rollDice, sections, makeCard, validateDeck, imageTitle,
-  builtinDeck, deckIds, freshPile, validPile, draw, returnCard, parseBlocks, legacyCard, legacyDeck, folderDeck, oracle };
 
     },
     "solo-ui.js": function (module, exports, load, require) {
@@ -5960,623 +6767,6 @@ function registerSoloInline(plugin) {
 module.exports = { spec, scanInline, widget, processor, liveExtension, registerSoloInline };
 
     },
-    "mesa.js": function (module, exports, load, require) {
-'use strict';
-const { copy, uid } = load("calendar.js");
-const { key, clean, clamp, parseDice, rollDice } = load("solo.js");
-
-const KINDS = Object.freeze({ player: 'Personagem de jogador', npc: 'NPC', creature: 'Criatura' });
-const ELEMENTS = Object.freeze({ adventure: 'Aventura', chapter: 'Capítulo', session: 'Sessão', scene: 'Cena', event: 'Evento',
-  npc: 'NPC', faction: 'Facção', site: 'Local', clue: 'Pista', item: 'Objeto', subplot: 'Subtrama' });
-const SIDES = Object.freeze({ players: 'Jogadores', enemies: 'Adversários', allies: 'Aliados', neutral: 'Neutros' });
-const LIMITS = { campaigns: 100, entries: 1000, sheets: 700, encounters: 300, members: 120, fields: 30 };
-const whole = (v, min = -999999, max = 999999) => Number.isSafeInteger(v) && v >= min && v <= max;
-function requireMesa(ok, message) { if (!ok) throw new Error(message); }
-function blankMesa() { return { version: 1, campaigns: [], entries: [], sheets: [], encounters: [], running: null, activity: [], sheetStates: {} }; }
-function newCampaign() { return { id: uid('camp'), name: '', note: '', summary: '', calendar: '' }; }
-function newEntry(campaign) { return { id: uid('entry'), campaign, name: '', kind: 'session', note: '', summary: '', links: [], date: null }; }
-function newSheet(campaign = '') {
-  return { id: uid('sheet'), campaign, name: '', kind: 'creature', type: '', note: '', description: '', image: '', initiative: '1d20',
-    attributes: [], resources: [], actions: [] };
-}
-function resource(name, max, value = max) { return { name, max, value }; }
-function arkanisSheet(campaign) {
-  return { ...newSheet(campaign), name: 'Ficha de Arkanis', kind: 'player', resources: [
-    resource('Vida', 10), resource('Esforço', 5), resource('Impulso', 5, 0), resource('Estresse', 5, 0),
-  ] };
-}
-function newEncounter(campaign = '') { return { id: uid('enc'), campaign, entry: '', name: '', grouped: false, roster: [] }; }
-const find = (items, identifier, predicate = () => true) => {
-  const k = key(identifier);
-  const matched = items.filter(e => predicate(e) && (e.id === identifier || key(e.name) === k));
-  const exact = matched.find(e => e.id === identifier);
-  if (!exact && matched.length > 1) throw new Error('Há mais de um resultado com esse nome. Use o ID.');
-  return exact || matched[0];
-};
-function need(items, identifier, message) {
-  const data = items.find(x => x.id === identifier);
-  requireMesa(data, message);
-  return data;
-}
-function numeric(v, fallback) {
-  if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
-  if (typeof v !== 'string' || !v.trim()) return fallback;
-  const m = v.trim().match(/^[+-]?\d{1,8}/);
-  return m ? Number(m[0]) : fallback;
-}
-function rows(items) { return Array.isArray(items) ? items.slice(0, LIMITS.fields) : []; }
-function textPath(v) { return clean(v, 500).replace(/^!?\[\[|\]\]$/g, '').split('|')[0]; }
-function yamlSheet(data, campaign = '') {
-  requireMesa(data !== null && typeof data === 'object' && !Array.isArray(data), 'Use um objeto YAML ou JSON para a ficha.');
-  const d = { ...newSheet(campaign), name: clean(data.name || data.nome), kind: Object.hasOwn(KINDS, data.kind) ? data.kind : 'creature',
-    type: clean(data.type || data.tipo), description: clean(data.description || data.descricao, 12000),
-    note: textPath(data.note || data.nota), image: textPath(Array.isArray(data.image) ? data.image[0] : data.image),
-    initiative: clean(typeof data.initiative === 'number' ? String(data.initiative) : data.initiative || '1d20', 60) };
-  for (const x of rows(data.attributes)) {
-    if (x?.name && ['number','string'].includes(typeof x.value)) d.attributes.push({ name: clean(x.name), value: clean(String(x.value), 160) });
-  }
-  for (const [label, attr] of [['CA','ac'],['Nível','level'],['ND','cr'],['XP','xp'],['Deslocamento','speed']]) {
-    const value = data[attr];
-    if (typeof value === 'number' || typeof value === 'string') d.attributes.push({ name: label, value: clean(String(value), 160) });
-  }
-  if (Array.isArray(data.stats)) ['FOR','DES','CON','INT','SAB','CAR'].forEach((name,i) => {
-    if (typeof data.stats[i] === 'number') d.attributes.push({ name, value: String(data.stats[i]) });
-  });
-  d.attributes = d.attributes.slice(0, LIMITS.fields);
-  for (const x of rows(data.resources)) {
-    if (!x?.name) continue;
-    const max = numeric(x.max, 0);
-    d.resources.push(resource(clean(x.name), max, numeric(x.value, max)));
-  }
-  if (data.hp != null && !d.resources.some(r => ['vida','pv','hp'].includes(key(r.name)))) {
-    const hp = numeric(data.hp, null);
-    if (hp !== null && d.resources.length < LIMITS.fields) d.resources.unshift(resource('Vida', hp));
-  }
-  for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
-    for (const x of rows(items)) {
-      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
-    }
-  }
-  d.actions = d.actions.slice(0, LIMITS.fields);
-  return checkSheet(d);
-}
-function isInit(s) { return !!parseDice(s) || /^[-+]?\d{1,6}$/.test(s); }
-function calcInit(formula, rng) { return parseDice(formula) ? rollDice(formula, rng).total : Number(formula); }
-function checkResource(r) {
-  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome e de um valor entre zero e o máximo, com regra de descanso válida.');
-}
-function checkSheet(s) {
-  requireMesa(s && clean(s.id) && clean(s.name) && Object.hasOwn(KINDS, s.kind), 'Preencha o nome e o tipo da ficha.');
-  requireMesa(typeof s.initiative === 'string' && isInit(s.initiative), 'Use iniciativa como 1d20+2 ou um número fixo.');
-  for (const field of ['attributes','resources','actions']) requireMesa(Array.isArray(s[field]) && s[field].length <= LIMITS.fields, 'Limite de campos da ficha atingido.');
-  for (const a of s.attributes) requireMesa(a && clean(a.name) && typeof a.value === 'string', 'Cada atributo precisa de um nome.');
-  s.resources.forEach(checkResource);
-  requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
-  for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
-  return s;
-}
-function checkEncounter(e) {
-  requireMesa(e && clean(e.id) && clean(e.name), 'Dê um nome ao encontro.');
-  requireMesa(Array.isArray(e.roster) && e.roster.length > 0 && e.roster.length <= LIMITS.members, 'Inclua pelo menos um participante.');
-  e.roster.forEach(r => {
-    requireMesa(r && (clean(r.sheet) || clean(r.name)), 'Escolha uma ficha ou dê um nome ao participante.');
-    requireMesa(Object.hasOwn(SIDES, r.side), 'Lado do participante inválido.');
-    const formula = typeof r.count === 'string' && parseDice(r.count);
-    requireMesa((/^\d{1,3}$/.test(r.count) && whole(+r.count, 1, LIMITS.members)) ||
-      (formula && !formula.fudge && !formula.mode && formula.amount * formula.sides + formula.modifier <= LIMITS.members &&
-      formula.amount + formula.modifier >= 1), 'Use de 1 a 120 participantes por linha ou uma expressão de quantidade válida, como 1d4.');
-    requireMesa(!r.initiative || (typeof r.initiative === 'string' && isInit(r.initiative)), 'Iniciativa inválida. Use 1d20+2 ou um número.');
-  });
-  return e;
-}
-function checkMesa(m) {
-  requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
-  load("session.js").checkSession(m);
-  if(m.atlas !== undefined)load("atlas.js").checkAtlas(m.atlas,m);
-  for (const field of ['campaigns','entries','sheets','encounters']) {
-    const a = m[field];
-    requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
-      new Set(a.map(x => x.id)).size === a.length, 'Biblioteca da Mesa inválida ou cheia.');
-  }
-  if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
-  if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
-  const campaigns = new Set(m.campaigns.map(c => c.id));
-  const entries = new Map(m.entries.map(e => [e.id,e]));
-  const sheets = new Map(m.sheets.map(s => [s.id,s]));
-  for (const e of m.entries) {
-    requireMesa(campaigns.has(e.campaign) && Object.hasOwn(ELEMENTS,e.kind), 'O registro precisa pertencer a uma campanha.');
-    requireMesa(Array.isArray(e.links) && e.links.length <= 80 && e.links.every(id => id !== e.id && entries.get(id)?.campaign === e.campaign),
-      'Os vínculos precisam apontar para registros diferentes da mesma campanha.');
-    if (e.date) {
-      const { calendar, date, label } = e.date;
-      requireMesa(clean(calendar) && clean(label) && date && whole(date.year,-100000,100000) &&
-        clean(date.month) && whole(date.day,1,100000), 'Data do registro inválida.');
-    }
-  }
-  m.sheets.forEach(s => { checkSheet(s); requireMesa(!s.campaign || campaigns.has(s.campaign), 'Campanha da ficha não encontrada.'); });
-  m.encounters.forEach(e => {
-    checkEncounter(e);
-    requireMesa(!e.campaign || campaigns.has(e.campaign), 'Campanha do encontro não encontrada.');
-    requireMesa(!e.entry || entries.get(e.entry)?.campaign === e.campaign, 'Escolha um registro da campanha deste encontro.');
-    for (const line of e.roster) requireMesa(!line.sheet || (sheets.has(line.sheet) && (!sheets.get(line.sheet).campaign || sheets.get(line.sheet).campaign === e.campaign)),
-      'Ficha do encontro não encontrada na biblioteca compartilhada ou na campanha.');
-  });
-  if (m.running !== null) {
-    const f = m.running, list = f?.members;
-    requireMesa(f && clean(f.name) && Array.isArray(list) && list.length > 0 && list.length <= LIMITS.members &&
-      whole(f.round, 1, 999999) && list.some(p => p?.id === f.turn) && new Set(list.map(p => p.id)).size === list.length, 'Encontro em andamento inválido.');
-    for (const p of list) {
-      requireMesa(p && clean(p.name) && whole(p.initiative, -20000000, 20000000) && Object.hasOwn(SIDES,p.side) &&
-        Array.isArray(p.conditions) && p.conditions.length <= 20 && Array.isArray(p.resources) && p.resources.length <= LIMITS.fields, 'Participante inválido.');
-      p.resources.forEach(checkResource);
-      if (p.sheet) checkSheet(p.sheet);
-    }
-  }
-  return m;
-}
-function sourceRoster(list, m, campaign = '') {
-  const asRow = (name, count = '1', fields = {}) => {
-    const sheet = find(m.sheets, name, s => !s.campaign || s.campaign === campaign);
-    return { sheet: sheet?.id || '', name: clean(fields.name || (!sheet && name) || ''), count: String(count),
-      side: Object.hasOwn(SIDES, fields.side) ? fields.side : 'enemies',
-      initiative: fields.initiative === undefined ? '' : String(fields.initiative) };
-  };
-  requireMesa(Array.isArray(list) && list.length <= LIMITS.members, 'Use uma lista de participantes.');
-  return list.map(x => {
-    if (typeof x === 'string') return asRow(x);
-    requireMesa(x && typeof x === 'object' && !Array.isArray(x), 'Participante inválido no bloco.');
-    if (x.sheet || x.name) return asRow(x.sheet || x.name, x.count ?? '1', x);
-    const pairs = Object.entries(x);
-    requireMesa(pairs.length === 1 && typeof pairs[0][1] === 'string', 'Use nome da ficha ou uma entrada como 3: Goblin.');
-    return asRow(pairs[0][1], pairs[0][0]);
-  });
-}
-function order(members) { return members.sort((a,b) => (b.initiative - a.initiative) || (a.seed - b.seed)); }
-function buildRunning(data, m, rng = Math.random) {
-  checkEncounter(data);
-  const members = [];
-  for (const line of data.roster) {
-    const s = line.sheet ? need(m.sheets, line.sheet, 'Ficha de participante não encontrada.') : null;
-    const n = parseDice(line.count) ? rollDice(line.count, rng).total : +line.count;
-    requireMesa(whole(n, 1, LIMITS.members) && members.length + n <= LIMITS.members, 'Um encontro tem no máximo 120 participantes.');
-    const initiative = line.initiative || s?.initiative || '1d20', label = clean(line.name || s?.name);
-    const shared = data.grouped ? calcInit(initiative, rng) : null;
-    for (let i = 0; i < n; i++) {
-      members.push({ id: uid('turn'), name: n === 1 ? label : label + ' ' + (i + 1), initiative: shared ?? calcInit(initiative, rng),
-        seed: members.length, side: line.side, resources: copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
-    }
-  }
-  order(members);
-  return { id: uid('run'), from: data.id, campaign: data.campaign, entry: data.entry, name: data.name, round: 1, turn: members[0].id, members };
-}
-function step(r, direction = 1) {
-  const at = r.members.findIndex(p => p.id === r.turn), next = at + direction;
-  if (next < 0) {
-    if (r.round === 1) return;
-    r.round--; r.turn = r.members.at(-1).id;
-  } else if (next >= r.members.length) {
-    requireMesa(r.round < 999999, 'O encontro atingiu o limite de rodadas.');
-    r.round++; r.turn = r.members[0].id;
-  } else r.turn = r.members[next].id;
-}
-function changeResource(r, id, i, delta) {
-  const p = need(r.members, id, 'Participante não encontrado.'), meter = p.resources[i];
-  requireMesa(meter && whole(delta), 'Ajuste de recurso inválido.');
-  meter.value = clamp(meter.value + delta, 0, meter.max);
-}
-module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa, newCampaign, newEntry, newSheet, resource, arkanisSheet,
-  newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
-
-    },
-    "session.js": function (module, exports, load, require) {
-'use strict';
-const {uid}=load("calendar.js");
-const {clean}=load("solo.js");
-const {requireMesa,newEntry}=load("mesa.js");
-const {unpack,inMap}=load("atlas.js");
-
-const MAX_JOURNAL=120;
-const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.parse(s));
-const nowString=()=>new Date().toISOString();
-
-function checkSession(m){
- for(const entry of m.entries||[]){
-   if(entry.sessionJournal!==undefined)
-     requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
-       entry.sessionJournal.every(x=>x&&clean(x.id)&&validTimestamp(x.time)&&
-         typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
-       'Diário arquivado inválido.');
- }
- const s=m.session;
- if(s===undefined||s===null)return true;
- requireMesa(s&&typeof s==='object'&&!Array.isArray(s)&&clean(s.id)&&
-   ['active','paused'].includes(s.status)&&validTimestamp(s.startedAt),'Sessão ativa inválida.');
- const camp=m.campaigns.find(x=>x.id===s.campaign);
- requireMesa(!!camp,'Campanha da sessão não encontrada.');
- const entry=m.entries.find(x=>x.id===s.entry);
- requireMesa(!!entry&&entry.campaign===s.campaign&&entry.kind==='session','O registro de sessão deve existir na mesma campanha.');
- if(s.map){
-   const map=m.atlas?.maps.find(x=>x.id===s.map);
-   requireMesa(!!map&&map.campaign===s.campaign,'Mapa da sessão não encontrado nessa campanha.');
-   if(s.cell){
-     const at=unpack(s.cell);
-     requireMesa(at&&inMap(map,at.col,at.row),'Localização da sessão inválida.');
-   }
- }else requireMesa(!s.cell,'Uma célula da sessão requer um mapa.');
- requireMesa(Array.isArray(s.journal)&&s.journal.length<=MAX_JOURNAL&&s.journal.every(x=>
-   x&&clean(x.id)&&validTimestamp(x.time)&&typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
-   'Anotações da sessão inválidas.');
- return true;
-}
-function nextName(m,campaign){
- const used=m.entries.filter(x=>x.campaign===campaign&&x.kind==='session');
- return 'Sessão '+(used.length+1);
-}
-function newSessionEntry(m,campaign,options={}){
- requireMesa(m.campaigns.some(c=>c.id===campaign),'Campanha não encontrada.');
- const e=newEntry(campaign);
- e.kind='session';e.name=clean(options.name,120)||nextName(m,campaign);
- if(options.calendar&&options.date&&options.label)
-   e.date={calendar:options.calendar,date:options.date,label:clean(options.label,180)};
- m.entries.push(e);
- return e;
-}
-function startSession(m,campaign,entry='',options={}){
- requireMesa(!m.session,'Finalize a sessão atual antes de iniciar outra.');
- const c=m.campaigns.find(x=>x.id===campaign);
- requireMesa(!!c,'Escolha uma campanha existente.');
- const chosen=entry?m.entries.find(x=>x.id===entry):newSessionEntry(m,campaign,options);
- requireMesa(chosen&&chosen.campaign===campaign&&chosen.kind==='session','Escolha um registro do tipo Sessão da campanha.');
- m.session={id:uid('session'),status:'active',campaign,entry:chosen.id,
-   map:'',cell:'',startedAt:nowString(),journal:[]};
- if(options.map)setSessionLocation(m,options.map,options.cell||'');
- checkSession(m);
- return m.session;
-}
-function setSessionStatus(m,status){
- requireMesa(m.session,'Nenhuma sessão iniciada.');
- requireMesa(['active','paused'].includes(status),'Estado da sessão inválido.');
- m.session.status=status;return m.session;
-}
-function setSessionLocation(m,mapId='',cell=''){
- requireMesa(m.session,'Inicie uma sessão para marcar a localização.');
- requireMesa(!cell||!!mapId,'Selecione um mapa antes da célula.');
- if(!mapId){m.session.map='';m.session.cell='';return m.session;}
- const map=m.atlas?.maps.find(x=>x.id===mapId);
- requireMesa(map&&map.campaign===m.session.campaign,'Este mapa não pertence à campanha da sessão.');
- if(cell){
-   const p=unpack(cell);
-   requireMesa(p&&inMap(map,p.col,p.row),'Digite coordenadas válidas no formato coluna,linha.');
- }
- m.session.map=mapId;m.session.cell=cell;return m.session;
-}
-function addSessionNote(m,text){
- const s=m.session;
- requireMesa(s,'Nenhuma sessão iniciada.');
- const note=clean(text,1200);
- requireMesa(note&&typeof text==='string'&&text.trim().length<=1200,'A anotação precisa ter de 1 a 1200 caracteres.');
- requireMesa(s.journal.length<MAX_JOURNAL,'Diário cheio. Encerre a sessão e comece outro registro.');
- const entry={id:uid('note'),time:nowString(),text:note};
- s.journal.unshift(entry);
- return entry;
-}
-function finishSession(m){
- const s=m.session;
- requireMesa(!!s,'Nenhuma sessão em andamento.');
- const entry=m.entries.find(e=>e.id===s.entry);
- requireMesa(!!entry,'Registro da sessão não encontrado.');
- const location=s.map?'\nLocal: '+(m.atlas?.maps.find(x=>x.id===s.map)?.name||s.map)+(s.cell?' ('+s.cell+')':''):'';
- const lines=s.journal.slice().reverse().map(n=>'- '+n.time.slice(0,16).replace('T',' ')+' · '+n.text.replace(/\n/g,' / '));
- // Archive the complete structured diary independently of summary size.
- entry.sessionJournal ||= [];
- requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
- entry.sessionJournal.push(...s.journal.slice().reverse());
- const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
- const max=10000;
- const previous=String(entry.summary||'').slice(0,max);
- const space=Math.max(0,max-previous.length);
- entry.summary=previous+(space>0?note.slice(-space):'');
- m.session=null;
- return entry;
-}
-function sessionInfo(m,calendars=[]){
- const s=m.session;
- if(!s)return null;
- const campaign=m.campaigns.find(c=>c.id===s.campaign);
- const entry=m.entries.find(e=>e.id===s.entry);
- const map=m.atlas?.maps.find(x=>x.id===s.map)||null;
- const cell=map&&s.cell?map.cells[s.cell]||{}:null;
- const calendar=calendars.find(c=>c.id===campaign?.calendar)||null;
- const running=m.running?.campaign===s.campaign?m.running:null;
- const players=m.sheets.filter(x=>x.campaign===s.campaign&&x.kind==='player');
- return {session:s,campaign,entry,map,cell,calendar,running,players};
-}
-module.exports={MAX_JOURNAL,checkSession,nextName,newSessionEntry,startSession,
- setSessionStatus,setSessionLocation,addSessionNote,finishSession,sessionInfo};
-
-    },
-    "atlas.js": function (module, exports, load, require) {
-'use strict';
-const { uid } = load("calendar.js");
-const { clean, key } = load("solo.js");
-const TERRAIN=Object.freeze({
-  plains:{name:'Planície',color:'#ac9b63',icon:'·',speed:1},
-  forest:{name:'Floresta',color:'#456e54',icon:'♣',speed:1.5},
-  hills:{name:'Colinas',color:'#92785c',icon:'⌃',speed:1.5},
-  mountain:{name:'Montanha',color:'#655c67',icon:'▲',speed:3},
-  water:{name:'Água',color:'#3a6384',icon:'≈',speed:4},
-  swamp:{name:'Pântano',color:'#66775b',icon:'≋',speed:2},
-  desert:{name:'Deserto',color:'#c49d64',icon:'☼',speed:2},
-  road:{name:'Estrada',color:'#9e866a',icon:'═',speed:.75},
-  wall:{name:'Parede',color:'#514b52',icon:'▧',speed:999},
-  ice:{name:'Gelo e neve',color:'#c8dce3',icon:'❄',speed:3},
-  floor:{name:'Piso',color:'#b0a496',icon:'',speed:1}
-});
-const RELATION_TYPES=Object.freeze({
- ally:'Aliado',enemy:'Inimigo',friend:'Amigo',rival:'Rival',
- family:'Família',parent:'Progenitor',child:'Filho',spouse:'Cônjuge',
- mentor:'Mentor',student:'Aprendiz',member:'Membro',leader:'Líder',
- controls:'Controla',located:'Localizado em',knows:'Conhece',link:'Conexão'
-});
-const RELATION_KEYS=Object.freeze(['ally','enemy','friend','rival','family','parent','child','spouse','mentor','student','member','leader','controls','located','knows']);
-const MAX_MAPS=60,MAX_CELLS=1600,MAX_LINKS=1500;
-const assert=(test,msg)=>{if(!test)throw new Error(msg);};
-const int=(n,a,b)=>Number.isInteger(n)&&n>=a&&n<=b;
-const place=(col,row)=>col+','+row;
-const unpack=(p)=>{const m=/^(\d{1,2}),(\d{1,2})$/.exec(p||'');return m?{col:+m[1],row:+m[2]}:null;};
-const blankAtlas=()=>({maps:[],relations:[]});
-function newMap(campaign='',grid='hex'){
- return {id:uid('map'),campaign,name:'',grid,width:12,height:10,defaultTerrain:grid==='square'?'wall':'plains',
-  parent:'',parentCell:'',background:'',cells:{},paths:[],tokens:[],playerCell:'',revealed:false};
-}
-function inMap(map,col,row){return int(col,0,map.width-1)&&int(row,0,map.height-1);}
-function getCell(map,col,row){return map.cells[place(col,row)]||{};}
-function setCell(map,col,row,patch){
- assert(inMap(map,col,row),'Coordenadas fora do mapa.');
- const code=place(col,row),existing=map.cells[code]||{};
- const next={...existing,...patch};
- for(const [k,v] of Object.entries(next))if(v===undefined||v===null||v===''||(k==='fog'&&v===false))delete next[k];
- if(!Object.keys(next).length)delete map.cells[code];else map.cells[code]=next;
- return next;
-}
-function axial(col,row){return {q:col-(row-(row&1))/2,r:row};}
-function distance(map,a,b){
- const x=typeof a==='string'?unpack(a):a,y=typeof b==='string'?unpack(b):b;
- assert(x&&y,'Coordenadas inválidas.');
- if(map.grid==='square')return Math.abs(x.col-y.col)+Math.abs(x.row-y.row);
- const h=axial(x.col,x.row),t=axial(y.col,y.row);
- return (Math.abs(h.q-t.q)+Math.abs(h.r-t.r)+Math.abs(h.q+h.r-t.q-t.r))/2;
-}
-function around(map,col,row,radius=0){
- const coords=[];
- for(let r=Math.max(0,row-radius);r<=Math.min(map.height-1,row+radius);r++)
-  for(let q=Math.max(0,col-radius);q<=Math.min(map.width-1,col+radius);q++)
-   if(map.grid==='square'?Math.max(Math.abs(q-col),Math.abs(r-row))<=radius:distance(map,{col,row},{col:q,row:r})<=radius)
-    coords.push({col:q,row:r});
- return coords;
-}
-function terrainSeed(map,seed=1234){
- let state=(Number(seed)>>>0)||1;
- const random=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
- const keys=['plains','plains','forest','forest','hills','mountain','water','swamp','desert'];
- const initial=new Array(map.width*map.height);
- for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
-   const n=Math.max(0,Math.min(8,Math.floor(random()*9)));
-   initial[row*map.width+col]=keys[n];
- }
- const next=initial.map((type,i)=>{
-   const row=Math.floor(i/map.width),col=i%map.width;
-   const neighbors=around(map,col,row,1).map(n=>initial[n.row*map.width+n.col]);
-   const count=new Map();
-   for(const x of neighbors)count.set(x,(count.get(x)||0)+1);
-   const common=[...count].sort((a,b)=>b[1]-a[1])[0];
-   return common&&common[1]>=4?common[0]:type;
- });
- const cell={};
- for(let row=0;row<map.height;row++)for(let col=0;col<map.width;col++){
-   const type=next[row*map.width+col];
-   if(type!==map.defaultTerrain)cell[place(col,row)]={terrain:type};
- }
- return cell;
-}
-function dungeonSeed(map,seed=1234){
- assert(map.grid==='square','Masmorras usam mapas quadrados.');
- const cells={}; let state=(Number(seed)>>>0)||1;
- const rand=()=>{state=(Math.imul(1664525,state)+1013904223)>>>0;return state/4294967296;};
- const rooms=[];const count=Math.min(10,Math.max(2,Math.floor(map.width*map.height/45)));
- for(let i=0;i<count;i++){
-   const w=Math.min(2+Math.floor(rand()*4),map.width-2),h=Math.min(2+Math.floor(rand()*4),map.height-2);
-   if(w<2||h<2)break;
-   const col=1+Math.floor(rand()*Math.max(1,map.width-w-1)),row=1+Math.floor(rand()*Math.max(1,map.height-h-1));
-   for(let r=row;r<row+h;r++)for(let q=col;q<col+w;q++)cells[place(q,r)]={terrain:'floor'};
-   rooms.push({col:Math.floor(col+w/2),row:Math.floor(row+h/2)});
- }
- for(let i=1;i<rooms.length;i++){
-   const a=rooms[i-1],b=rooms[i];let q=a.col,r=a.row;
-   while(q!==b.col){cells[place(q,r)]={terrain:'floor'};q+=Math.sign(b.col-q);}
-   while(r!==b.row){cells[place(q,r)]={terrain:'floor'};r+=Math.sign(b.row-r);}
-   cells[place(q,r)]={terrain:'floor'};
- }
- if(rooms.length){cells[place(rooms[0].col,rooms[0].row)]={terrain:'floor',label:'Entrada'};
-  const last=rooms.at(-1);cells[place(last.col,last.row)]={terrain:'floor',label:'Saída'};}
- return cells;
-}
-function mapPathDistance(map,path){
- if(!Array.isArray(path)||path.length<2)return 0;
- return path.slice(1).reduce((sum,p,i)=>sum+distance(map,path[i],p),0);
-}
-function routeCost(map,waypoints){
- if(!waypoints?.length)return 0;
- let total=0;
- for(let i=1;i<waypoints.length;i++){
-   const b=unpack(waypoints[i]),a=unpack(waypoints[i-1]);
-   assert(a&&b&&inMap(map,a.col,a.row)&&inMap(map,b.col,b.row),'Rota possui coordenadas inválidas.');
-   const unit=distance(map,a,b),terrain=getCell(map,b.col,b.row).terrain||map.defaultTerrain;
-   total+=unit*(TERRAIN[terrain]?.speed||1);
- }
- return Math.round(total*100)/100;
-}
-function safeNote(s){
- return typeof s==='string'&&s.length<=500&&!s.split('/').includes('..')&&!/[\\\x00-\x1f]/.test(s);
-}
-function checkAtlas(atlas,m){
- assert(atlas&&Array.isArray(atlas.maps)&&Array.isArray(atlas.relations)&&atlas.maps.length<=MAX_MAPS&&atlas.relations.length<=MAX_LINKS,'Atlas inválido ou cheio.');
- assert(new Set(atlas.maps.map(x=>x.id)).size===atlas.maps.length,'Mapas duplicados.');
- const maps=new Map(atlas.maps.map(x=>[x.id,x])),campaigns=new Set(m.campaigns.map(x=>x.id)),
-  entries=new Map(m.entries.map(x=>[x.id,x])),sheets=new Map(m.sheets.map(x=>[x.id,x])),encounters=new Map(m.encounters.map(x=>[x.id,x]));
- for(const map of atlas.maps){
-   assert(clean(map.id)&&clean(map.name)&&['hex','square'].includes(map.grid)&&int(map.width,3,40)&&int(map.height,3,40)&&map.width*map.height<=MAX_CELLS,'Configuração de mapa inválida.');
-   assert(!map.campaign||campaigns.has(map.campaign),'Campanha do mapa não encontrada.');
-   assert(Object.hasOwn(TERRAIN,map.defaultTerrain),'Terreno padrão inválido.');
-   assert(safeNote(map.background||'')&& (!map.parent||maps.has(map.parent)), 'Vínculo do mapa inválido.');
-   assert(map.parent!==map.id,'Um mapa não pode ser seu próprio submapa.');
-   const visited=new Set([map.id]);let ancestor=map.parent;
-   while(ancestor){
-     assert(!visited.has(ancestor),'Ciclo de submapas detectado. Remova a referência circular.');
-     visited.add(ancestor);
-     const next=maps.get(ancestor);
-     assert(!!next,'Mapa pai não encontrado.');
-     ancestor=next.parent||'';
-   }
-   if(map.parentCell){const parent=maps.get(map.parent),cell=unpack(map.parentCell);assert(parent&&cell&&inMap(parent,cell.col,cell.row),'Coordenadas do mapa pai inválidas.');}
-   if(map.parent)assert(maps.get(map.parent).campaign===map.campaign,'Submapas precisam pertencer à mesma campanha.');
-   assert(map.cells&&typeof map.cells==='object'&&!Array.isArray(map.cells)&&Object.keys(map.cells).length<=MAX_CELLS,'Mapa possui células inválidas.');
-   for(const [pos,cell]of Object.entries(map.cells)){
-     const at=unpack(pos);assert(at&&inMap(map,at.col,at.row)&&cell&&typeof cell==='object'&&!Array.isArray(cell),'Célula fora dos limites.');
-     assert(!cell.terrain||Object.hasOwn(TERRAIN,cell.terrain),'Terreno inválido.');
-     for(const field of ['label','region','faction','text','secret','icon','table'])assert(!cell[field]||(typeof cell[field]==='string'&&cell[field].length<=(field==='text'||field==='secret'?3000:500)), 'Texto de célula inválido.');
-     assert(!cell.note||safeNote(cell.note),'Nota da célula inválida.');
-     assert(!cell.tile||(safeNote(cell.tile)&&/\.(?:png|jpe?g|gif|webp|avif|svg|bmp)$/i.test(cell.tile)), 'Textura da célula inválida.');
-     assert(!cell.entry||entries.get(cell.entry)?.campaign===map.campaign,'Registro da célula pertence a outra campanha.');
-     assert(!cell.sheet||(sheets.has(cell.sheet)&&(!sheets.get(cell.sheet).campaign||sheets.get(cell.sheet).campaign===map.campaign)),'Ficha da célula não encontrada.');
-     assert(!cell.encounter||encounters.get(cell.encounter)?.campaign===map.campaign,'Encontro da célula pertence a outra campanha.');
-     assert(!cell.submap||(maps.has(cell.submap)&&maps.get(cell.submap).campaign===map.campaign&&cell.submap!==map.id),'Submapa da célula inválido.');
-     assert(!cell.fog||typeof cell.fog==='boolean','Névoa inválida.');
-     assert(!cell.secret||typeof cell.secret==='string','Segredo de célula inválido.');
-   }
-   assert(Array.isArray(map.paths)&&map.paths.length<=100&&map.paths.every(x=>Array.isArray(x)&&x.length<=200&&x.every(pos=>{const a=unpack(pos);return a&&inMap(map,a.col,a.row);})), 'Rotas inválidas.');
-   assert(Array.isArray(map.tokens)&&map.tokens.length<=80,'Tokens do mapa inválidos.');
-   for(const token of map.tokens){
-     const at=unpack(token.at);
-     assert(clean(token.id)&&clean(token.name)&&at&&inMap(map,at.col,at.row)&&(!token.sheet||sheets.has(token.sheet)),'Token do mapa inválido.');
-   }
- }
- const ids=new Set(atlas.relations.map(x=>x.id));assert(ids.size===atlas.relations.length,'Relações duplicadas.');
- const validRef=(ref,campaign)=>{
-   if(typeof ref!=='string'||ref.length>600)return false;
-   const i=ref.indexOf(':');if(i<=0)return false;
-   const type=ref.slice(0,i),id=ref.slice(i+1);
-   if(type==='entry')return entries.get(id)?.campaign===campaign;
-   if(type==='sheet')return !!sheets.get(id)&&(!sheets.get(id).campaign||sheets.get(id).campaign===campaign);
-   if(type==='map')return maps.get(id)?.campaign===campaign;
-   if(type==='note')return !!id&&safeNote(id);
-   return false;
- };
- for(const edge of atlas.relations)
-   assert(clean(edge.id)&&Object.hasOwn(RELATION_TYPES,edge.type)&&campaigns.has(edge.campaign)&&
-     validRef(edge.from,edge.campaign)&&validRef(edge.to,edge.campaign)&&edge.from!==edge.to,'Relação inválida ou desconectada da campanha.');
- return atlas;
-}
-const nodeRef=(type,id)=>type+':'+id;
-function allNodes(m,atlas,campaign){
- const nodes=[];
- for(const x of m.entries)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('entry',x.id),label:x.name,kind:x.kind,note:x.note,campaign:x.campaign});
- for(const x of m.sheets)if(!campaign||!x.campaign||x.campaign===campaign)nodes.push({id:nodeRef('sheet',x.id),label:x.name,kind:'sheet',note:x.note,campaign:x.campaign});
- for(const x of atlas.maps)if(!campaign||x.campaign===campaign)nodes.push({id:nodeRef('map',x.id),label:x.name,kind:'map',note:'',campaign:x.campaign});
- return nodes;
-}
-function noteLink(value){
- if(typeof value!=='string')return '';
- const match=/!?\[\[([^\]]+)\]\]/.exec(value);
- return match?match[1].split('|')[0].split('#')[0].trim():'';
-}
-function noteRelations(notes,allowed=RELATION_KEYS){
- const output=[];
- for(const note of notes){
-   if(!note?.path||!note.frontmatter)continue;
-   for(const kind of allowed){
-     const v=note.frontmatter[kind],list=Array.isArray(v)?v:v?[v]:[];
-     for(const item of list){
-       const path=noteLink(item);
-       if(path)output.push({from:nodeRef('note',note.path),to:nodeRef('note',path),type:kind,automatic:true});
-     }
-   }
- }
- return output;
-}
-function relationGraph(m,atlas,campaign='',notes=[]){
- const map=new Map(allNodes(m,atlas,campaign).map(x=>[x.id,x]));
- const edges=[];
- const noteIndex=new Map(notes.map(x=>[key(x.path.replace(/\.md$/i,'')),x.path]));
- const getNote=(path)=>{
-   const short=path.replace(/\.md$/i,'');
-   return noteIndex.get(key(short))||noteIndex.get(key(short.split('/').at(-1)))||path;
- };
- const add=(from,to,type,automatic=false)=>{
-   if(from===to)return;
-   if(from.startsWith('note:'))from=nodeRef('note',getNote(from.slice(5)));
-   if(to.startsWith('note:'))to=nodeRef('note',getNote(to.slice(5)));
-   for(const id of [from,to])if(!map.has(id)){
-     const [kind,...rest]=id.split(':'),raw=rest.join(':');
-     map.set(id,{id,label:raw.split('/').at(-1).replace(/\.md$/i,''),kind,note:kind==='note'?raw:''});
-   }
-   edges.push({from,to,type,automatic});
- };
- for(const x of m.entries){
-   if(campaign&&x.campaign!==campaign)continue;
-   for(const link of x.links||[])if(m.entries.some(e=>e.id===link))
-     add(nodeRef('entry',x.id),nodeRef('entry',link),'link',true);
-   if(x.note)add(nodeRef('entry',x.id),nodeRef('note',x.note),'link',true);
- }
- for(const x of m.sheets)if(x.note&&(!campaign||!x.campaign||x.campaign===campaign))
-   add(nodeRef('sheet',x.id),nodeRef('note',x.note),'link',true);
- for(const x of atlas.maps)if(!campaign||x.campaign===campaign){
-   for(const cell of Object.values(x.cells)){
-     const from=nodeRef('map',x.id);
-     if(cell.entry)add(from,nodeRef('entry',cell.entry),'located',true);
-     if(cell.sheet)add(from,nodeRef('sheet',cell.sheet),'located',true);
-     if(cell.note)add(from,nodeRef('note',cell.note),'located',true);
-   }
- }
- for(const r of atlas.relations)if(!campaign||r.campaign===campaign)add(r.from,r.to,r.type,false);
- const knownNotes=new Set();
- for(const n of map.values())if(n.note)knownNotes.add(key(n.note.replace(/\.md$/i,'')));
- for(const edge of noteRelations(notes))if(knownNotes.has(key(edge.from.slice(5).replace(/\.md$/i,'')))||!campaign)
-   add(edge.from,edge.to,edge.type,true);
- const unique=new Map();
- for(const e of edges){
-  const code=e.from+'|'+e.to+'|'+e.type;
-  if(!unique.has(code))unique.set(code,e);
- }
- return {nodes:[...map.values()],edges:[...unique.values()]};
-}
-function subgraph(graph,focus='',depth=2,filter=[]){
- const filtered=graph.edges.filter(e=>!filter.length||filter.includes(e.type));
- if(!focus){
-   const active=new Set();
-   for(const e of filtered){active.add(e.from);active.add(e.to);}
-   const nodes=graph.nodes.filter(n=>active.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
-   return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
- }
- const seen=new Set([focus]);
- let frontier=new Set([focus]);
- for(let level=0;level<Math.min(5,Math.max(0,depth));level++){
-   const next=new Set();
-   for(const e of filtered){
-     if(frontier.has(e.from)&&!seen.has(e.to))next.add(e.to);
-     if(frontier.has(e.to)&&!seen.has(e.from))next.add(e.from);
-   }
-   if(!next.size)break;
-   for(const id of next)seen.add(id);
-   frontier=next;
- }
- const nodes=graph.nodes.filter(n=>seen.has(n.id)).slice(0,80),ids=new Set(nodes.map(n=>n.id));
- return {nodes,edges:filtered.filter(e=>ids.has(e.from)&&ids.has(e.to)).slice(0,200)};
-}
-module.exports={TERRAIN,RELATION_TYPES,RELATION_KEYS,blankAtlas,newMap,place,unpack,inMap,getCell,setCell,axial,distance,around,
- terrainSeed,dungeonSeed,mapPathDistance,routeCost,safeNote,checkAtlas,nodeRef,allNodes,noteLink,noteRelations,relationGraph,subgraph};
-
-    },
     "ultra-ui.js": function (module, exports, load, require) {
 'use strict';
 const { MarkdownRenderChild, MarkdownView, parseYaml }=require('obsidian');
@@ -7032,6 +7222,7 @@ const { key,clean }=load("solo.js");
 const { newEntry,find,requireMesa,buildRunning }=load("mesa.js");
 const { randomContent }=load("ultra.js");
 const {setSessionLocation}=load("session.js");
+const {previewTravel}=load("exploration.js");
 const { parseTable,tableEngine }=load("solo-tables.js");
 const { MAP_TEMPLATES, createMapTemplate }=load("map-presets.js");
 const {
@@ -7274,6 +7465,7 @@ class AtlasView extends ItemView{
    const backgroundFile=map.background?this.plugin.app.vault.getAbstractFileByPath(map.background):null;
    const background=backgroundFile instanceof TFile?this.plugin.app.vault.getResourcePath(backgroundFile):'';
    renderMapCanvas(canvas,map,{background,mode:this.mode,gm:this.gm,zoom:this.zoom,selected:this.selected,paintTerrain:this.terrain,
+     partyAt:this.m.session?.map===map.id?this.m.session.cell:'',
      regions:this.regions,factions:this.factions,getTileUrl:path=>{const f=this.plugin.app.vault.getAbstractFileByPath(path);return f instanceof TFile?this.plugin.app.vault.getResourcePath(f):'';},
      onPick:at=>this.pickCell(map,at),onPaint:coords=>this.paintCells(map,coords)});
    const board=row(main);
@@ -7382,6 +7574,15 @@ class AtlasView extends ItemView{
      if(child)button(links,'Entrar em '+child.name,()=>this.chooseMap(child.id),{icon:'corner-down-right'});
    }
    const controls=row(detail);
+   if(this.m.session?.status==='active'&&this.m.session.map===map.id&&this.m.session.cell&&this.m.session.cell!==this.selected)
+     button(controls,'Planejar viagem até aqui',action(this.plugin,async()=>{
+       const target=this.selected;
+       const dashboard=await this.plugin.openMesa('dashboard');
+       dashboard.campaign=map.campaign;
+       dashboard.travelToDraft=target;
+       dashboard.travelPreview=null;
+       dashboard.render();
+     }),{icon:'route'});
    if(this.m.session?.campaign===map.campaign)button(controls,'Marcar como local da sessão',action(this.plugin,()=>this.plugin.changeMesa(m=>setSessionLocation(m,map.id,this.selected))),{icon:'map-pin'});
    button(controls,'Editar célula',()=>this.editCell(map,this.selected),{icon:'pencil'});
    button(controls,cell.note?'Abrir/criar nota':'Criar nota do hex',action(this.plugin,()=>makeHexNote(this.plugin,map,this.selected)),{icon:'file-plus'});
@@ -7769,7 +7970,7 @@ function hexPoints(x,y,unit){
     return (x+unit*Math.cos(a)).toFixed(2)+','+(y+unit*Math.sin(a)).toFixed(2);
   }).join(' ');
 }
-function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true}) {
+function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true,partyAt=''}) {
   host.replaceChildren();
   const viewport=host.ownerDocument.createElement('div');
   viewport.className='brpg-atlas-map-scroll';host.appendChild(viewport);
@@ -7836,6 +8037,18 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
     svgEl(tokens,'circle',{cx:p.x+dx,cy:p.y+dy,r:9,fill:'#533449',stroke:'#f0c9dd','stroke-width':1.4});
     svgEl(tokens,'text',{x:p.x+dx,y:p.y+dy+1,'font-size':10,'text-anchor':'middle',
       'dominant-baseline':'middle',fill:'#fff'},token.name?.slice(0,1).toUpperCase()||'●');
+  }
+  // The party position is a session marker, not an independent duplicate token.
+  if(partyAt){
+    const pos=unpack(partyAt);
+    if(pos&&inMap(map,pos.col,pos.row)&&(gm||!getCell(map,pos.col,pos.row).fog)){
+      const p=center(map,pos.col,pos.row,unit);
+      const group=svgEl(svg,'g',{'class':'brpg-atlas-party','pointer-events':'none'});
+      svgEl(group,'circle',{cx:p.x,cy:p.y,r:13,fill:'#226c6a',stroke:'#f6efd8','stroke-width':2.8});
+      svgEl(group,'text',{x:p.x,y:p.y+1,'text-anchor':'middle','dominant-baseline':'middle',
+        'font-size':10,'font-weight':'bold',fill:'#fff'},'G');
+      svgEl(group,'title',{},'Posição atual do grupo');
+    }
   }
   let painting=false,pending=new Set();
   const posFromEvent=e=>{
@@ -8476,7 +8689,8 @@ const {setIcon}=require('obsidian');
 const { CalendarEngine, MAX_YEAR, clockText }=load("calendar.js");
 const { CONDITIONS,weatherDay }=load("weather.js");
 const { el,button,select,input,info,Confirm }=load("ui.js");
-const { step, requireMesa }=load("mesa.js");
+const { step, requireMesa,buildRunning }=load("mesa.js");
+const {MODES}=load("exploration.js");
 const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionNote,finishSession }=load("session.js");
 const { unpack,place }=load("atlas.js");
 
@@ -8623,6 +8837,99 @@ function renderLocation(root,view,overview){
  }),{icon:'map-pin'});
  button(actions,'Mostrar no mapa',run(plugin,()=>openCampaignMap(plugin,campaign,session.map,session.cell)),{icon:'map'});
 }
+
+function travelCheckbox(root,label,value,onChange){
+ const wrap=el(root,'label','brpg-session-travel-option');
+ const tick=el(wrap,'input');tick.type='checkbox';tick.checked=!!value;
+ el(wrap,'span','',label);tick.addEventListener('change',()=>onChange(tick.checked));
+ return tick;
+}
+function travelOptions(view){
+ view.travelSettings ||= {travelMode:'walk',minutesPerUnit:60,advance:false,reveal:false,moveTokens:true};
+ return {...view.travelSettings,destination:view.travelToDraft||''};
+}
+function renderTravel(root,view,overview){
+ const plugin=view.plugin,s=overview.session,map=overview.map;
+ const box=panel(root,'Exploração e viagens','route');
+ if(!map||!s.cell){
+   info(box,'Marque o mapa e a posição inicial do grupo. Depois será possível planejar uma rota até qualquer célula acessível.');
+   button(row(box),'Escolher posição no Atlas',run(plugin,()=>openCampaignMap(plugin,overview.campaign,s.map||'',s.cell)),{icon:'map'});
+   return;
+ }
+ if(s.status!=='active')info(box,'A sessão está pausada. Retome-a antes de movimentar o grupo.');
+ const opts=view.travelSettings ||= {travelMode:'walk',minutesPerUnit:60,advance:false,reveal:false,moveTokens:true};
+ const invalidate=()=>{view.travelPreview=null;};
+ info(box,'Origem · '+s.cell+(map.cells[s.cell]?.label?' · '+map.cells[s.cell].label:'')+' · '+map.name);
+ const target=row(box);
+ input(target,'Destino (coluna,linha)',view.travelToDraft||'',v=>{view.travelToDraft=v;invalidate();},{maxLength:8});
+ const places=Object.entries(map.cells).filter(([at,c])=>at!==s.cell&&(c.label||c.entry||c.note||c.encounter)).slice(0,100);
+ labelSelect(box,'Destinos marcados',[['','Selecionar um lugar'],...places.map(([at,c])=>[at,(c.label||c.region||'Local')+' · '+at])],
+   places.some(([at])=>at===view.travelToDraft)?view.travelToDraft:'',
+   v=>{view.travelToDraft=v;invalidate();view.render();});
+ const settings=el(box,'div','brpg-session-travel-settings');
+ labelSelect(settings,'Deslocamento',Object.entries(MODES).map(([id,item])=>[id,item.name]),opts.travelMode,
+   v=>{opts.travelMode=v;invalidate();});
+ input(settings,'Minutos do mundo por unidade',opts.minutesPerUnit,v=>{opts.minutesPerUnit=v;invalidate();},
+   {type:'number',min:1,max:1440,step:1});
+ const checks=el(box,'div','brpg-session-travel-checks');
+ travelCheckbox(checks,'Avançar calendário manual',opts.advance,v=>{opts.advance=v;invalidate();});
+ travelCheckbox(checks,'Mover tokens dos jogadores na origem',opts.moveTokens,v=>{opts.moveTokens=v;invalidate();});
+ travelCheckbox(checks,'Revelar células percorridas',opts.reveal,v=>{opts.reveal=v;invalidate();});
+ const commands=row(box);
+ button(commands,'Pré-visualizar rota',run(plugin,()=>{
+   const plan=plugin.planTravel(travelOptions(view));
+   view.travelPreview=plan;view.render();
+ }),{icon:'route',disabled:s.status!=='active',className:'brpg-button mod-cta'});
+ button(commands,'Escolher destino no mapa',run(plugin,()=>openCampaignMap(plugin,overview.campaign,map.id,view.travelToDraft||'')),{icon:'map'});
+ const plan=view.travelPreview;
+ const current=travelOptions(view);
+ if(plan&&plan.from===s.cell&&plan.map===map.id&&plan.to===current.destination&&
+    plan.minutesPerUnit===current.minutesPerUnit&&plan.travelMode===current.travelMode&&plan.advance===current.advance){
+   const preview=el(box,'section','brpg-session-travel-preview');
+   el(preview,'strong','','Rota calculada · '+plan.steps+' passos');
+   info(preview,plan.cost+' unidades de terreno · '+plan.minutes+' minutos do mundo'+
+     (plan.advance?' · relógio avança':' · sem alterar o relógio'));
+   if(plan.arrival){
+     const cal=plugin.state.calendars.find(c=>c.id===overview.campaign.calendar);
+     if(cal)info(preview,'Chegada prevista: '+new CalendarEngine(cal).format(plan.arrival)+' · '+clockText(plan.arrival));
+   }
+   if(plan.stops.length)info(preview,'Pontos de interesse: '+plan.stops.map(x=>x.label).slice(0,7).join(' · '));
+   if(plan.events.length)info(preview,'Eventos do calendário: '+plan.events.map(x=>x.title).join(' · '));
+   button(row(preview),'Confirmar deslocamento',run(plugin,async()=>{
+     await plugin.travelSession(current);
+     view.travelPreview=null;view.travelToDraft='';
+   }),{icon:'check',className:'brpg-button mod-cta',disabled:s.status!=='active'});
+ }else if(plan){
+   view.travelPreview=null;
+ }
+ const last=(s.travelLog||[]).at(-1);
+ if(last){
+   const history=el(box,'details','brpg-disclosure brpg-session-travel-history');
+   el(history,'summary','brpg-summary','Última viagem · '+last.from+' → '+last.to);
+   info(history,last.steps+' passos · '+last.minutes+' minutos'+(last.advance?' · tempo avançado':' · tempo preservado'));
+   if(last.events.length)info(history,'Eventos: '+last.events.map(x=>x.title).join(' · '));
+   for(const stop of last.stops){
+     const rowEl=el(history,'div','brpg-session-travel-stop');
+     el(rowEl,'span','',stop.label+' ('+stop.at+')');
+     if(stop.encounter){
+       const saved=plugin.mesa().encounters.find(e=>e.id===stop.encounter&&e.campaign===s.campaign);
+       if(saved)button(rowEl,'Iniciar '+saved.name,()=>{
+         new Confirm(plugin.app,'Iniciar o encontro '+saved.name+'? Isso vai substituir o combate atual apenas se não houver outro ativo.',
+           ()=>plugin.changeMesa(m=>{
+             requireMesa(m.session?.status==='active','Retome a sessão antes de iniciar o encontro.');
+             requireMesa(!m.running,'Finalize o encontro atual antes de iniciar outro.');
+             const encounter=m.encounters.find(e=>e.id===saved.id&&e.campaign===m.session.campaign);
+             requireMesa(!!encounter,'Encontro removido.');
+             m.running=buildRunning(encounter,m);
+           })).open();
+       },{icon:'swords',disabled:!!plugin.mesa().running||s.status!=='active'});
+     }
+     if(stop.table)button(rowEl,'Abrir tabela',run(plugin,()=>plugin.openNote(stop.table)),{icon:'list-ordered'});
+   }
+   if(!last.stops.length&&!last.events.length)info(history,'Nenhum encontro ou evento registrado no caminho.');
+ }
+}
+
 function renderRunning(root,view,overview){
  const m=view.plugin.mesa(),running=m.running;
  if(!running)return;
@@ -8702,6 +9009,7 @@ function renderSessionDashboard(view,root){
  renderRunning(root,view,overview);
  renderQuickTools(root,view,chosen);
  renderLocation(root,view,overview);
+ renderTravel(root,view,overview);
  renderJournal(root,view,overview);
 }
 module.exports={renderSessionDashboard,calendarFor,openCampaignCalendar,openCampaignMap};

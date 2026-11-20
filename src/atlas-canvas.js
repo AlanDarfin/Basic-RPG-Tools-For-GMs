@@ -21,7 +21,7 @@ function hexPoints(x,y,unit){
     return (x+unit*Math.cos(a)).toFixed(2)+','+(y+unit*Math.sin(a)).toFixed(2);
   }).join(' ');
 }
-function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true}) {
+function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',paintTerrain='forest',onPick,onPaint,background='',getTileUrl,regions=true,factions=true,partyAt=''}) {
   host.replaceChildren();
   const viewport=host.ownerDocument.createElement('div');
   viewport.className='brpg-atlas-map-scroll';host.appendChild(viewport);
@@ -88,6 +88,18 @@ function renderMapCanvas(host,map,{mode='inspect',gm=true,zoom=1,selected='',pai
     svgEl(tokens,'circle',{cx:p.x+dx,cy:p.y+dy,r:9,fill:'#533449',stroke:'#f0c9dd','stroke-width':1.4});
     svgEl(tokens,'text',{x:p.x+dx,y:p.y+dy+1,'font-size':10,'text-anchor':'middle',
       'dominant-baseline':'middle',fill:'#fff'},token.name?.slice(0,1).toUpperCase()||'●');
+  }
+  // The party position is a session marker, not an independent duplicate token.
+  if(partyAt){
+    const pos=unpack(partyAt);
+    if(pos&&inMap(map,pos.col,pos.row)&&(gm||!getCell(map,pos.col,pos.row).fog)){
+      const p=center(map,pos.col,pos.row,unit);
+      const group=svgEl(svg,'g',{'class':'brpg-atlas-party','pointer-events':'none'});
+      svgEl(group,'circle',{cx:p.x,cy:p.y,r:13,fill:'#226c6a',stroke:'#f6efd8','stroke-width':2.8});
+      svgEl(group,'text',{x:p.x,y:p.y+1,'text-anchor':'middle','dominant-baseline':'middle',
+        'font-size':10,'font-weight':'bold',fill:'#fff'},'G');
+      svgEl(group,'title',{},'Posição atual do grupo');
+    }
   }
   let painting=false,pending=new Set();
   const posFromEvent=e=>{

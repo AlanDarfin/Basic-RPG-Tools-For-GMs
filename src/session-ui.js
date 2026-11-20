@@ -3,7 +3,8 @@ const {setIcon}=require('obsidian');
 const { CalendarEngine, MAX_YEAR, clockText }=require('./calendar');
 const { CONDITIONS,weatherDay }=require('./weather');
 const { el,button,select,input,info,Confirm }=require('./ui');
-const { step, requireMesa }=require('./mesa');
+const { step, requireMesa,buildRunning }=require('./mesa');
+const {MODES}=require('./exploration');
 const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionNote,finishSession }=require('./session');
 const { unpack,place }=require('./atlas');
 
@@ -150,6 +151,99 @@ function renderLocation(root,view,overview){
  }),{icon:'map-pin'});
  button(actions,'Mostrar no mapa',run(plugin,()=>openCampaignMap(plugin,campaign,session.map,session.cell)),{icon:'map'});
 }
+
+function travelCheckbox(root,label,value,onChange){
+ const wrap=el(root,'label','brpg-session-travel-option');
+ const tick=el(wrap,'input');tick.type='checkbox';tick.checked=!!value;
+ el(wrap,'span','',label);tick.addEventListener('change',()=>onChange(tick.checked));
+ return tick;
+}
+function travelOptions(view){
+ view.travelSettings ||= {travelMode:'walk',minutesPerUnit:60,advance:false,reveal:false,moveTokens:true};
+ return {...view.travelSettings,destination:view.travelToDraft||''};
+}
+function renderTravel(root,view,overview){
+ const plugin=view.plugin,s=overview.session,map=overview.map;
+ const box=panel(root,'Exploração e viagens','route');
+ if(!map||!s.cell){
+   info(box,'Marque o mapa e a posição inicial do grupo. Depois será possível planejar uma rota até qualquer célula acessível.');
+   button(row(box),'Escolher posição no Atlas',run(plugin,()=>openCampaignMap(plugin,overview.campaign,s.map||'',s.cell)),{icon:'map'});
+   return;
+ }
+ if(s.status!=='active')info(box,'A sessão está pausada. Retome-a antes de movimentar o grupo.');
+ const opts=view.travelSettings ||= {travelMode:'walk',minutesPerUnit:60,advance:false,reveal:false,moveTokens:true};
+ const invalidate=()=>{view.travelPreview=null;};
+ info(box,'Origem · '+s.cell+(map.cells[s.cell]?.label?' · '+map.cells[s.cell].label:'')+' · '+map.name);
+ const target=row(box);
+ input(target,'Destino (coluna,linha)',view.travelToDraft||'',v=>{view.travelToDraft=v;invalidate();},{maxLength:8});
+ const places=Object.entries(map.cells).filter(([at,c])=>at!==s.cell&&(c.label||c.entry||c.note||c.encounter)).slice(0,100);
+ labelSelect(box,'Destinos marcados',[['','Selecionar um lugar'],...places.map(([at,c])=>[at,(c.label||c.region||'Local')+' · '+at])],
+   places.some(([at])=>at===view.travelToDraft)?view.travelToDraft:'',
+   v=>{view.travelToDraft=v;invalidate();view.render();});
+ const settings=el(box,'div','brpg-session-travel-settings');
+ labelSelect(settings,'Deslocamento',Object.entries(MODES).map(([id,item])=>[id,item.name]),opts.travelMode,
+   v=>{opts.travelMode=v;invalidate();});
+ input(settings,'Minutos do mundo por unidade',opts.minutesPerUnit,v=>{opts.minutesPerUnit=v;invalidate();},
+   {type:'number',min:1,max:1440,step:1});
+ const checks=el(box,'div','brpg-session-travel-checks');
+ travelCheckbox(checks,'Avançar calendário manual',opts.advance,v=>{opts.advance=v;invalidate();});
+ travelCheckbox(checks,'Mover tokens dos jogadores na origem',opts.moveTokens,v=>{opts.moveTokens=v;invalidate();});
+ travelCheckbox(checks,'Revelar células percorridas',opts.reveal,v=>{opts.reveal=v;invalidate();});
+ const commands=row(box);
+ button(commands,'Pré-visualizar rota',run(plugin,()=>{
+   const plan=plugin.planTravel(travelOptions(view));
+   view.travelPreview=plan;view.render();
+ }),{icon:'route',disabled:s.status!=='active',className:'brpg-button mod-cta'});
+ button(commands,'Escolher destino no mapa',run(plugin,()=>openCampaignMap(plugin,overview.campaign,map.id,view.travelToDraft||'')),{icon:'map'});
+ const plan=view.travelPreview;
+ const current=travelOptions(view);
+ if(plan&&plan.from===s.cell&&plan.map===map.id&&plan.to===current.destination&&
+    plan.minutesPerUnit===current.minutesPerUnit&&plan.travelMode===current.travelMode&&plan.advance===current.advance){
+   const preview=el(box,'section','brpg-session-travel-preview');
+   el(preview,'strong','','Rota calculada · '+plan.steps+' passos');
+   info(preview,plan.cost+' unidades de terreno · '+plan.minutes+' minutos do mundo'+
+     (plan.advance?' · relógio avança':' · sem alterar o relógio'));
+   if(plan.arrival){
+     const cal=plugin.state.calendars.find(c=>c.id===overview.campaign.calendar);
+     if(cal)info(preview,'Chegada prevista: '+new CalendarEngine(cal).format(plan.arrival)+' · '+clockText(plan.arrival));
+   }
+   if(plan.stops.length)info(preview,'Pontos de interesse: '+plan.stops.map(x=>x.label).slice(0,7).join(' · '));
+   if(plan.events.length)info(preview,'Eventos do calendário: '+plan.events.map(x=>x.title).join(' · '));
+   button(row(preview),'Confirmar deslocamento',run(plugin,async()=>{
+     await plugin.travelSession(current);
+     view.travelPreview=null;view.travelToDraft='';
+   }),{icon:'check',className:'brpg-button mod-cta',disabled:s.status!=='active'});
+ }else if(plan){
+   view.travelPreview=null;
+ }
+ const last=(s.travelLog||[]).at(-1);
+ if(last){
+   const history=el(box,'details','brpg-disclosure brpg-session-travel-history');
+   el(history,'summary','brpg-summary','Última viagem · '+last.from+' → '+last.to);
+   info(history,last.steps+' passos · '+last.minutes+' minutos'+(last.advance?' · tempo avançado':' · tempo preservado'));
+   if(last.events.length)info(history,'Eventos: '+last.events.map(x=>x.title).join(' · '));
+   for(const stop of last.stops){
+     const rowEl=el(history,'div','brpg-session-travel-stop');
+     el(rowEl,'span','',stop.label+' ('+stop.at+')');
+     if(stop.encounter){
+       const saved=plugin.mesa().encounters.find(e=>e.id===stop.encounter&&e.campaign===s.campaign);
+       if(saved)button(rowEl,'Iniciar '+saved.name,()=>{
+         new Confirm(plugin.app,'Iniciar o encontro '+saved.name+'? Isso vai substituir o combate atual apenas se não houver outro ativo.',
+           ()=>plugin.changeMesa(m=>{
+             requireMesa(m.session?.status==='active','Retome a sessão antes de iniciar o encontro.');
+             requireMesa(!m.running,'Finalize o encontro atual antes de iniciar outro.');
+             const encounter=m.encounters.find(e=>e.id===saved.id&&e.campaign===m.session.campaign);
+             requireMesa(!!encounter,'Encontro removido.');
+             m.running=buildRunning(encounter,m);
+           })).open();
+       },{icon:'swords',disabled:!!plugin.mesa().running||s.status!=='active'});
+     }
+     if(stop.table)button(rowEl,'Abrir tabela',run(plugin,()=>plugin.openNote(stop.table)),{icon:'list-ordered'});
+   }
+   if(!last.stops.length&&!last.events.length)info(history,'Nenhum encontro ou evento registrado no caminho.');
+ }
+}
+
 function renderRunning(root,view,overview){
  const m=view.plugin.mesa(),running=m.running;
  if(!running)return;
@@ -229,6 +323,7 @@ function renderSessionDashboard(view,root){
  renderRunning(root,view,overview);
  renderQuickTools(root,view,chosen);
  renderLocation(root,view,overview);
+ renderTravel(root,view,overview);
  renderJournal(root,view,overview);
 }
 module.exports={renderSessionDashboard,calendarFor,openCampaignCalendar,openCampaignMap};
