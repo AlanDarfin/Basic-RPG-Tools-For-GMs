@@ -80,7 +80,7 @@ function yamlSheet(data, campaign = '') {
 function isInit(s) { return !!parseDice(s) || /^[-+]?\d{1,6}$/.test(s); }
 function calcInit(formula, rng) { return parseDice(formula) ? rollDice(formula, rng).total : Number(formula); }
 function checkResource(r) {
-  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome, valor válido e regra de descanso reconhecida.');
+  requireMesa(r && clean(r.name) && whole(r.max, 0, 999999) && whole(r.value, 0, r.max) && (!r.rest || ['max','zero','keep'].includes(r.rest)), 'Cada recurso precisa de nome e de um valor entre zero e o máximo, com regra de descanso válida.');
 }
 function checkSheet(s) {
   requireMesa(s && clean(s.id) && clean(s.name) && Object.hasOwn(KINDS, s.kind), 'Preencha o nome e o tipo da ficha.');
