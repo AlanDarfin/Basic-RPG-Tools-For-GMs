@@ -88,6 +88,8 @@ test('diário e local são arquivados no resumo ao encerrar sessão',()=>{
  assert.match(entry.summary,/Fomos até a ponte/);
  assert.match(entry.summary,/Vale das Brumas/);
  assert.match(entry.summary,/3,5/);
+ assert.equal(entry.sessionJournal.length,1);
+ assert.equal(entry.sessionJournal[0].text,'Fomos até a ponte.');
  assert.equal(checkMesa(m),m);
 });
 test('sessões referenciando entradas excluídas ou localização inválida são rejeitadas',()=>{
@@ -111,5 +113,32 @@ test('resumo de sessão inclui personagem e encontro do próprio grupo',()=>{
  assert.equal(info.players.length,1);
  assert.equal(info.running.name,'Ponte');
  assert.equal(info.calendar.id,'cal1');
+ assert.equal(checkMesa(m),m);
+});
+
+test('o diário estruturado permanece completo quando o resumo atinge o limite',()=>{
+ const {m,campaign}=fixture();
+ const entry=newSessionEntry(m,campaign.id);
+ entry.summary='X'.repeat(9998);
+ startSession(m,campaign.id,entry.id);
+ for(let i=0;i<20;i++)addSessionNote(m,'Anotação completa '+i);
+ finishSession(m);
+ assert.equal(m.session,null);
+ assert.equal(entry.sessionJournal.length,20);
+ assert.equal(entry.sessionJournal[0].text,'Anotação completa 0');
+ assert.equal(entry.sessionJournal.at(-1).text,'Anotação completa 19');
+ assert.ok(entry.summary.length<=10000);
+ assert.equal(checkMesa(m),m);
+});
+test('sessão arquivada pode ser retomada no mesmo registro com diário preservado',()=>{
+ const {m,campaign}=fixture();
+ const initial=startSession(m,campaign.id),savedId=initial.entry;
+ addSessionNote(m,'Primeira parte');
+ finishSession(m);
+ startSession(m,campaign.id,savedId);
+ addSessionNote(m,'Segunda parte');
+ finishSession(m);
+ const entry=m.entries.find(x=>x.id===savedId);
+ assert.deepEqual(entry.sessionJournal.map(x=>x.text),['Primeira parte','Segunda parte']);
  assert.equal(checkMesa(m),m);
 });

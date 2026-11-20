@@ -391,3 +391,5 @@ A API somente leitura \`api.session()\` retorna IDs e status, sem expor notas pr
 
 A Central reúne as ferramentas do mestre, mas não executa viagens, clima ou encontros
 automaticamente. A automação de exploração continua no roteiro da v2.
+
+O diário completo é preservado no campo estruturado `sessionJournal` do registro. O resumo mostra apenas um trecho caso alcance o limite de 10 mil caracteres. A aba **Campanhas** exibe até 30 anotações recentes sem apagar as anteriores.

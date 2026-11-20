@@ -9,6 +9,13 @@ const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.pa
 const nowString=()=>new Date().toISOString();
 
 function checkSession(m){
+ for(const entry of m.entries||[]){
+   if(entry.sessionJournal!==undefined)
+     requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
+       entry.sessionJournal.every(x=>x&&clean(x.id)&&validTimestamp(x.time)&&
+         typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+       'Diário arquivado inválido.');
+ }
  const s=m.session;
  if(s===undefined||s===null)return true;
  requireMesa(s&&typeof s==='object'&&!Array.isArray(s)&&clean(s.id)&&
@@ -89,9 +96,15 @@ function finishSession(m){
  requireMesa(!!entry,'Registro da sessão não encontrado.');
  const location=s.map?'\nLocal: '+(m.atlas?.maps.find(x=>x.id===s.map)?.name||s.map)+(s.cell?' ('+s.cell+')':''):'';
  const lines=s.journal.slice().reverse().map(n=>'- '+n.time.slice(0,16).replace('T',' ')+' · '+n.text.replace(/\n/g,' / '));
+ // Archive the complete structured diary independently of summary size.
+ entry.sessionJournal ||= [];
+ requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
+ entry.sessionJournal.push(...s.journal.slice().reverse());
  const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
  const max=10000;
- entry.summary=(String(entry.summary||'').slice(0,Math.max(0,max-note.length))+note).slice(0,max);
+ const previous=String(entry.summary||'').slice(0,max);
+ const space=Math.max(0,max-previous.length);
+ entry.summary=previous+(space>0?note.slice(-space):'');
  m.session=null;
  return entry;
 }

@@ -6180,6 +6180,13 @@ const validTimestamp=s=>typeof s==='string'&&s.length<=40&&!Number.isNaN(Date.pa
 const nowString=()=>new Date().toISOString();
 
 function checkSession(m){
+ for(const entry of m.entries||[]){
+   if(entry.sessionJournal!==undefined)
+     requireMesa(Array.isArray(entry.sessionJournal)&&entry.sessionJournal.length<=10000&&
+       entry.sessionJournal.every(x=>x&&clean(x.id)&&validTimestamp(x.time)&&
+         typeof x.text==='string'&&x.text.length<=1200&&!!x.text.trim()),
+       'Diário arquivado inválido.');
+ }
  const s=m.session;
  if(s===undefined||s===null)return true;
  requireMesa(s&&typeof s==='object'&&!Array.isArray(s)&&clean(s.id)&&
@@ -6260,9 +6267,15 @@ function finishSession(m){
  requireMesa(!!entry,'Registro da sessão não encontrado.');
  const location=s.map?'\nLocal: '+(m.atlas?.maps.find(x=>x.id===s.map)?.name||s.map)+(s.cell?' ('+s.cell+')':''):'';
  const lines=s.journal.slice().reverse().map(n=>'- '+n.time.slice(0,16).replace('T',' ')+' · '+n.text.replace(/\n/g,' / '));
+ // Archive the complete structured diary independently of summary size.
+ entry.sessionJournal ||= [];
+ requireMesa(entry.sessionJournal.length+s.journal.length<=10000,'Diário do registro cheio. Exporte o histórico antes de acrescentar outra sessão.');
+ entry.sessionJournal.push(...s.journal.slice().reverse());
  const note=('\n\n### Diário da sessão'+location+'\n'+(lines.length?lines.join('\n'):'Sem anotações.'));
  const max=10000;
- entry.summary=(String(entry.summary||'').slice(0,Math.max(0,max-note.length))+note).slice(0,max);
+ const previous=String(entry.summary||'').slice(0,max);
+ const space=Math.max(0,max-previous.length);
+ entry.summary=previous+(space>0?note.slice(-space):'');
  m.session=null;
  return entry;
 }
@@ -8122,6 +8135,15 @@ class MesaView extends ItemView {
         const entry=disclosure(list,ELEMENTS[e.kind] + ' · ' + e.name + (e.date ? ' · ' + e.date.label : ''),this.focusEntry===e.id);
         this.focusEntry = this.focusEntry===e.id ? '' : this.focusEntry;
         if (e.summary) el(entry,'p','brpg-mesa-prose',e.summary);
+        if(e.sessionJournal?.length){
+          const archive=disclosure(entry,'Diário arquivado · '+e.sessionJournal.length);
+          for(const note of e.sessionJournal.slice(-30)){
+            const line=el(archive,'article','brpg-session-note');
+            el(line,'small','brpg-hint',new Date(note.time).toLocaleString('pt-BR'));
+            el(line,'p','brpg-mesa-prose',note.text);
+          }
+          if(e.sessionJournal.length>30)info(archive,'Exibindo as 30 entradas mais recentes. O histórico completo permanece salvo no registro.');
+        }
         const calendar=e.date && p.state.calendars.find(c => c.id===e.date.calendar);
         const actions=row(entry);
         linkedNote(actions,p,e.note);
@@ -8450,6 +8472,7 @@ module.exports={MESA_VIEW,TABS,MesaView,openMesa,registerMesaEmbeds,renameMesaNo
     },
     "session-ui.js": function (module, exports, load, require) {
 'use strict';
+const {setIcon}=require('obsidian');
 const { CalendarEngine, MAX_YEAR, clockText }=load("calendar.js");
 const { CONDITIONS,weatherDay }=load("weather.js");
 const { el,button,select,input,info,Confirm }=load("ui.js");
@@ -8458,10 +8481,11 @@ const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionN
 const { unpack,place }=load("atlas.js");
 
 const row=root=>el(root,'div','brpg-toolbar brpg-session-actions');
+function iconEl(root,name){const span=el(root,'span','brpg-session-icon');setIcon(span,name);return span;}
 function panel(root,title,icon=''){
  const out=el(root,'section','brpg-mesa-panel brpg-session-panel');
  const header=el(out,'div','brpg-session-panel-head');
- if(icon)el(header,'span','brpg-session-panel-icon',icon);
+ if(icon)iconEl(header,icon);
  el(header,'h3','brpg-section-title',title);
  return out;
 }
@@ -8474,7 +8498,7 @@ const run=(plugin,fn)=>()=>plugin.attempt(fn);
 function stat(root,icon,title,value,detail,action){
  const container=el(root,'div','brpg-session-stat');
  const heading=el(container,'div','brpg-session-stat-top');
- el(heading,'span','brpg-session-stat-icon',icon);
+ iconEl(heading,icon);
  el(heading,'span','brpg-session-stat-title',title);
  el(container,'strong','brpg-session-stat-value',value);
  if(detail)el(container,'small','brpg-hint',detail);
@@ -8524,18 +8548,18 @@ function makeContext(root,view,campaign,overview){
  const location=map?(cell?.label||cell?.region|| (overview.session.cell?'Célula '+overview.session.cell:map.name)):'Nenhum mapa selecionado';
  const players=plugin.mesa().sheets.filter(s=>s.kind==='player'&&(!s.campaign||s.campaign===campaign.id)).length;
  const encounter=overview?.running||null;
- stat(grid,'📅','Calendário',dateText,timeText+(campaign.calendar?' · Vinculado':' · Calendário ativo'),
+ stat(grid,'calendar-days','Calendário',dateText,timeText+(campaign.calendar?' · Vinculado':' · Calendário ativo'),
    run(plugin,()=>openCampaignCalendar(plugin,campaign)));
- stat(grid,'🌦','Clima',weatherText,weatherDetail||'Configure o clima no calendário',
+ stat(grid,'cloud-sun','Clima',weatherText,weatherDetail||'Configure o clima no calendário',
    run(plugin,()=>openCampaignCalendar(plugin,campaign,true)));
- stat(grid,'🗺️','Localização',location,map?.name||'Abra o Atlas para definir um local',
+ stat(grid,'map','Localização',location,map?.name||'Abra o Atlas para definir um local',
    run(plugin,()=>openCampaignMap(plugin,campaign,map?.id||'',overview?.session.cell||'')));
- stat(grid,'⚔️','Encontro',encounter?'Rodada '+encounter.round:'Nenhum encontro ativo',
+ stat(grid,'swords','Encontro',encounter?'Rodada '+encounter.round:'Nenhum encontro ativo',
    encounter?('Turno de '+(encounter.members.find(x=>x.id===encounter.turn)?.name||'participante')):players+' personagem(ns) no bestiário',
    ()=>view.show('encounters'));
 }
 function renderQuickTools(root,view,campaign){
- const plugin=view.plugin,box=panel(root,'Ferramentas da sessão','⚡'),toolbar=row(box);
+ const plugin=view.plugin,box=panel(root,'Ferramentas da sessão','zap'),toolbar=row(box);
  const items=[
   ['Dados','dices',()=>plugin.openSolo('dice',true)],
   ['Oráculos','sparkles',()=>plugin.openSolo('oracle',true)],
@@ -8549,7 +8573,7 @@ function renderQuickTools(root,view,campaign){
  for(const [name,icon,fn]of items)button(toolbar,name,run(plugin,fn),{icon});
 }
 function renderJournal(root,view,overview){
- const plugin=view.plugin,s=overview.session,box=panel(root,'Diário rápido','📝');
+ const plugin=view.plugin,s=overview.session,box=panel(root,'Diário rápido','notebook-pen');
  info(box,'Anotações ficam vinculadas à sessão. Ao encerrar, o diário é acrescentado ao registro da campanha.');
  input(box,'Anotação',view.sessionNoteDraft||'',v=>{view.sessionNoteDraft=v;},
    {multiline:true,rows:2,maxLength:1200});
@@ -8574,7 +8598,7 @@ function renderJournal(root,view,overview){
 }
 function renderLocation(root,view,overview){
  const plugin=view.plugin,session=overview.session,campaign=overview.campaign;
- const box=panel(root,'Localização da sessão','📍');
+ const box=panel(root,'Localização da sessão','map-pin');
  const maps=plugin.mesa().atlas?.maps.filter(m=>m.campaign===campaign.id)||[];
  if(!maps.length){
    info(box,'A campanha ainda não tem mapas. Abra o Atlas para criar um ou escolher um modelo.');
@@ -8602,7 +8626,7 @@ function renderLocation(root,view,overview){
 function renderRunning(root,view,overview){
  const m=view.plugin.mesa(),running=m.running;
  if(!running)return;
- const box=panel(root,'Combate em andamento','⚔️');
+ const box=panel(root,'Combate em andamento','swords');
  if(running.campaign!==overview.campaign.id){
    info(box,'Existe um encontro ativo em outra campanha. A Mesa mantém um único combate por vez.');
    return;
@@ -8619,7 +8643,7 @@ function renderRunning(root,view,overview){
  })),{icon:'chevron-right',disabled:overview.session.status!=='active'});
 }
 function renderStart(root,view,campaign){
- const plugin=view.plugin,m=plugin.mesa(),box=panel(root,'Iniciar sessão','▶');
+ const plugin=view.plugin,m=plugin.mesa(),box=panel(root,'Iniciar sessão','play');
  if(!campaign)return info(box,'Crie uma campanha na aba Campanhas para iniciar uma sessão.');
  info(box,'Crie um registro novo ou retome um registro de sessão existente. O diário e a localização serão restaurados quando reabrir o Obsidian.');
  const entries=m.entries.filter(e=>e.campaign===campaign.id&&e.kind==='session');
@@ -8646,7 +8670,7 @@ function renderSessionDashboard(view,root){
    return;
  }
  if(session&&session.campaign!==chosen.id){
-   const notice=panel(root,'Outra sessão em andamento','ℹ');
+   const notice=panel(root,'Outra sessão em andamento','info');
    info(notice,'Há uma sessão ativa ou pausada na campanha '+(m.campaigns.find(x=>x.id===session.campaign)?.name||'desconhecida')+'.');
    button(row(notice),'Abrir sessão atual',()=>{view.campaign=session.campaign;view.render();},{icon:'play'});
    makeContext(root,view,chosen,null);
@@ -8660,7 +8684,7 @@ function renderSessionDashboard(view,root){
    return;
  }
  const overview=sessionInfo(m,plugin.state.calendars);
- const header=panel(root,overview.entry?.name||'Sessão atual','🎲');
+ const header=panel(root,overview.entry?.name||'Sessão atual','dices');
  const tag=el(header,'div','brpg-session-status');
  el(tag,'span','brpg-chip',session.status==='active'?'Em andamento':'Pausada');
  el(tag,'span','brpg-hint',overview.campaign?.name||'Campanha');

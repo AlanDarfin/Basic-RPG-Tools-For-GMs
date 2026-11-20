@@ -253,6 +253,15 @@ class MesaView extends ItemView {
         const entry=disclosure(list,ELEMENTS[e.kind] + ' · ' + e.name + (e.date ? ' · ' + e.date.label : ''),this.focusEntry===e.id);
         this.focusEntry = this.focusEntry===e.id ? '' : this.focusEntry;
         if (e.summary) el(entry,'p','brpg-mesa-prose',e.summary);
+        if(e.sessionJournal?.length){
+          const archive=disclosure(entry,'Diário arquivado · '+e.sessionJournal.length);
+          for(const note of e.sessionJournal.slice(-30)){
+            const line=el(archive,'article','brpg-session-note');
+            el(line,'small','brpg-hint',new Date(note.time).toLocaleString('pt-BR'));
+            el(line,'p','brpg-mesa-prose',note.text);
+          }
+          if(e.sessionJournal.length>30)info(archive,'Exibindo as 30 entradas mais recentes. O histórico completo permanece salvo no registro.');
+        }
         const calendar=e.date && p.state.calendars.find(c => c.id===e.date.calendar);
         const actions=row(entry);
         linkedNote(actions,p,e.note);

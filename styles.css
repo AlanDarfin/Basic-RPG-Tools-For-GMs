@@ -891,3 +891,6 @@
  .brpg-mesa-tabs .brpg-button{min-width:36px;flex:0 0 auto;padding:6px 8px}
 }
 @media(max-width:330px){.brpg-session-context{grid-template-columns:minmax(0,1fr)}}
+
+.brpg-session-icon{display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;flex:0 0 16px;color:var(--text-muted)}
+.brpg-session-icon svg{width:16px;height:16px}
