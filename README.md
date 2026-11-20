@@ -364,3 +364,30 @@ navegação ou cartografia precisa. Sua topografia foi simplificada para explora
 A v1.5.0 é **a primeira etapa de preparação para a v2**, não a v2 completa.
 Ainda falta a Central de Sessão, otimização de gravação de mapas grandes, importar mapas antigos
 e testar a interface manualmente no Obsidian Android.
+
+
+## Central de Sessão (v1.6.0)
+
+A primeira aba da **Mesa → Sessão** reúne o progresso da campanha e as ferramentas mais usadas.
+Ela mostra a data do calendário vinculado (ou do calendário ativo quando nenhum foi definido),
+a previsão do clima, o lugar atual do Atlas, os personagens e o combate em andamento.
+
+**Iniciar sessão:** escolha uma campanha e crie um novo registro de sessão ou selecione um
+registro já cadastrado. A sessão é mantida no data.json e pode ser pausada e retomada após
+fechar o Obsidian. Só pode haver uma sessão ativa ou pausada por cofre.
+
+**Diário rápido:** registre notas durante a sessão; ao encerrar, as entradas são transferidas
+para o resumo do registro de sessão. O fim da sessão não apaga um encontro em andamento.
+**Localização:** escolha um mapa da campanha, informe coordenadas no formato coluna,linha ou
+abra o Atlas e toque em **Marcar como local da sessão** na célula. O painel atualiza os atalhos e
+mostra a região e o nome do local quando disponíveis.
+
+**Ações rápidas:** Dados, Oráculos, Baralhos, Fichas, Encontros, Estúdio, Atlas e Relações.
+Um encontro da campanha aparece no painel com rodada, turno e avanço manual; esse avanço
+é desabilitado enquanto a sessão estiver pausada.
+
+As sessões são opcionais: dados antigos continuam válidos, sem criar registros automaticamente.
+A API somente leitura \`api.session()\` retorna IDs e status, sem expor notas privadas.
+
+A Central reúne as ferramentas do mestre, mas não executa viagens, clima ou encontros
+automaticamente. A automação de exploração continua no roteiro da v2.

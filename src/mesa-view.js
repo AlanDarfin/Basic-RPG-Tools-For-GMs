@@ -10,7 +10,8 @@ const {
 } = require('./mesa');
 
 const MESA_VIEW = 'basic-rpg-mesa';
-const TABS = [['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
+const {renderSessionDashboard}=require('./session-ui');
+const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
   const section = el(root, 'section', 'brpg-mesa-panel');
@@ -135,7 +136,7 @@ function editableRows(root, modal, draft, prop, title, addLabel, make, render, l
 }
 class MesaView extends ItemView {
   constructor(leaf,plugin) {
-    super(leaf); this.plugin=plugin; this.tab=plugin.mesa().running ? 'encounters' : 'campaigns'; this.campaign=''; this.filter=''; this.sheetType='';
+    super(leaf); this.plugin=plugin; this.tab='dashboard'; this.campaign=plugin.mesa().session?.campaign||''; this.filter=''; this.sheetType='';
   }
   getViewType() { return MESA_VIEW; }
   getDisplayText() { return 'Basic RPG · Mesa'; }
@@ -169,7 +170,8 @@ class MesaView extends ItemView {
     const scope=el(root,'div','brpg-mesa-scope');
     labelSelect(scope,'Campanha',choice(this.m.campaigns,'Sem filtro de campanha'),this.campaign,v => { this.campaign=v; this.render(); });
     const content=el(root,'div','brpg-mesa-content');
-    if (this.tab==='campaigns') this.campaignsPane(content);
+    if (this.tab==='dashboard') renderSessionDashboard(this,content);
+    else if (this.tab==='campaigns') this.campaignsPane(content);
     else if (this.tab==='sheets') this.sheetsPane(content);
     else if (this.tab==='encounters') this.encountersPane(content);
     else this.plugin.ultra?.render(this,content);
@@ -232,6 +234,7 @@ class MesaView extends ItemView {
     button(controls,'Editar campanha',() => this.campaignEditor(current),{icon:'pencil'});
     cta(controls,'Novo registro',() => this.entryEditor(current),'plus');
     button(controls,'Excluir campanha',() => this.remove('Excluir a campanha vazia? Nenhuma nota será apagada.',m => {
+      requireMesa(m.session?.campaign!==current.id,'Finalize a sessão ativa antes de excluir a campanha.');
       requireMesa(![...m.entries,...m.sheets,...m.encounters,...(m.atlas?.maps||[]),m.running].some(x => x?.campaign===current.id),
         'Remova os registros e encontros ou mova as fichas para outra campanha antes de excluir.');
       m.campaigns=m.campaigns.filter(x => x.id!==current.id);
@@ -257,6 +260,7 @@ class MesaView extends ItemView {
         button(actions,'Editar registro',() => this.entryEditor(current,e),{icon:'pencil'});
         button(actions,'Criar encontro',() => this.encounterEditor(null,e),{icon:'swords'});
         button(actions,'Excluir registro',() => this.remove('Excluir este registro da campanha?',m => {
+          requireMesa(m.session?.entry!==e.id,'Finalize a sessão antes de excluir seu registro.');
           m.entries=m.entries.filter(x => x.id!==e.id);
           if(m.atlas){for(const map of m.atlas.maps)for(const cell of Object.values(map.cells))if(cell.entry===e.id)delete cell.entry;
           m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='entry:'+e.id&&x.to!=='entry:'+e.id);}
