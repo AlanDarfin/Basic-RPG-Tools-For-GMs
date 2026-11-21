@@ -29,8 +29,7 @@ function record(m, title, detail, type='sistema') {
   return item;
 }
 function activeResources(m,sheet) {
-  m.sheetStates ||= {};
-  const saved=m.sheetStates[sheet.id];
+  const saved=m.sheetStates?.[sheet.id];
   return sheet.resources.map((r,i) => {
     const found=Array.isArray(saved) ? saved.find(v=>key(v.name)===key(r.name)) : null;
     return {name:r.name,max:r.max,value:clamp(Number.isInteger(found?.value)?found.value:r.value,0,r.max),rest:r.rest||''};

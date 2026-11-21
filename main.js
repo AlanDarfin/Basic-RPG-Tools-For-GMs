@@ -4821,6 +4821,7 @@ function checkMesa(m) {
   }
   if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
   if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
+  load("creation.js").checkTemplates(m);
   const campaigns = new Set(m.campaigns.map(c => c.id));
   const entries = new Map(m.entries.map(e => [e.id,e]));
   const sheets = new Map(m.sheets.map(s => [s.id,s]));
@@ -4885,7 +4886,7 @@ function buildRunning(data, m, rng = Math.random) {
     const shared = data.grouped ? calcInit(initiative, rng) : null;
     for (let i = 0; i < n; i++) {
       members.push({ id: uid('turn'), name: n === 1 ? label : label + ' ' + (i + 1), initiative: shared ?? calcInit(initiative, rng),
-        seed: members.length, side: line.side, resources: copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
+        seed: members.length, side: line.side, resources: s?.kind==='player'&&line.side==='players'&&n===1 ? load("ultra.js").activeResources(m,s) : copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
     }
   }
   order(members);
@@ -5056,8 +5057,7 @@ function record(m, title, detail, type='sistema') {
   return item;
 }
 function activeResources(m,sheet) {
-  m.sheetStates ||= {};
-  const saved=m.sheetStates[sheet.id];
+  const saved=m.sheetStates?.[sheet.id];
   return sheet.resources.map((r,i) => {
     const found=Array.isArray(saved) ? saved.find(v=>key(v.name)===key(r.name)) : null;
     return {name:r.name,max:r.max,value:clamp(Number.isInteger(found?.value)?found.value:r.value,0,r.max),rest:r.rest||''};
@@ -5488,6 +5488,115 @@ function sessionInfo(m,calendars=[]){
 }
 module.exports={MAX_JOURNAL,checkSession,nextName,newSessionEntry,startSession,
  setSessionStatus,setSessionLocation,addSessionNote,finishSession,sessionInfo};
+
+    },
+    "creation.js": function (module, exports, load, require) {
+'use strict';
+const {copy,uid}=load("calendar.js");
+const {clean,key,clamp}=load("solo.js");
+const {newSheet,arkanisSheet,checkSheet,newEntry,newEncounter,checkEncounter,requireMesa,LIMITS}=load("mesa.js");
+const {unpack,inMap,setCell}=load("atlas.js");
+
+const PRESETS=[
+ ['arkanis','Arkanis'],['hero','Herói genérico'],['npc','NPC de interação'],['creature','Criatura de combate'],['investigator','Investigador']
+];
+function presetSheet(id,campaign=''){
+ requireMesa(PRESETS.some(p=>p[0]===id),'Modelo inexistente.');
+ if(id==='arkanis')return arkanisSheet(campaign);
+ const s=newSheet(campaign);
+ const res=(name,max,value=max,rest='max')=>({name,max,value,rest});
+ const attr=(name,value)=>({name,value:String(value)});
+ const action=(name,roll,damage='',cost='',extra={})=>({name,roll,damage,cost,text:'',group:'Ação',...extra});
+ if(id==='hero'){
+  s.name='Herói';s.kind='player';s.attributes=[attr('Defesa',12),attr('Força',2),attr('Vontade',1)];
+  s.resources=[res('Vida',12),res('Energia',6)];s.actions=[action('Golpe','1d20+2','1d6','',{defense:'Defesa'}),action('Recuperar','','1d4','Energia:1',{resolution:'heal'})];
+ }else if(id==='npc'){
+  s.name='NPC';s.kind='npc';s.attributes=[attr('Defesa',10),attr('Persuasão',2),attr('Vontade',1)];
+  s.resources=[res('Vida',8)];s.actions=[action('Negociar','1d20+2')];
+ }else if(id==='creature'){
+  s.name='Criatura';s.attributes=[attr('CA',12),attr('Vontade',0)];s.resources=[res('Vida',8)];s.actions=[action('Ataque','1d20+2','1d6')];
+ }else{
+  s.name='Investigador';s.kind='player';s.attributes=[attr('Defesa',10),attr('Investigação',3),attr('Vontade',2)];
+  s.resources=[res('Vida',8),res('Estresse',10,0,'zero')];s.actions=[action('Investigar','1d20+3'),action('Resistir','1d20+2')];
+ }
+ s.type='Exemplo editável';return checkSheet(s);
+}
+function templateList(m){return m.sheetTemplates||[];}
+function checkTemplates(m){
+ const t=templateList(m);
+ requireMesa(Array.isArray(t)&&t.length<=100,'Biblioteca de modelos inválida ou cheia.');
+ const ids=new Set();
+ for(const s of t){
+  checkSheet(s);requireMesa(!s.campaign&&!s.note&&!s.image&&!ids.has(s.id),'Modelo de ficha inválido ou duplicado.');ids.add(s.id);
+ }
+}
+function saveTemplate(m,source,name){
+ const s=copy(source);s.id=uid('template');s.name=clean(name);s.campaign='';s.note='';s.image='';
+ checkSheet(s);m.sheetTemplates ||= [];
+ requireMesa(m.sheetTemplates.length<100,'Limite de 100 modelos.');
+ m.sheetTemplates.push(s);return s;
+}
+function instantiateTemplate(m,id,campaign){
+ if(PRESETS.some(p=>p[0]===id))return presetSheet(id,campaign);
+ const original=templateList(m).find(x=>x.id===id);requireMesa(original,'Modelo removido.');
+ const s=copy(original);s.id=uid('sheet');s.campaign=campaign||'';return s;
+}
+function adventureDraft(rng=Math.random){
+ const {randomContent}=load("ultra.js");
+ const hook=randomContent('hook',rng),site=randomContent('site',rng),npc=randomContent('npc',rng),loot=randomContent('loot',rng),scene=randomContent('encounter',rng);
+ return {title:hook.title,hook:hook.body,site:site.title,siteText:site.body,npc:npc.title,npcText:npc.body,
+ clue:loot.title,clueText:loot.body,scene:scene.title,sceneText:scene.body,map:'',cell:''};
+}
+function saveAdventure(m,campaign,draft,date=null){
+ requireMesa(m.campaigns.some(x=>x.id===campaign),'Escolha uma campanha.');
+ requireMesa(m.entries.length+5<=LIMITS.entries&&m.sheets.length<LIMITS.sheets&&m.encounters.length<LIMITS.encounters,'Biblioteca cheia.');
+ const fields=['title','site','npc','clue','scene'];
+ for(const f of fields)requireMesa(!!clean(draft[f]),'Preencha os nomes da aventura, local, NPC, pista e cena.');
+ let map,coord;
+ if(draft.map||draft.cell){
+  map=m.atlas?.maps.find(x=>x.id===draft.map&&x.campaign===campaign);coord=unpack(draft.cell);
+  requireMesa(map&&coord&&inMap(map,coord.col,coord.row),'Escolha uma célula válida da campanha.');
+  const cell=map.cells[draft.cell]||{};
+  requireMesa(!cell.entry&&!cell.sheet&&!cell.encounter,'A célula já possui vínculos. Escolha outra para não sobrescrevê-los.');
+ }
+ const create=(kind,name,summary)=>({...newEntry(campaign),kind,name:clean(name),summary:clean(summary,10000)});
+ const adventure=create('adventure',draft.title,draft.hook);
+ adventure.date=date?copy(date):null;
+ const site=create('site',draft.site,draft.siteText),npc=create('npc',draft.npc,draft.npcText),clue=create('clue',draft.clue,draft.clueText),scene=create('scene',draft.scene,draft.sceneText);
+ adventure.links=[site.id,npc.id,clue.id,scene.id];site.links=[npc.id,clue.id,scene.id];scene.links=[npc.id,clue.id,site.id];npc.links=[site.id];clue.links=[site.id];
+ const sheet=presetSheet('npc',campaign);sheet.name=npc.name;sheet.description=npc.summary;sheet.type='NPC da aventura';
+ const roster=m.sheets.filter(s=>s.campaign===campaign&&s.kind==='player').slice(0,30).map(s=>({sheet:s.id,name:'',side:'players',count:'1',initiative:''}));
+ const encounter={...newEncounter(campaign),name:scene.name,entry:scene.id,roster:[...roster,{sheet:sheet.id,name:'',side:'neutral',count:'1',initiative:''}]};
+ checkSheet(sheet);checkEncounter(encounter);
+ m.entries.push(adventure,site,npc,clue,scene);m.sheets.push(sheet);m.encounters.push(encounter);
+ if(map)setCell(map,coord.col,coord.row,{entry:site.id,sheet:sheet.id,encounter:encounter.id,label:map.cells[draft.cell]?.label||site.name});
+ if(m.atlas){
+  m.atlas.relations.push({id:uid('rel'),campaign,from:'sheet:'+sheet.id,to:'entry:'+site.id,type:'located',label:''});
+ }
+ return {adventure,site,npc,clue,scene,sheet,encounter};
+}
+// Copy back only unique, explicitly selected player instances; originals remain templates.
+function carryCandidates(m,r=m.running){
+ if(!r)return [];
+ const counts=new Map();for(const p of r.members)if(p.sheet?.id)counts.set(p.sheet.id,(counts.get(p.sheet.id)||0)+1);
+ return r.members.filter(p=>p.side==='players'&&p.sheet?.kind==='player'&&counts.get(p.sheet.id)===1&&m.sheets.some(s=>s.id===p.sheet.id&&s.kind==='player'&&(!s.campaign||s.campaign===r.campaign)));
+}
+function finishEncounter(m,id,persist=false){
+ requireMesa(m.running?.id===id,'O encontro já foi encerrado.');
+ const candidates=persist?carryCandidates(m):[];
+ for(const p of candidates){
+  const sheet=m.sheets.find(s=>s.id===p.sheet.id);
+  m.sheetStates ||= {};
+  m.sheetStates[sheet.id]=sheet.resources.map(r=>{
+   const live=p.resources.find(x=>key(x.name)===key(r.name));
+   const stored=m.sheetStates[sheet.id]?.find(x=>key(x.name)===key(r.name));
+   return {...r,value:clamp(live?.value??stored?.value??r.value,0,r.max)};
+  });
+ }
+ const count=candidates.length;
+ m.running=null;return count;
+}
+module.exports={PRESETS,presetSheet,templateList,checkTemplates,saveTemplate,instantiateTemplate,adventureDraft,saveAdventure,carryCandidates,finishEncounter};
 
     },
     "arkanis.json": function (module, exports, load, require) {
@@ -7081,6 +7190,8 @@ const {
   getAssets,formatAsset,configObject
 }=load("ultra.js");
 const { art }=load("solo-ui.js");
+const {adventureDraft,saveAdventure}=load("creation.js");
+const {CalendarEngine}=load("calendar.js");
 
 function row(root){return el(root,'div','brpg-toolbar brpg-ultra-row');}
 function section(root,title,note){
@@ -7176,6 +7287,27 @@ function renderGenerator(view,root){
     if(!current)info(display,'Crie uma campanha para salvar o conteúdo na Mesa.');
   };
   drawResult();
+  const packet=section(root,'Criar aventura conectada','Gere um conjunto editável de registros, ficha de NPC e encontro, tudo ligado na mesma campanha.');
+  const campaign=()=>view.campaign||view.m.campaigns[0]?.id||'';
+  button(row(packet),'Gerar pacote de aventura',()=>{
+    const draft=adventureDraft();
+    view.edit('Aventura conectada',draft,(form,d,modal)=>{
+      for(const [field,label] of [['title','Aventura'],['site','Local'],['npc','NPC'],['clue','Pista'],['scene','Cena']]){
+        input(form,label,d[field],v=>{d[field]=v;},{maxLength:120});
+        const detail={title:'hook',site:'siteText',npc:'npcText',clue:'clueText',scene:'sceneText'}[field];
+        input(form,'Descrição de '+label,d[detail],v=>{d[detail]=v;},{multiline:true,rows:2,maxLength:3000});
+      }
+      const maps=(view.m.atlas?.maps||[]).filter(x=>x.campaign===campaign());
+      labelled(form,'Mapa (opcional)',[['','Sem mapa'],...maps.map(x=>[x.id,x.name])],d.map,v=>{d.map=v;d.cell='';modal.draw();});
+      if(d.map)input(form,'Célula (coluna,linha)',d.cell,v=>{d.cell=v;},{maxLength:8});
+      info(form,'Será criada uma aventura, local, NPC, pista, cena, ficha do NPC e encontro neutro com os personagens da campanha. Nenhum combate é iniciado.');
+    },async d=>{
+      const camp=plugin.mesa().campaigns.find(x=>x.id===campaign()),cal=plugin.state.calendars.find(x=>x.id===camp?.calendar);
+      let date=null;if(cal){const now=plugin.worldNow(cal);date={calendar:cal.id,date:now,label:new CalendarEngine(cal).format(now)};}
+      const result=await plugin.changeMesa(m=>saveAdventure(m,camp?.id,d,date));
+      view.campaign=camp.id;view.focusEntry=result.adventure.id;view.show('campaigns');
+    });
+  },{icon:'git-branch',disabled:!campaign(),className:'brpg-button mod-cta'});
   const trail=section(root,'Da ideia à campanha');
   info(trail,'Fluxo: gerar NPC, salvar ficha, adicionar a um encontro e executar uma ação pelo painel de combate.');
   button(row(trail),'Abrir fichas',()=>view.show('sheets'),{icon:'contact-round'});
@@ -8229,6 +8361,7 @@ const {
 const MESA_VIEW = 'basic-rpg-mesa';
 const {renderSessionDashboard}=load("session-ui.js");
 const {PRESETS,freshEffect,addEffect,advanceCombat}=load("combat.js");
+const {PRESETS:SHEET_PRESETS,templateList,saveTemplate,instantiateTemplate,carryCandidates,finishEncounter}=load("creation.js");
 const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
@@ -8519,9 +8652,9 @@ class MesaView extends ItemView {
       await this.plugin.changeMesa(m => applySave(m.sheets,sheet));
     });
   }
-  sheetEditor(current,preset,duplicate) {
+  sheetEditor(current,preset,duplicate,template) {
     const draft = current || (duplicate ? { ...copy(duplicate), id:uid('sheet'), name:(duplicate.name.slice(0,105)+' (cópia)') } :
-      preset ? arkanisSheet(this.campaign) : newSheet(this.campaign));
+      template ? instantiateTemplate(this.m,template,this.campaign) : preset ? arkanisSheet(this.campaign) : newSheet(this.campaign));
     this.edit(current?'Editar ficha':'Nova ficha',draft,(root,s,modal) => {
       textFields(root,s,[['name','Nome da ficha',120]]);
       if (current) el(root, 'code', 'brpg-hint', s.id);
@@ -8564,6 +8697,18 @@ class MesaView extends ItemView {
     const actions=row(list);
     cta(actions,'Nova ficha',() => this.sheetEditor(),'plus');
     button(actions,'Modelo Arkanis',() => this.sheetEditor(null,true),{icon:'sparkles'});
+    button(actions,'Galeria de modelos',()=>this.edit('Modelos de fichas',{id:'hero'},(root,d,modal)=>{
+      const models=[...SHEET_PRESETS,...templateList(this.m).map(t=>[t.id,t.name+' (meu modelo)'])];
+      labelSelect(root,'Modelo',models,d.id,v=>{d.id=v;modal.draw();});
+      const model=instantiateTemplate(this.m,d.id,this.campaign);
+      info(root,'Recursos: '+(model.resources.map(r=>r.name+' '+r.value+'/'+r.max).join(' · ')||'Nenhum'));
+      info(root,'Ações: '+(model.actions.map(a=>a.name).join(' · ')||'Nenhuma'));
+      info(root,'Salvar abre uma nova ficha editável. O modelo original permanece intacto.');
+      if(templateList(this.m).some(t=>t.id===d.id))button(row(root),'Excluir modelo',()=>this.remove('Excluir este modelo? As fichas criadas permanecem intactas.',m=>{
+        m.sheetTemplates=m.sheetTemplates.filter(t=>t.id!==d.id);
+        d.id='hero';modal.draw();
+      }),{icon:'trash-2'});
+    },d=>{this.sheetEditor(null,false,null,d.id);}),{icon:'layout-template'});
     button(actions,'Importar ficha',() => this.importSheet(),{icon:'upload'});
     const filter=row(list);
     input(filter,'Buscar fichas',this.filter,v => { this.filter=v; draw(); },{maxLength:120});
@@ -8584,12 +8729,17 @@ class MesaView extends ItemView {
         button(commands,'Abrir ficha',() => new SheetPreview(this.plugin,s).open(),{icon:'eye'});
         button(commands,'Editar ficha',() => this.sheetEditor(s),{icon:'pencil',iconOnly:true});
         button(commands,'Duplicar ficha',() => this.sheetEditor(null,false,s),{icon:'copy',iconOnly:true});
+        button(commands,'Salvar como modelo',()=>this.edit('Salvar modelo de ficha',{name:s.name+' · modelo'},(root,d)=>{
+          input(root,'Nome do modelo',d.name,v=>{d.name=v;},{maxLength:120});
+          info(root,'O modelo guarda atributos, ações e recursos originais, sem vínculo com campanha, nota, retrato ou progresso ao vivo.');
+        },d=>this.plugin.changeMesa(m=>saveTemplate(m,s,d.name))),{icon:'bookmark',iconOnly:true});
         button(commands,'Excluir ficha',() => this.remove('Excluir esta ficha do bestiário?',m => {
           requireMesa(!m.atlas?.maps.some(map=>map.tokens.some(t=>t.sheet===s.id)||Object.values(map.cells).some(c=>c.sheet===s.id)),
             'Remova os vínculos e tokens da ficha nos mapas antes de excluí-la.');
           requireMesa(!m.encounters.some(e => e.roster.some(r => r.sheet===s.id)),
             'Remova a ficha dos encontros salvos antes de excluí-la.');
           m.sheets=m.sheets.filter(x => x.id!==s.id);
+          if(m.sheetStates)delete m.sheetStates[s.id];
           if(m.atlas)m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='sheet:'+s.id&&x.to!=='sheet:'+s.id);
         }),{icon:'trash-2',iconOnly:true});
       }
@@ -8692,8 +8842,9 @@ class MesaView extends ItemView {
     button(commands,'Adicionar participante',() => this.addParticipant(),{icon:'user-plus',iconOnly:true});
     button(commands,'Encerrar encontro',() => this.remove('Encerrar o encontro? O modelo salvo será mantido.',m => {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
-      m.running=null;
+      finishEncounter(m,running.id,false);
     }),{icon:'square',iconOnly:true});
+    if(carryCandidates(this.m,running).length)button(commands,'Encerrar e guardar recursos',()=>this.remove('Encerrar e guardar os recursos atuais dos personagens únicos? As fichas-base e criaturas não serão alteradas.',m=>finishEncounter(m,running.id,true)),{icon:'save'});
     this.plugin.ultra?.renderCombat(this,where,running);
     const orderList=el(where,'div','brpg-mesa-list');
     for (const member of running.members) {

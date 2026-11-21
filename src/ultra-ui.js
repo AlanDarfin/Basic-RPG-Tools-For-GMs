@@ -9,6 +9,8 @@ const {
   getAssets,formatAsset,configObject
 }=require('./ultra');
 const { art }=require('./solo-ui');
+const {adventureDraft,saveAdventure}=require('./creation');
+const {CalendarEngine}=require('./calendar');
 
 function row(root){return el(root,'div','brpg-toolbar brpg-ultra-row');}
 function section(root,title,note){
@@ -104,6 +106,27 @@ function renderGenerator(view,root){
     if(!current)info(display,'Crie uma campanha para salvar o conteúdo na Mesa.');
   };
   drawResult();
+  const packet=section(root,'Criar aventura conectada','Gere um conjunto editável de registros, ficha de NPC e encontro, tudo ligado na mesma campanha.');
+  const campaign=()=>view.campaign||view.m.campaigns[0]?.id||'';
+  button(row(packet),'Gerar pacote de aventura',()=>{
+    const draft=adventureDraft();
+    view.edit('Aventura conectada',draft,(form,d,modal)=>{
+      for(const [field,label] of [['title','Aventura'],['site','Local'],['npc','NPC'],['clue','Pista'],['scene','Cena']]){
+        input(form,label,d[field],v=>{d[field]=v;},{maxLength:120});
+        const detail={title:'hook',site:'siteText',npc:'npcText',clue:'clueText',scene:'sceneText'}[field];
+        input(form,'Descrição de '+label,d[detail],v=>{d[detail]=v;},{multiline:true,rows:2,maxLength:3000});
+      }
+      const maps=(view.m.atlas?.maps||[]).filter(x=>x.campaign===campaign());
+      labelled(form,'Mapa (opcional)',[['','Sem mapa'],...maps.map(x=>[x.id,x.name])],d.map,v=>{d.map=v;d.cell='';modal.draw();});
+      if(d.map)input(form,'Célula (coluna,linha)',d.cell,v=>{d.cell=v;},{maxLength:8});
+      info(form,'Será criada uma aventura, local, NPC, pista, cena, ficha do NPC e encontro neutro com os personagens da campanha. Nenhum combate é iniciado.');
+    },async d=>{
+      const camp=plugin.mesa().campaigns.find(x=>x.id===campaign()),cal=plugin.state.calendars.find(x=>x.id===camp?.calendar);
+      let date=null;if(cal){const now=plugin.worldNow(cal);date={calendar:cal.id,date:now,label:new CalendarEngine(cal).format(now)};}
+      const result=await plugin.changeMesa(m=>saveAdventure(m,camp?.id,d,date));
+      view.campaign=camp.id;view.focusEntry=result.adventure.id;view.show('campaigns');
+    });
+  },{icon:'git-branch',disabled:!campaign(),className:'brpg-button mod-cta'});
   const trail=section(root,'Da ideia à campanha');
   info(trail,'Fluxo: gerar NPC, salvar ficha, adicionar a um encontro e executar uma ação pelo painel de combate.');
   button(row(trail),'Abrir fichas',()=>view.show('sheets'),{icon:'contact-round'});
