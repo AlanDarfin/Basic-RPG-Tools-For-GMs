@@ -189,13 +189,14 @@ function renderCombat(plugin,view,root,running){
   if(!actor)return;
   const actions=actor.sheet?.actions||[];
   if(!actions.length)return info(box,actor.name+' não possui ações configuradas. Edite a ficha de origem.');
+  if(actor.effects?.some(e=>e.blocked))info(box,'O participante está impedido de agir por uma condição.');
   const usable=actions.map((a,i)=>[String(i),a.name+(a.damage?' · '+a.damage:'')]);
   const chosen={action:usable[0][0],target:running.members.find(x=>x.id!==actor.id)?.id||''};
   labelled(box,'Ação',usable,chosen.action,v=>{chosen.action=v;});
   labelled(box,'Alvo',[['','Sem alvo'],...running.members.map(x=>[x.id,x.name])],chosen.target,v=>{chosen.target=v;});
   button(row(box),'Rolar e resolver',run(plugin,()=>plugin.changeMesa(m=>{
-    executeAction(m,actor.id,Number(chosen.action),chosen.target);
-  })),{icon:'dice-5',className:'brpg-button mod-cta'});
+    executeAction(m,actor.id,Number(chosen.action),chosen.target,Math.random,plugin.solo());
+  })),{icon:'dice-5',className:'brpg-button mod-cta',disabled:!!actor.effects?.some(e=>e.blocked)});
   const log=plugin.mesa().activity||[];
   if(log.length){
     const history=el(box,'details','brpg-disclosure');
@@ -204,6 +205,7 @@ function renderCombat(plugin,view,root,running){
       const item=el(history,'article','brpg-ultra-log');
       el(item,'strong','',entry.title);
       el(item,'p','brpg-mesa-prose',entry.detail);
+      if(entry.customRoll?.faces?.length){const faces=el(item,'div','brpg-combat-faces');for(const face of entry.customRoll.faces){if(face.kind==='image')art(faces,plugin,face.image,face.label||'Face do dado',undefined,'brpg-combat-face-image');else el(faces,'span','brpg-chip',face.kind==='number'?String(face.value):face.label);}}
     }
   }
 }

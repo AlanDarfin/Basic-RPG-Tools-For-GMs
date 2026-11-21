@@ -11,6 +11,7 @@ const {
 
 const MESA_VIEW = 'basic-rpg-mesa';
 const {renderSessionDashboard}=require('./session-ui');
+const {PRESETS,freshEffect,addEffect,advanceCombat}=require('./combat');
 const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
@@ -69,12 +70,13 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+    if (a.roll || a.damage || a.customDie) button(line,'Rolar ' + (a.roll || a.damage || 'dado especial'),() => plugin.attempt(async () => {
       if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
-        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a),Math.random,plugin.solo()));
         outcome.textContent=result.entry.detail;
       }else {
-        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+        if(a.customDie){const result=require('./combat').specialRoll(a,plugin.solo(),Math.random);outcome.textContent=a.name+' · '+result.faces.map(require('./combat').faceText).join(', ');}
+        else{const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';}
       }
     }), { icon:'dice-5' });
   }
@@ -323,7 +325,15 @@ class MesaView extends ItemView {
       });
       editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',damage:'',cost:'',group:'Ação'}),(fields,a) => {
         labelSelect(fields,'Grupo',[['Ação','Ação'],['Traço','Traço'],['Reação','Reação']],a.group,v => { a.group=v; });
-        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano automático (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
+        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano ou cura (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
+        const advanced=disclosure(fields,'Regras avançadas');
+        labelSelect(advanced,'Resolução',[['attack','Ataque contra defesa'],['save','Resistência do alvo'],['direct','Dano direto'],['heal','Cura direta']],a.resolution||'attack',v=>{a.resolution=v;});
+        textFields(advanced,a,[['defense','Atributo de defesa (vazio = CA)',120],['targetResource','Recurso alvo (vazio = Vida/HP/PV)',120],['saveAttribute','Atributo de resistência (bônus em 1d20)',120]]);
+        inlineNumber(advanced,'Dificuldade da resistência',a.saveDC??10,v=>{a.saveDC=v;},-100000,100000);
+        labelSelect(advanced,'Ao passar na resistência',[['no','Sem dano'],['half','Metade do dano']],a.halfOnSave?'half':'no',v=>{a.halfOnSave=v==='half';});
+        labelSelect(advanced,'Dado especial adicional',[['','Nenhum'],...this.plugin.solo().dice.map(d=>[d.id,d.name])],a.customDie||'',v=>{a.customDie=v;});
+        inlineNumber(advanced,'Quantidade de dados especiais',a.dieCount||1,v=>{a.dieCount=v;},1,20);
+        info(advanced,'Dados especiais mostram suas faces; a interpretação dos símbolos fica a cargo do mestre.');
       });
     },s => {
       normalized(s,['name','description','note','image','initiative','type']);
@@ -459,9 +469,9 @@ class MesaView extends ItemView {
     el(status,'span','brpg-chip','Rodada '+running.round);
     el(status,'strong','','Vez de '+who.name);
     const commands=row(where);
-    button(commands,'Turno anterior',this.run(() => update(r => step(r,-1))),
-      {icon:'chevron-left',iconOnly:true,disabled:running.round===1 && who.id===running.members[0].id});
-    cta(commands,'Próximo turno',this.run(() => update(r => step(r,1))),'chevron-right');
+    button(commands,'Turno anterior',this.run(() => update((r,m) => advanceCombat(m,-1))),
+      {icon:'chevron-left',iconOnly:true,disabled:!!running.advancedTurns||(running.round===1 && who.id===running.members[0].id)});
+    cta(commands,'Próximo turno',this.run(() => update((r,m) => advanceCombat(m,1))),'chevron-right');
     button(commands,'Adicionar participante',() => this.addParticipant(),{icon:'user-plus',iconOnly:true});
     button(commands,'Encerrar encontro',() => this.remove('Encerrar o encontro? O modelo salvo será mantido.',m => {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
@@ -490,7 +500,31 @@ class MesaView extends ItemView {
         const chips=el(card,'div','brpg-metadata');
         for (const state of member.conditions) el(chips,'span','brpg-chip',state);
       }
+      if(member.effects?.length){
+        const effects=disclosure(card,'Condições automáticas · '+member.effects.length);
+        for(const effect of member.effects){
+          const line=row(effects);
+          el(line,'span','brpg-mesa-effect-name',effect.name+' · '+(effect.rounds?effect.rounds+' turnos':'permanente')+(effect.blocked?' · impede ações':''));
+          button(line,'Remover '+effect.name,this.run(()=>update(r=>{
+            const p=need(r.members,member.id,'Participante não encontrado.');
+            p.effects=(p.effects||[]).filter(e=>e.id!==effect.id);
+          })),{icon:'x',iconOnly:true});
+        }
+      }
       const options=row(card);
+      button(options,'Adicionar condição automática',()=>this.edit('Condição automática',freshEffect(),(editor,draft,modal)=>{
+        labelSelect(editor,'Modelo',[['','Personalizada'],...PRESETS.map((p,i)=>[String(i),p.name])],'',v=>{
+          if(v!==''){Object.assign(draft,freshEffect(PRESETS[Number(v)]));modal.draw();}
+        });
+        input(editor,'Nome',draft.name,v=>{draft.name=v;},{maxLength:120});
+        inlineNumber(editor,'Turnos do alvo (0 = permanente)',draft.rounds,v=>{draft.rounds=v;},0,999);
+        labelSelect(editor,'Efeito no fim do turno',[['none','Nenhum'],['damage','Reduz recurso'],['heal','Restaura recurso']],draft.effect,v=>{draft.effect=v;});
+        labelSelect(editor,'Recurso',[['','Nenhum'],...member.resources.map(r=>[r.name,r.name])],draft.resource,v=>{draft.resource=v;});
+        input(editor,'Dados do efeito (ex. 1d4)',draft.amount,v=>{draft.amount=v;},{maxLength:60});
+        labelSelect(editor,'Impedir ações',[['no','Não'],['yes','Sim']],draft.blocked?'yes':'no',v=>{draft.blocked=v==='yes';});
+        labelSelect(editor,'Resistência no fim do turno',[['','Nenhuma'],...(member.sheet?.attributes||[]).filter(a=>String(a.value).trim()&&Number.isFinite(Number(a.value))).map(a=>[a.name,a.name])],draft.save,v=>{draft.save=v;});
+        inlineNumber(editor,'Dificuldade (1d20 + atributo)',draft.dc,v=>{draft.dc=v;},-100000,100000);
+      },draft=>update(r=>addEffect(r,member.id,draft))),{icon:'shield-plus',iconOnly:true});
       if (member.sheet) button(options,'Ver ficha',() => new SheetPreview(this.plugin,member.sheet).open(),{icon:'eye',iconOnly:true});
       button(options,'Ajustar participante',() => this.edit('Ajustar participante',{
         name:member.name, initiative:member.initiative, conditions:member.conditions.join(', '), resources:copy(member.resources),

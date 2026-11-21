@@ -4773,7 +4773,8 @@ function yamlSheet(data, campaign = '') {
   }
   for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
     for (const x of rows(items)) {
-      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
+      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group,
+      ...Object.fromEntries(['resolution','defense','targetResource','saveAttribute','saveDC','halfOnSave','customDie','dieCount'].filter(k=>x[k]!==undefined).map(k=>[k,x[k]])) });
     }
   }
   d.actions = d.actions.slice(0, LIMITS.fields);
@@ -4792,6 +4793,7 @@ function checkSheet(s) {
   s.resources.forEach(checkResource);
   requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
   for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
+  for(const a of s.actions)load("combat.js").checkAction(a);
   return s;
 }
 function checkEncounter(e) {
@@ -4850,6 +4852,7 @@ function checkMesa(m) {
       p.resources.forEach(checkResource);
       if (p.sheet) checkSheet(p.sheet);
     }
+    load("combat.js").checkAdvanced(f);
   }
   return m;
 }
@@ -4905,6 +4908,454 @@ function changeResource(r, id, i, delta) {
 }
 module.exports = { KINDS, ELEMENTS, SIDES, LIMITS, requireMesa, whole, blankMesa, newCampaign, newEntry, newSheet, resource, arkanisSheet,
   newEncounter, find, need, isInit, checkSheet, checkEncounter, checkMesa, yamlSheet, sourceRoster, order, buildRunning, step, changeResource };
+
+    },
+    "combat.js": function (module, exports, load, require) {
+'use strict';
+const {uid}=load("calendar.js");
+const {key,clean,clamp,parseDice,rollDice,dieRoll}=load("solo.js");
+const ensure=(ok,msg)=>{if(!ok)throw new Error(msg);};
+const integer=(x,min,max)=>Number.isSafeInteger(x)&&x>=min&&x<=max;
+const formula=x=>typeof x==='string'&&x.length<=60&&!!parseDice(x);
+const PRESETS=[
+ {name:'Sangramento',rounds:3,resource:'Vida',amount:'1d4',effect:'damage'},
+ {name:'Envenenado',rounds:3,resource:'Vida',amount:'1d4',effect:'damage'},
+ {name:'Regeneração',rounds:3,resource:'Vida',amount:'1d4',effect:'heal'},
+ {name:'Atordoado',rounds:1,resource:'',amount:'',effect:'none',blocked:true},
+ {name:'Condição personalizada',rounds:1,resource:'',amount:'',effect:'none'}
+];
+function freshEffect(preset=PRESETS[4]){
+ return {id:uid('effect'),name:preset.name,rounds:preset.rounds,resource:preset.resource,amount:preset.amount,
+  effect:preset.effect,blocked:!!preset.blocked,save:'',dc:10};
+}
+function checkEffect(e){
+ ensure(e&&typeof e.id==='string'&&!!e.id&&e.id.length<=150&&typeof e.name==='string'&&!!e.name.trim()&&e.name.length<=120,
+  'Nome ou ID de condição inválido.');
+ ensure(integer(e.rounds,0,999)&&['none','damage','heal'].includes(e.effect)&&typeof e.blocked==='boolean','Duração ou tipo de efeito inválido.');
+ ensure(typeof e.resource==='string'&&e.resource.length<=120&&typeof e.amount==='string'&&
+  (e.effect==='none'||(!!e.resource.trim()&&formula(e.amount))),'Informe recurso e dados válidos para o efeito.');
+ ensure(typeof e.save==='string'&&e.save.length<=120&&integer(e.dc,-100000,100000),'Teste de resistência inválido.');
+ return e;
+}
+function checkAdvanced(r){
+ if(!r)return;
+ ensure(r.advancedTurns===undefined||typeof r.advancedTurns==='boolean','Controle de turnos inválido.');
+ for(const member of r.members){
+  if(member.effects===undefined)continue;
+  ensure(Array.isArray(member.effects)&&member.effects.length<=20&&new Set(member.effects.map(e=>e.id)).size===member.effects.length,'Condições automáticas inválidas.');
+  member.effects.forEach(checkEffect);
+ }
+}
+function attribute(member,name){
+ const a=member?.sheet?.attributes?.find(x=>key(x.name)===key(name));
+ if(!a||!String(a.value).trim())return null;
+ const n=Number(a.value);
+ return Number.isFinite(n)?n:null;
+}
+function resistance(target,name,dc,rng=Math.random){
+ const bonus=attribute(target,name);
+ if(bonus===null)return null;
+ const check=rollDice('1d20',rng);
+ return {total:check.total+bonus,values:check.values,bonus,dc,passed:check.total+bonus>=dc};
+}
+function meter(member,name){
+ return member?.resources?.find(r=>key(r.name)===key(name));
+}
+function addEffect(r,id,e){
+ checkEffect(e);
+ const p=r.members.find(p=>p.id===id);ensure(p,'Participante não encontrado.');
+ ensure(e.effect==='none'||meter(p,e.resource),'O participante não tem esse recurso.');
+ ensure(!e.save||attribute(p,e.save)!==null,'A resistência precisa apontar para um atributo numérico da ficha.');
+ p.effects ||= [];
+ ensure(p.effects.length<20,'Limite de 20 condições automáticas por participante.');
+ p.effects.push({...e});return e;
+}
+function checkAction(a){
+ ensure(!a.defense||(typeof a.defense==='string'&&a.defense.length<=120),'Atributo de defesa inválido.');
+ ensure(!a.resolution||['attack','save','direct','heal'].includes(a.resolution),'Modo de resolução inválido.');
+ ensure(!a.targetResource||(typeof a.targetResource==='string'&&a.targetResource.length<=120),'Recurso alvo inválido.');
+ ensure(a.saveDC===undefined||integer(a.saveDC,-100000,100000),'Dificuldade inválida.');
+ ensure(!a.saveAttribute||(typeof a.saveAttribute==='string'&&a.saveAttribute.length<=120),'Atributo de resistência inválido.');
+ ensure(a.halfOnSave===undefined||typeof a.halfOnSave==='boolean','Regra de resistência inválida.');
+ if(a.resolution==='save')ensure(!!a.saveAttribute&&integer(a.saveDC,-100000,100000),'Informe atributo e dificuldade para a resistência.');
+ ensure(!a.customDie||(typeof a.customDie==='string'&&a.customDie.length<=150),'Dado personalizado inválido.');
+ ensure(a.dieCount===undefined||integer(a.dieCount,1,20),'Role de 1 a 20 dados personalizados por ação.');
+}
+function specialRoll(a,solo,rng){
+ if(!a.customDie)return null;
+ const die=solo?.dice?.find(x=>x.id===a.customDie);
+ ensure(die,'O dado personalizado da ação não está na biblioteca do Kit Solo.');
+ const result=dieRoll(die,a.dieCount||1,rng);
+ return {name:die.name,total:result.total,faces:result.faces.map(f=>({...f}))};
+}
+function faceText(f){return f.kind==='number'?String(f.value):f.label||f.image||'Face';}
+// Resolve effects only at the end of the owner's turn. Resistances are explicit flat bonuses.
+function advanceCombat(m,direction=1,rng=Math.random){
+ const r=m.running;ensure(r,'Nenhum encontro em andamento.');
+ const {step}=load("mesa.js");
+ const {record}=load("ultra.js");
+ if(direction<0){
+  ensure(!r.advancedTurns,'Não é possível retroceder turnos após efeitos automáticos. Ajuste recursos manualmente.');
+  step(r,-1);return [];
+ }
+ ensure(direction===1,'Direção inválida.');
+ const p=r.members.find(x=>x.id===r.turn);ensure(p,'Participante atual não encontrado.');
+ if(r.round===999999&&p.id===r.members.at(-1).id)throw new Error('O encontro atingiu o limite de rodadas.');
+ const notes=[];
+ for(const e of p.effects||[]){
+  const save=e.save?resistance(p,e.save,e.dc,rng):null;
+  if(save?.passed){notes.push(e.name+' · resistência '+save.total+' / '+e.dc+' · removida');e.expired=true;continue;}
+  if(e.save&&save===null)notes.push(e.name+' · resistência indisponível');
+  else if(save)notes.push(e.name+' · resistência '+save.total+' / '+e.dc+' · falhou');
+  if(e.effect!=='none'){
+   const target=meter(p,e.resource);
+   if(target){
+    const n=Math.max(0,rollDice(e.amount,rng).total),before=target.value;
+    target.value=clamp(target.value+(e.effect==='heal'?n:-n),0,target.max);
+    notes.push(e.name+' · '+e.resource+' '+(target.value-before>=0?'+':'')+(target.value-before)+' ('+target.value+'/'+target.max+')');
+   }else notes.push(e.name+' · recurso não encontrado');
+  }
+  if(e.rounds>0&&--e.rounds===0){e.expired=true;notes.push(e.name+' · duração encerrada');}
+ }
+ if(p.effects?.length){r.advancedTurns=true;p.effects=p.effects.filter(e=>!e.expired);}
+ if(notes.length)record(m,p.name+' · fim do turno',notes.join(' · '),'condição');
+ step(r,1);return notes;
+}
+module.exports={PRESETS,freshEffect,checkEffect,checkAdvanced,checkAction,attribute,resistance,meter,addEffect,specialRoll,faceText,advanceCombat};
+
+    },
+    "ultra.js": function (module, exports, load, require) {
+'use strict';
+const { copy, uid } = load("calendar.js");
+const { key, clean, clamp, rollDice, parseDice, pick } = load("solo.js");
+const { DICT } = load("solo-tables.js");
+const { requireMesa } = load("mesa.js");
+const {attribute,resistance,meter,specialRoll,faceText}=load("combat.js");
+
+const CONTENT = Object.freeze({
+ npc: 'Personagem / NPC', site: 'Local / Povoado', tavern: 'Taverna', hook: 'Gancho de aventura', loot: 'Tesouro', encounter: 'Ideia de encontro'
+});
+const FIRST = ['Arlen','Vera','Eldric','Liora','Nara','Darian','Mira','Thorne','Kael','Ysara','Malek','Serin','Rhana','Lys','Fenric'];
+const LAST = ['dos Vales','da Ponte','Noctis','da Névoa','Ventor','de Cinzabruma','do Norte','Auri','do Ferro'];
+const ADJ = ['antiga','perdida','silenciosa','escondida','amaldiçoada','esquecida','radiante','abandonada'];
+const NAMES = ['Coroa','Ponte','Lanterna','Vale','Corvo','Carvalho','Rosa','Luar','Último Sol','Viajante'];
+const LOCATION = ['vale coberto de névoa','porto distante','passagem entre montanhas','estrada esquecida','vilarejo fortificado','floresta de pinheiros'];
+const DETAILS = ['um segredo da família real','uma dívida não paga','um mapa desaparecido','uma relíquia selada','um crime nunca resolvido','um pacto proibido'];
+function roll(formula,rng=Math.random) {
+  const text=String(formula||'').trim();
+  requireMesa(text.length>0 && text.length<=60, 'Expressão de dado inválida.');
+  if (/^[-+]?\d{1,7}$/.test(text)) return {total:Number(text),values:[Number(text)]};
+  requireMesa(!!parseDice(text), 'Use uma expressão como 1d20+3.');
+  return rollDice(text,rng);
+}
+function record(m, title, detail, type='sistema') {
+  m.activity ||= [];
+  const item={id:uid('log'),time:new Date().toISOString(),title:clean(title,160),detail:clean(detail,1000),type};
+  m.activity.unshift(item);
+  m.activity=m.activity.slice(0,150);
+  return item;
+}
+function activeResources(m,sheet) {
+  m.sheetStates ||= {};
+  const saved=m.sheetStates[sheet.id];
+  return sheet.resources.map((r,i) => {
+    const found=Array.isArray(saved) ? saved.find(v=>key(v.name)===key(r.name)) : null;
+    return {name:r.name,max:r.max,value:clamp(Number.isInteger(found?.value)?found.value:r.value,0,r.max),rest:r.rest||''};
+  });
+}
+function updateSheetResource(m,id,name,delta) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada na biblioteca.');
+  requireMesa(Number.isSafeInteger(delta)&&Math.abs(delta)<=100000,'Ajuste de recurso inválido.');
+  const resources=activeResources(m,s);
+  const r=resources.find(x=>key(x.name)===key(name));
+  requireMesa(!!r,'Recurso não encontrado.');
+  r.value=clamp(r.value+delta,0,r.max);
+  m.sheetStates ||= {}; m.sheetStates[id]=resources;
+  record(m,s.name, r.name+': '+r.value+'/'+r.max,'recurso');
+  return r;
+}
+function restResources(resources) {
+  for(const r of resources) {
+    const strategy=r.rest || (r.value===0 && r.max>0 ? 'zero':'max');
+    if(strategy==='max') r.value=r.max;
+    if(strategy==='zero') r.value=0;
+  }
+  return resources;
+}
+function restSheet(m,id) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const resources=activeResources(m,s);
+  for(const r of resources){
+    if(!r.rest){ const original=s.resources.find(x=>key(x.name)===key(r.name));r.rest=original?.value===0?'zero':'max'; }
+  }
+  restResources(resources);
+  m.sheetStates ||= {};m.sheetStates[id]=resources;
+  record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
+  return resources;
+}
+function executeSheetAction(m,id,actionIndex,rng=Math.random,solo=null) {
+  const s=m.sheets.find(x=>x.id===id);
+  requireMesa(!!s,'Ficha não encontrada.');
+  const action=s.actions[actionIndex];
+  requireMesa(!!action,'Ação não encontrada.');
+  const cost=actionCost(action);
+  const resources=activeResources(m,s);
+  const meter=cost&&resources.find(r=>key(r.name)===key(cost.name));
+  if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const check=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  const custom=specialRoll(action,solo,rng);
+  if(meter)meter.value-=cost.amount;
+  if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
+  const detail=[s.name+' usa '+action.name,
+    check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
+    damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
+    cost?'gastou '+cost.amount+' '+cost.name:'',custom?custom.name+' · '+custom.faces.map(faceText).join(', '):''].filter(Boolean).join(' · ');
+  const entry=record(m,s.name+' · '+action.name,detail,'ação');
+  if(custom)entry.customRoll=custom;
+  return {check,damage,custom,entry};
+}
+function armor(target) {
+  if(!target?.sheet?.attributes) return null;
+  const stat=target.sheet.attributes.find(a=>['ca','ac','armadura','classe de armadura'].includes(key(a.name)));
+  const n=stat?Number(stat.value):NaN;
+  return Number.isFinite(n)?n:null;
+}
+function actionCost(action){
+  if(!action?.cost) return null;
+  const match=String(action.cost).trim().match(/^([^:]{1,100}):([1-9]\d{0,3})$/);
+  requireMesa(!!match,'Custo inválido. Use Recurso:quantidade, como Esforço:2.');
+  return {name:clean(match[1]),amount:Number(match[2])};
+}
+function executeAction(m,actorId,actionIndex,targetId='',rng=Math.random,solo=null) {
+  const run=m.running;
+  requireMesa(!!run,'Nenhum encontro em andamento.');
+  const actor=run.members.find(x=>x.id===actorId);
+  requireMesa(!!actor,'Participante não encontrado.');
+  requireMesa(!actor.effects?.some(e=>e.blocked),'Este participante está impedido de agir por uma condição.');
+  const action=actor.sheet?.actions?.[actionIndex];
+  requireMesa(!!action,'Escolha uma ação presente na ficha do participante.');
+  const target=targetId?run.members.find(x=>x.id===targetId):null;
+  requireMesa(!targetId||!!target,'Alvo não encontrado.');
+  const cost=actionCost(action),resource=cost?meter(actor,cost.name):null;
+  if(cost)requireMesa(resource&&resource.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const mode=action.resolution||'attack';
+  const attack=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  const custom=specialRoll(action,solo,rng);
+  const defence=mode==='attack'?(action.defense?attribute(target,action.defense):armor(target)):null;
+  const save=target&&mode==='save'?resistance(target,action.saveAttribute,action.saveDC,rng):null;
+  const hit=mode==='attack'&&target&&attack?(defence===null?null:attack.total>=defence):null;
+  const applicable=!!(damage&&target&&(mode==='attack'?(!attack||hit===true):mode==='save'?!!save&&(!save.passed||action.halfOnSave):true));
+  const hp=applicable?(action.targetResource?meter(target,action.targetResource):target.resources.find(r=>['vida','hp','pv','pontos de vida'].includes(key(r.name)))):null;
+  if(applicable)requireMesa(hp,'Alvo sem recurso Vida/HP/PV ou recurso alvo configurado.');
+  let amount=damage?Math.max(0,Math.floor(damage.total)):0;
+  if(mode==='save'&&save?.passed)amount=Math.floor(amount/2);
+  if(resource)resource.value-=cost.amount;
+  if(hp)hp.value=clamp(hp.value+(mode==='heal'?amount:-amount),0,hp.max);
+  const parts=[actor.name+' usa '+action.name,
+    attack?'teste '+attack.total+' ('+attack.values.join(', ')+')':'sem teste',
+    target?'em '+target.name:'',
+    mode==='attack'&&target&&attack?(defence===null?'CA desconhecida: dano não aplicado':hit?'acertou '+(action.defense||'CA')+' '+defence:'errou '+(action.defense||'CA')+' '+defence):'',
+    mode==='save'&&target?(save?'resistência '+save.total+' / '+save.dc+(save.passed?' · passou':' · falhou'):'resistência indisponível: dano não aplicado'):'',
+    damage?(mode==='heal'?'cura rolada ':'dano rolado ')+damage.total:'',
+    applicable?(hp.name+' restante '+hp.value):'',
+    cost?'gastou '+cost.amount+' '+cost.name:'',
+    custom?custom.name+' · '+custom.faces.map(faceText).join(', '):''
+  ].filter(Boolean);
+  const item=record(m,actor.name+' · '+action.name,parts.join(' · '),'ação');
+  if(custom)item.customRoll=custom;
+  return {attack,damage,hit,save,custom,applied:applicable,entry:item};
+}
+function randomContent(kind,rng=Math.random) {
+  requireMesa(Object.hasOwn(CONTENT,kind),'Gerador desconhecido.');
+  const one=(list)=>pick(list,rng);
+  const person=one(FIRST)+' '+one(LAST);
+  let title='', lines=[],entryKind='event';
+  if(kind==='npc') { title=person;lines=['Ocupação: '+one(DICT.job),'Traço: '+one(DICT.aspect),'Motivação: '+one(DETAILS)];entryKind='npc'; }
+  if(kind==='site') { title=one(NAMES)+' '+one(['da Névoa','de Pedra','do Norte','dos Corvos']);lines=['Localização: '+one(LOCATION),'Marca do lugar: '+one(DETAILS)];entryKind='site'; }
+  if(kind==='tavern') { title='A '+one(['Lanterna','Rosa','Coroa','Sombra'])+' '+one(['Partida','Dourada','Quebrada','Silenciosa']);lines=['Dono: '+person,'Especialidade: '+one(DICT.food||['ensopado','vinho de frutas','pão quente']),'Rumor: '+one(DETAILS)];entryKind='site'; }
+  if(kind==='hook') {title='O '+one(NAMES)+' '+one(['Desaparecido','Silencioso','Partido']);lines=['Missão: '+one(DICT.job)+' precisa '+one(DICT.verb)+' '+one(DICT.noun),'Complicação: '+one(DETAILS)];entryKind='adventure';}
+  if(kind==='loot') {title=one(['Anel','Chave','Máscara','Diário','Espada','Pergaminho'])+' '+one(['Antigo','de Prata','Esquecido','Selado']);lines=['Propriedade: '+one(DICT.adjective),'Origem: '+one(LOCATION)];entryKind='item';}
+  if(kind==='encounter') {title='Encontro na '+one(NAMES);lines=['Cenário: '+one(LOCATION),'Obstáculo: '+one(DETAILS),'Grau de ameaça: a definir pelo mestre'];entryKind='scene';}
+  return {kind,entryKind,title,body:lines.join('\n')};
+}
+function getAssets(vault,term='',kind='all',limit=100) {
+  const list=vault.getFiles?.() || vault.getMarkdownFiles?.() || [];
+  const allowed={
+    image:/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i,
+    audio:/\.(mp3|ogg|wav|flac|m4a|opus)$/i,
+    note:/\.md$/i
+  };
+  return list.filter(f=>typeof f.path==='string'&&
+    (kind==='all'?Object.values(allowed).some(rx=>rx.test(f.path)):allowed[kind]?.test(f.path))&&
+    key(f.path).includes(key(term))).slice(0,limit);
+}
+function formatAsset(path) {
+  const cleanPath=String(path).replace(/[\]\r\n]/g,'');
+  const embed=!/\.md$/i.test(cleanPath);
+  return (embed?'!':'')+'[['+cleanPath+']]';
+}
+function configObject(source,parseYaml) {
+  const text=String(source||'').trim();
+  requireMesa(text.length>0&&text.length<=10000,'Bloco vazio ou muito grande.');
+  const obj=text.startsWith('{')?JSON.parse(text):parseYaml(text);
+  requireMesa(obj&&typeof obj==='object'&&!Array.isArray(obj),'Use YAML ou JSON de objeto.');
+  return obj;
+}
+module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restResources,restSheet,
+  executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
+
+    },
+    "solo-tables.js": function (module, exports, load, require) {
+'use strict';
+const { key, pick, roll, cap, clean } = load("solo.js");
+
+const words = (source) => source.split('|');
+const DICT = {
+  noun: words('relíquia|viajante|tempestade|promessa|espelho|santuário|feiticeira|estandarte|desfiladeiro|fortaleza|testamento|peregrino|segredo|criatura|juramento|corvo|fogueira|ilha|estandarte|coroa|enchente|ponte|masmorra|caravana|manuscrito|fonte|chave|tesouro|taça|máscara'),
+  verb: words('proteger|roubar|revelar|perseguir|enganar|encontrar|convocar|destruir|negociar|desafiar|resgatar|atravessar|isolar|ocultar|fugir|contratar|lamentar|profetizar|enterrar|vingar|ameaçar|prever|trair|conquistar|investigar|reconstruir|lembrar'),
+  adjective: words('antigo|enigmático|selado|selvagem|radiante|efêmero|sombrio|condenado|pálido|escondido|desolado|impecável|retorcido|nebuloso|agreste|solene|amaldiçoado|abandonado|erosivo|imprevisível'),
+  adverb: words('silenciosamente|às pressas|de surpresa|devagar|sem querer|por acaso|com solenidade|às escondidas|relutantemente|às cegas|a contragosto|de longe|com entusiasmo|tarde demais'),
+  job: words('cartógrafa|boticário|escriba|caçador de monstros|mensageira|vigia|ferreira|arquivista|curandeira|barqueiro|aprendiz de magia|estalajadeira|tecelão|joalheira|mercador|agrimensora|capitã|hortelão|arquiteta|guardião'),
+  aspect: words('misterioso|protetor|arrogante|perceptivo|obstinado|generoso|ingênuo|impulsivo|reservado|intimidador|exilado|pessimista|paciente|ambicioso|meticuloso|pragmático|eloquente|nostálgico'),
+  skill: words('rastreamento|alquimia|negociação|furtividade|rituais|sobrevivência|pontaria|arrombamento|heráldica|navegação|espionagem|forja|oratório|criptografia|esgrima|cavalaria|medicina|apicultura'),
+  name: words('Maelis|Ilven|Rhana|Tavio|Neris|Damar|Íria|Valen|Araçá|Iara|Sorel|Cauê|Orinna|Evren|Nadir|Altair|Alba|Mairon|Ravi|Melian|Eloá|Cira|Renard|Inara'),
+  'town name': words('Brumavela|Vale de Sal|Pedra Rubra|Vilar do Norte|Cruz de Cobre|Baía do Corvo|Aurária|Entremares|Cimo do Cedro|Linha Verde|Ponte da Lua|Foz do Ferro|Areia Alta|Porto do Sino|Fundo dos Ecos|Pedra de Mel'),
+  building: words('mercado itinerante|torre de vigia|casa de banhos|biblioteca|oficina de vidro|templo vazio|porto fluvial|taverna|jardim suspenso|cripta|ponte levadiça|moinho de vento|pátio de armas|aqueduto'),
+  wilderness: words('ruínas inundadas|caminho de geada|pântano de névoa|bosque petrificado|penhasco com ninhos|campo de pedras cantantes|pequena clareira|planalto de sal|caverna azulada|árvore queimada|riacho subterrâneo|deserto florido'),
+};
+const ALIASES = { substantivo: 'noun', verbo: 'verb', adjetivo: 'adjective', adverbio: 'adverb', profissao: 'job',
+  occupation: 'job', descriptor: 'aspect', 'in wild': 'wilderness', 'in town': 'building', aspecto: 'aspect', habilidade: 'skill', nome: 'name', cidade: 'town name', edificio: 'building', ermo: 'wilderness' };
+const IDEAS = {
+  plot: ['Gancho de história', [['Sujeito', 'noun'], ['Ação', 'verb'], ['Objetivo', 'noun']]],
+  npc: ['Personagem', [['Nome', 'name'], ['Ocupação', 'job'], ['Aspecto', 'aspect'], ['Habilidade', 'skill']]],
+  place: ['Lugar', [['Nome', 'town name'], ['Descrição', 'adjective'], ['Na cidade', 'building'], ['Nos arredores', 'wilderness']]],
+};
+function weightedLine(s) {
+  const m = s.trim().match(/^(.*?)\s+\^(\d{1,6})$/);
+  return m ? { text: m[1].trim(), weight: +m[2] } : { text: s.trim(), weight: 1 };
+}
+function diceLabel(s) {
+  const m = s.match(/^(.+?)\s+(\d{1,2})d$/i);
+  return { label: m ? m[1].trim() : s, curve: m ? Math.max(1, Math.min(20, +m[2])) : 1 };
+}
+function choose(rows, curve = 1, rng = Math.random) {
+  const total = rows.reduce((sum, r) => sum + r.weight, 0);
+  if (!total) return '';
+  let index = 0;
+  for (let i = 0; i < curve; i++) index += rng();
+  let offset = index / curve * total;
+  for (const row of rows) { offset -= row.weight; if (offset < 0) return row.text; }
+  return rows.at(-1).text;
+}
+function parseTable(file, source, yaml) {
+  const normalized = String(source).replace(/\r\n/g, '\n');
+  const fm = normalized.match(/^\uFEFF?---\s*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
+  let properties = {};
+  if (fm) { try { properties = yaml(fm[1]) || {}; } catch { /* keep body accessible */ } }
+  const body = fm ? normalized.slice(fm[0].length) : normalized;
+  const filename = file.split('/').at(-1).replace(/\.md$/i, '');
+  const { label, curve } = diceLabel(filename);
+  let active = { label: '', curve, rows: [] }, fence = '';
+  const sections = [active];
+  for (let row of body.split('\n')) {
+    const delimiter = row.match(/^\s*(`{3,}|~{3,})/);
+    if (delimiter) { if (!fence) fence = delimiter[1]; else if (fence[0] === delimiter[1][0] && fence.length <= delimiter[1].length) fence = ''; continue; }
+    if (fence) continue;
+    row = row.trim();
+    const h = row.match(/^#{1,6}\s+(.+?)\s*#*$/);
+    if (h) { active = { ...diceLabel(h[1]), rows: [] }; sections.push(active); continue; }
+    if (!row || /^<!--/.test(row)) continue;
+    const entry = weightedLine(row.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, ''));
+    if (entry.text && entry.weight) active.rows.push(entry);
+  }
+  const templates = Object.entries(properties).filter(([name, value]) => key(name) !== 'mode' && typeof value === 'string' && value.trim())
+    .map(([name, value]) => ({ ...weightedLine(name), label: weightedLine(name).text, text: value, capital: /^\p{Lu}/u.test(name) }))
+    .filter(x => x.weight);
+  return { path: file, label, curve, sections, templates, cutup: key(properties.mode) === 'cutup', body };
+}
+function tableEngine(entries, root, rng = Math.random) {
+  let steps = 0;
+  function cut(table) {
+    const tokens = table.body.match(/\S+/g) || [];
+    if (!tokens.length) return '';
+    const start = roll(tokens.length, rng) - 1;
+    return tokens.slice(start, start + roll(7, rng) + 1).join(' ');
+  }
+  function section(table, name) {
+    if (table.cutup) return cut(table);
+    if (name) {
+      const s = table.sections.find(s => key(s.label) === key(name));
+      return s ? choose(s.rows, s.curve, rng) : '';
+    }
+    return choose(table.sections.flatMap(x => x.rows), table.curve, rng);
+  }
+  const relPath = (t) => t.path.startsWith(root + '/') ? t.path.slice(root.length + 1).replace(/\.md$/i, '') : t.path.replace(/\.md$/i, '');
+  function resolve(token, table) {
+    const options = token.split('|').map(s => s.trim()).filter(Boolean);
+    if (options.length > 1) return resolve(pick(options, rng), table);
+    const name = key(options[0] || '');
+    if (!name) return '';
+    if (table?.sections.some(x => x.label && key(x.label) === name)) return section(table, name);
+    const path = name.replace(/^\//, '').replace(/\.md$/i, '');
+    const source = entries.find(t => name.startsWith('/') ? key(t.path.replace(/\.md$/i, '')) === path :
+      key(t.relAlias || relPath(t)) === path || key(t.label) === path);
+    if (source) return section(source);
+    if (name.includes('/')) {
+      const i = name.lastIndexOf('/'), parent = name.slice(0, i), leaf = name.slice(i + 1);
+      const match = entries.find(t => key(t.path.replace(/\.md$/i, '')) === parent.replace(/^\//, '') ||
+        (t.path.startsWith(root + '/') && (key(relPath(t)) === parent || key(t.label) === parent)));
+      if (match && leaf !== '*' && leaf !== '!') return section(match, leaf);
+      const folder = folderEntries(parent);
+      if (folder.length && leaf === '*') return pick(folder, rng).label;
+      if (folder.length && leaf === '!') return pick(folder, rng).body.trim();
+    }
+    const folder = folderEntries(name);
+    if (folder.length) {
+      const available = folder.filter(t => t.cutup || t.sections.some(s => s.rows.length));
+      if (available.length) return section(pick(available, rng));
+    }
+    if (name === 'a') return 'um';
+    const builtin = DICT[ALIASES[name] || name];
+    return Array.isArray(builtin) ? pick(builtin, rng) : '';
+  }
+  function folderEntries(name) {
+    const target = name.replace(/^\//, '');
+    return entries.filter(t => name.startsWith('/') ? key(t.path).startsWith(target + '/') :
+      t.path.startsWith(root + '/') && key(relPath(t)).split('/').slice(0, -1).some((folder, i, all) =>
+        all.slice(0, i + 1).join('/') === target || folder.replace(/[._]$/, '') === target));
+  }
+  function expand(text, table, memory = new Map(), depth = 0) {
+    if (depth > 6) return text;
+    return text.slice(0, 16000).replace(/\{\s*([^{}]{1,200})\s*\}/g, (match, original) => {
+      if (++steps > 300) return match;
+      const token = original.trim().replace(/^</, ''), memo = key(token);
+      if (original.trim().startsWith('<') && memory.has(memo)) return memory.get(memo);
+      const raw = resolve(token, table);
+      if (!raw) return match;
+      const result = expand(raw, table, memory, depth + 1);
+      memory.set(memo, result);
+      return result;
+    }).slice(0, 16000);
+  }
+  function output(table, selected = '') {
+    steps = 0;
+    if (table.cutup) return cut(table);
+    const chosen = selected.startsWith('t:') ? table.templates[+selected.slice(2)] : null;
+    if (selected.startsWith('s:')) return expand(section(table, table.sections[+selected.slice(2)]?.label), table);
+    if (chosen) return chosen.capital ? cap(expand(chosen.text, table)) : expand(chosen.text, table);
+    if (table.templates.length) {
+      const picked = choose(table.templates.map((t, i) => ({ text: String(i), weight: t.weight })), 1, rng);
+      return output(table, 't:' + picked);
+    }
+    return expand(section(table), table);
+  }
+  return { output, quick: (str) => { steps = 0; return expand(clean(str, 16000)); } };
+}
+module.exports = { DICT, IDEAS, parseTable, tableEngine, choose };
 
     },
     "session.js": function (module, exports, load, require) {
@@ -6335,155 +6786,6 @@ function legacyIcons(app) {
 module.exports = { resolvePath, imageUrl, imageFiles, deckFolders, loadDeckFolder, loadLegacy, tableNotes, renameImages, legacyIcons, legacyDeck };
 
     },
-    "solo-tables.js": function (module, exports, load, require) {
-'use strict';
-const { key, pick, roll, cap, clean } = load("solo.js");
-
-const words = (source) => source.split('|');
-const DICT = {
-  noun: words('relíquia|viajante|tempestade|promessa|espelho|santuário|feiticeira|estandarte|desfiladeiro|fortaleza|testamento|peregrino|segredo|criatura|juramento|corvo|fogueira|ilha|estandarte|coroa|enchente|ponte|masmorra|caravana|manuscrito|fonte|chave|tesouro|taça|máscara'),
-  verb: words('proteger|roubar|revelar|perseguir|enganar|encontrar|convocar|destruir|negociar|desafiar|resgatar|atravessar|isolar|ocultar|fugir|contratar|lamentar|profetizar|enterrar|vingar|ameaçar|prever|trair|conquistar|investigar|reconstruir|lembrar'),
-  adjective: words('antigo|enigmático|selado|selvagem|radiante|efêmero|sombrio|condenado|pálido|escondido|desolado|impecável|retorcido|nebuloso|agreste|solene|amaldiçoado|abandonado|erosivo|imprevisível'),
-  adverb: words('silenciosamente|às pressas|de surpresa|devagar|sem querer|por acaso|com solenidade|às escondidas|relutantemente|às cegas|a contragosto|de longe|com entusiasmo|tarde demais'),
-  job: words('cartógrafa|boticário|escriba|caçador de monstros|mensageira|vigia|ferreira|arquivista|curandeira|barqueiro|aprendiz de magia|estalajadeira|tecelão|joalheira|mercador|agrimensora|capitã|hortelão|arquiteta|guardião'),
-  aspect: words('misterioso|protetor|arrogante|perceptivo|obstinado|generoso|ingênuo|impulsivo|reservado|intimidador|exilado|pessimista|paciente|ambicioso|meticuloso|pragmático|eloquente|nostálgico'),
-  skill: words('rastreamento|alquimia|negociação|furtividade|rituais|sobrevivência|pontaria|arrombamento|heráldica|navegação|espionagem|forja|oratório|criptografia|esgrima|cavalaria|medicina|apicultura'),
-  name: words('Maelis|Ilven|Rhana|Tavio|Neris|Damar|Íria|Valen|Araçá|Iara|Sorel|Cauê|Orinna|Evren|Nadir|Altair|Alba|Mairon|Ravi|Melian|Eloá|Cira|Renard|Inara'),
-  'town name': words('Brumavela|Vale de Sal|Pedra Rubra|Vilar do Norte|Cruz de Cobre|Baía do Corvo|Aurária|Entremares|Cimo do Cedro|Linha Verde|Ponte da Lua|Foz do Ferro|Areia Alta|Porto do Sino|Fundo dos Ecos|Pedra de Mel'),
-  building: words('mercado itinerante|torre de vigia|casa de banhos|biblioteca|oficina de vidro|templo vazio|porto fluvial|taverna|jardim suspenso|cripta|ponte levadiça|moinho de vento|pátio de armas|aqueduto'),
-  wilderness: words('ruínas inundadas|caminho de geada|pântano de névoa|bosque petrificado|penhasco com ninhos|campo de pedras cantantes|pequena clareira|planalto de sal|caverna azulada|árvore queimada|riacho subterrâneo|deserto florido'),
-};
-const ALIASES = { substantivo: 'noun', verbo: 'verb', adjetivo: 'adjective', adverbio: 'adverb', profissao: 'job',
-  occupation: 'job', descriptor: 'aspect', 'in wild': 'wilderness', 'in town': 'building', aspecto: 'aspect', habilidade: 'skill', nome: 'name', cidade: 'town name', edificio: 'building', ermo: 'wilderness' };
-const IDEAS = {
-  plot: ['Gancho de história', [['Sujeito', 'noun'], ['Ação', 'verb'], ['Objetivo', 'noun']]],
-  npc: ['Personagem', [['Nome', 'name'], ['Ocupação', 'job'], ['Aspecto', 'aspect'], ['Habilidade', 'skill']]],
-  place: ['Lugar', [['Nome', 'town name'], ['Descrição', 'adjective'], ['Na cidade', 'building'], ['Nos arredores', 'wilderness']]],
-};
-function weightedLine(s) {
-  const m = s.trim().match(/^(.*?)\s+\^(\d{1,6})$/);
-  return m ? { text: m[1].trim(), weight: +m[2] } : { text: s.trim(), weight: 1 };
-}
-function diceLabel(s) {
-  const m = s.match(/^(.+?)\s+(\d{1,2})d$/i);
-  return { label: m ? m[1].trim() : s, curve: m ? Math.max(1, Math.min(20, +m[2])) : 1 };
-}
-function choose(rows, curve = 1, rng = Math.random) {
-  const total = rows.reduce((sum, r) => sum + r.weight, 0);
-  if (!total) return '';
-  let index = 0;
-  for (let i = 0; i < curve; i++) index += rng();
-  let offset = index / curve * total;
-  for (const row of rows) { offset -= row.weight; if (offset < 0) return row.text; }
-  return rows.at(-1).text;
-}
-function parseTable(file, source, yaml) {
-  const normalized = String(source).replace(/\r\n/g, '\n');
-  const fm = normalized.match(/^\uFEFF?---\s*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
-  let properties = {};
-  if (fm) { try { properties = yaml(fm[1]) || {}; } catch { /* keep body accessible */ } }
-  const body = fm ? normalized.slice(fm[0].length) : normalized;
-  const filename = file.split('/').at(-1).replace(/\.md$/i, '');
-  const { label, curve } = diceLabel(filename);
-  let active = { label: '', curve, rows: [] }, fence = '';
-  const sections = [active];
-  for (let row of body.split('\n')) {
-    const delimiter = row.match(/^\s*(`{3,}|~{3,})/);
-    if (delimiter) { if (!fence) fence = delimiter[1]; else if (fence[0] === delimiter[1][0] && fence.length <= delimiter[1].length) fence = ''; continue; }
-    if (fence) continue;
-    row = row.trim();
-    const h = row.match(/^#{1,6}\s+(.+?)\s*#*$/);
-    if (h) { active = { ...diceLabel(h[1]), rows: [] }; sections.push(active); continue; }
-    if (!row || /^<!--/.test(row)) continue;
-    const entry = weightedLine(row.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, ''));
-    if (entry.text && entry.weight) active.rows.push(entry);
-  }
-  const templates = Object.entries(properties).filter(([name, value]) => key(name) !== 'mode' && typeof value === 'string' && value.trim())
-    .map(([name, value]) => ({ ...weightedLine(name), label: weightedLine(name).text, text: value, capital: /^\p{Lu}/u.test(name) }))
-    .filter(x => x.weight);
-  return { path: file, label, curve, sections, templates, cutup: key(properties.mode) === 'cutup', body };
-}
-function tableEngine(entries, root, rng = Math.random) {
-  let steps = 0;
-  function cut(table) {
-    const tokens = table.body.match(/\S+/g) || [];
-    if (!tokens.length) return '';
-    const start = roll(tokens.length, rng) - 1;
-    return tokens.slice(start, start + roll(7, rng) + 1).join(' ');
-  }
-  function section(table, name) {
-    if (table.cutup) return cut(table);
-    if (name) {
-      const s = table.sections.find(s => key(s.label) === key(name));
-      return s ? choose(s.rows, s.curve, rng) : '';
-    }
-    return choose(table.sections.flatMap(x => x.rows), table.curve, rng);
-  }
-  const relPath = (t) => t.path.startsWith(root + '/') ? t.path.slice(root.length + 1).replace(/\.md$/i, '') : t.path.replace(/\.md$/i, '');
-  function resolve(token, table) {
-    const options = token.split('|').map(s => s.trim()).filter(Boolean);
-    if (options.length > 1) return resolve(pick(options, rng), table);
-    const name = key(options[0] || '');
-    if (!name) return '';
-    if (table?.sections.some(x => x.label && key(x.label) === name)) return section(table, name);
-    const path = name.replace(/^\//, '').replace(/\.md$/i, '');
-    const source = entries.find(t => name.startsWith('/') ? key(t.path.replace(/\.md$/i, '')) === path :
-      key(t.relAlias || relPath(t)) === path || key(t.label) === path);
-    if (source) return section(source);
-    if (name.includes('/')) {
-      const i = name.lastIndexOf('/'), parent = name.slice(0, i), leaf = name.slice(i + 1);
-      const match = entries.find(t => key(t.path.replace(/\.md$/i, '')) === parent.replace(/^\//, '') ||
-        (t.path.startsWith(root + '/') && (key(relPath(t)) === parent || key(t.label) === parent)));
-      if (match && leaf !== '*' && leaf !== '!') return section(match, leaf);
-      const folder = folderEntries(parent);
-      if (folder.length && leaf === '*') return pick(folder, rng).label;
-      if (folder.length && leaf === '!') return pick(folder, rng).body.trim();
-    }
-    const folder = folderEntries(name);
-    if (folder.length) {
-      const available = folder.filter(t => t.cutup || t.sections.some(s => s.rows.length));
-      if (available.length) return section(pick(available, rng));
-    }
-    if (name === 'a') return 'um';
-    const builtin = DICT[ALIASES[name] || name];
-    return Array.isArray(builtin) ? pick(builtin, rng) : '';
-  }
-  function folderEntries(name) {
-    const target = name.replace(/^\//, '');
-    return entries.filter(t => name.startsWith('/') ? key(t.path).startsWith(target + '/') :
-      t.path.startsWith(root + '/') && key(relPath(t)).split('/').slice(0, -1).some((folder, i, all) =>
-        all.slice(0, i + 1).join('/') === target || folder.replace(/[._]$/, '') === target));
-  }
-  function expand(text, table, memory = new Map(), depth = 0) {
-    if (depth > 6) return text;
-    return text.slice(0, 16000).replace(/\{\s*([^{}]{1,200})\s*\}/g, (match, original) => {
-      if (++steps > 300) return match;
-      const token = original.trim().replace(/^</, ''), memo = key(token);
-      if (original.trim().startsWith('<') && memory.has(memo)) return memory.get(memo);
-      const raw = resolve(token, table);
-      if (!raw) return match;
-      const result = expand(raw, table, memory, depth + 1);
-      memory.set(memo, result);
-      return result;
-    }).slice(0, 16000);
-  }
-  function output(table, selected = '') {
-    steps = 0;
-    if (table.cutup) return cut(table);
-    const chosen = selected.startsWith('t:') ? table.templates[+selected.slice(2)] : null;
-    if (selected.startsWith('s:')) return expand(section(table, table.sections[+selected.slice(2)]?.label), table);
-    if (chosen) return chosen.capital ? cap(expand(chosen.text, table)) : expand(chosen.text, table);
-    if (table.templates.length) {
-      const picked = choose(table.templates.map((t, i) => ({ text: String(i), weight: t.weight })), 1, rng);
-      return output(table, 't:' + picked);
-    }
-    return expand(section(table), table);
-  }
-  return { output, quick: (str) => { steps = 0; return expand(clean(str, 16000)); } };
-}
-module.exports = { DICT, IDEAS, parseTable, tableEngine, choose };
-
-    },
     "solo-inline.js": function (module, exports, load, require) {
 'use strict';
 const { TFile, Notice, Menu, editorLivePreviewField } = require('obsidian');
@@ -6959,13 +7261,14 @@ function renderCombat(plugin,view,root,running){
   if(!actor)return;
   const actions=actor.sheet?.actions||[];
   if(!actions.length)return info(box,actor.name+' não possui ações configuradas. Edite a ficha de origem.');
+  if(actor.effects?.some(e=>e.blocked))info(box,'O participante está impedido de agir por uma condição.');
   const usable=actions.map((a,i)=>[String(i),a.name+(a.damage?' · '+a.damage:'')]);
   const chosen={action:usable[0][0],target:running.members.find(x=>x.id!==actor.id)?.id||''};
   labelled(box,'Ação',usable,chosen.action,v=>{chosen.action=v;});
   labelled(box,'Alvo',[['','Sem alvo'],...running.members.map(x=>[x.id,x.name])],chosen.target,v=>{chosen.target=v;});
   button(row(box),'Rolar e resolver',run(plugin,()=>plugin.changeMesa(m=>{
-    executeAction(m,actor.id,Number(chosen.action),chosen.target);
-  })),{icon:'dice-5',className:'brpg-button mod-cta'});
+    executeAction(m,actor.id,Number(chosen.action),chosen.target,Math.random,plugin.solo());
+  })),{icon:'dice-5',className:'brpg-button mod-cta',disabled:!!actor.effects?.some(e=>e.blocked)});
   const log=plugin.mesa().activity||[];
   if(log.length){
     const history=el(box,'details','brpg-disclosure');
@@ -6974,6 +7277,7 @@ function renderCombat(plugin,view,root,running){
       const item=el(history,'article','brpg-ultra-log');
       el(item,'strong','',entry.title);
       el(item,'p','brpg-mesa-prose',entry.detail);
+      if(entry.customRoll?.faces?.length){const faces=el(item,'div','brpg-combat-faces');for(const face of entry.customRoll.faces){if(face.kind==='image')art(faces,plugin,face.image,face.label||'Face do dado',undefined,'brpg-combat-face-image');else el(faces,'span','brpg-chip',face.kind==='number'?String(face.value):face.label);}}
     }
   }
 }
@@ -7029,188 +7333,6 @@ function setup(plugin){
     callback:()=>plugin.attempt(()=>plugin.openMesa('library'))});
 }
 module.exports={setup,renderGenerator,renderAssetLibrary,renderSheetTools,renderCombat};
-
-    },
-    "ultra.js": function (module, exports, load, require) {
-'use strict';
-const { copy, uid } = load("calendar.js");
-const { key, clean, clamp, rollDice, parseDice, pick } = load("solo.js");
-const { DICT } = load("solo-tables.js");
-const { requireMesa } = load("mesa.js");
-
-const CONTENT = Object.freeze({
- npc: 'Personagem / NPC', site: 'Local / Povoado', tavern: 'Taverna', hook: 'Gancho de aventura', loot: 'Tesouro', encounter: 'Ideia de encontro'
-});
-const FIRST = ['Arlen','Vera','Eldric','Liora','Nara','Darian','Mira','Thorne','Kael','Ysara','Malek','Serin','Rhana','Lys','Fenric'];
-const LAST = ['dos Vales','da Ponte','Noctis','da Névoa','Ventor','de Cinzabruma','do Norte','Auri','do Ferro'];
-const ADJ = ['antiga','perdida','silenciosa','escondida','amaldiçoada','esquecida','radiante','abandonada'];
-const NAMES = ['Coroa','Ponte','Lanterna','Vale','Corvo','Carvalho','Rosa','Luar','Último Sol','Viajante'];
-const LOCATION = ['vale coberto de névoa','porto distante','passagem entre montanhas','estrada esquecida','vilarejo fortificado','floresta de pinheiros'];
-const DETAILS = ['um segredo da família real','uma dívida não paga','um mapa desaparecido','uma relíquia selada','um crime nunca resolvido','um pacto proibido'];
-function roll(formula,rng=Math.random) {
-  const text=String(formula||'').trim();
-  requireMesa(text.length>0 && text.length<=60, 'Expressão de dado inválida.');
-  if (/^[-+]?\d{1,7}$/.test(text)) return {total:Number(text),values:[Number(text)]};
-  requireMesa(!!parseDice(text), 'Use uma expressão como 1d20+3.');
-  return rollDice(text,rng);
-}
-function record(m, title, detail, type='sistema') {
-  m.activity ||= [];
-  const item={id:uid('log'),time:new Date().toISOString(),title:clean(title,160),detail:clean(detail,1000),type};
-  m.activity.unshift(item);
-  m.activity=m.activity.slice(0,150);
-  return item;
-}
-function activeResources(m,sheet) {
-  m.sheetStates ||= {};
-  const saved=m.sheetStates[sheet.id];
-  return sheet.resources.map((r,i) => {
-    const found=Array.isArray(saved) ? saved.find(v=>key(v.name)===key(r.name)) : null;
-    return {name:r.name,max:r.max,value:clamp(Number.isInteger(found?.value)?found.value:r.value,0,r.max),rest:r.rest||''};
-  });
-}
-function updateSheetResource(m,id,name,delta) {
-  const s=m.sheets.find(x=>x.id===id);
-  requireMesa(!!s,'Ficha não encontrada na biblioteca.');
-  requireMesa(Number.isSafeInteger(delta)&&Math.abs(delta)<=100000,'Ajuste de recurso inválido.');
-  const resources=activeResources(m,s);
-  const r=resources.find(x=>key(x.name)===key(name));
-  requireMesa(!!r,'Recurso não encontrado.');
-  r.value=clamp(r.value+delta,0,r.max);
-  m.sheetStates ||= {}; m.sheetStates[id]=resources;
-  record(m,s.name, r.name+': '+r.value+'/'+r.max,'recurso');
-  return r;
-}
-function restResources(resources) {
-  for(const r of resources) {
-    const strategy=r.rest || (r.value===0 && r.max>0 ? 'zero':'max');
-    if(strategy==='max') r.value=r.max;
-    if(strategy==='zero') r.value=0;
-  }
-  return resources;
-}
-function restSheet(m,id) {
-  const s=m.sheets.find(x=>x.id===id);
-  requireMesa(!!s,'Ficha não encontrada.');
-  const resources=activeResources(m,s);
-  for(const r of resources){
-    if(!r.rest){ const original=s.resources.find(x=>key(x.name)===key(r.name));r.rest=original?.value===0?'zero':'max'; }
-  }
-  restResources(resources);
-  m.sheetStates ||= {};m.sheetStates[id]=resources;
-  record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
-  return resources;
-}
-function executeSheetAction(m,id,actionIndex,rng=Math.random) {
-  const s=m.sheets.find(x=>x.id===id);
-  requireMesa(!!s,'Ficha não encontrada.');
-  const action=s.actions[actionIndex];
-  requireMesa(!!action,'Ação não encontrada.');
-  const cost=actionCost(action);
-  const resources=activeResources(m,s);
-  const meter=cost&&resources.find(r=>key(r.name)===key(cost.name));
-  if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
-  const check=action.roll?roll(action.roll,rng):null;
-  const damage=action.damage?roll(action.damage,rng):null;
-  if(meter)meter.value-=cost.amount;
-  if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
-  const detail=[s.name+' usa '+action.name,
-    check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
-    damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
-    cost?'gastou '+cost.amount+' '+cost.name:''].filter(Boolean).join(' · ');
-  return {check,damage,entry:record(m,s.name+' · '+action.name,detail,'ação')};
-}
-function armor(target) {
-  if(!target?.sheet?.attributes) return null;
-  const stat=target.sheet.attributes.find(a=>['ca','ac','armadura','classe de armadura'].includes(key(a.name)));
-  const n=stat?Number(stat.value):NaN;
-  return Number.isFinite(n)?n:null;
-}
-function actionCost(action){
-  if(!action?.cost) return null;
-  const match=String(action.cost).trim().match(/^([^:]{1,100}):([1-9]\d{0,3})$/);
-  requireMesa(!!match,'Custo inválido. Use Recurso:quantidade, como Esforço:2.');
-  return {name:clean(match[1]),amount:Number(match[2])};
-}
-function executeAction(m,actorId,actionIndex,targetId='',rng=Math.random) {
-  const run=m.running;
-  requireMesa(!!run,'Nenhum encontro em andamento.');
-  const actor=run.members.find(x=>x.id===actorId);
-  requireMesa(!!actor,'Participante não encontrado.');
-  const actions=actor.sheet?.actions||[];
-  const action=actions[actionIndex];
-  requireMesa(!!action,'Escolha uma ação presente na ficha do participante.');
-  const target=targetId ? run.members.find(x=>x.id===targetId) : null;
-  requireMesa(!targetId||!!target,'Alvo não encontrado.');
-  const cost=actionCost(action);
-  let resource;
-  if(cost) {
-    resource=actor.resources.find(r=>key(r.name)===key(cost.name));
-    requireMesa(resource && resource.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
-  }
-  // All validation is performed before anything is mutated.
-  const attack=action.roll ? roll(action.roll,rng) : null;
-  const damage=action.damage ? roll(action.damage,rng) : null;
-  const defence=armor(target);
-  const hit=target && attack ? (defence===null?null:attack.total>=defence) : null;
-  if(resource) resource.value-=cost.amount;
-  const shouldApply=!!(damage && target && (!attack || hit===true));
-  let damaged=null;
-  if(shouldApply) {
-    const hp=target.resources.find(r=>['vida','hp','pv','pontos de vida'].includes(key(r.name)));
-    requireMesa(!!hp,'Alvo sem recurso Vida/HP/PV. Configure a ficha para aplicar dano.');
-    hp.value=clamp(hp.value-Math.max(0,damage.total),0,hp.max); damaged=hp.value;
-  }
-  const parts=[
-    actor.name+' usa '+action.name,
-    attack?'teste '+attack.total+' ('+attack.values.join(', ')+')':'sem teste',
-    target?'em '+target.name:'',
-    target&&attack?(defence===null?'CA desconhecida: dano não aplicado':hit?'acertou CA '+defence:'errou CA '+defence):'',
-    damage?'dano rolado '+damage.total:'',
-    shouldApply?'Vida restante '+damaged:'',
-    cost?'gastou '+cost.amount+' '+cost.name:''
-  ].filter(Boolean);
-  const item=record(m,actor.name+' · '+action.name,parts.join(' · '),'ação');
-  return {attack,damage,hit,applied:shouldApply,entry:item};
-}
-function randomContent(kind,rng=Math.random) {
-  requireMesa(Object.hasOwn(CONTENT,kind),'Gerador desconhecido.');
-  const one=(list)=>pick(list,rng);
-  const person=one(FIRST)+' '+one(LAST);
-  let title='', lines=[],entryKind='event';
-  if(kind==='npc') { title=person;lines=['Ocupação: '+one(DICT.job),'Traço: '+one(DICT.aspect),'Motivação: '+one(DETAILS)];entryKind='npc'; }
-  if(kind==='site') { title=one(NAMES)+' '+one(['da Névoa','de Pedra','do Norte','dos Corvos']);lines=['Localização: '+one(LOCATION),'Marca do lugar: '+one(DETAILS)];entryKind='site'; }
-  if(kind==='tavern') { title='A '+one(['Lanterna','Rosa','Coroa','Sombra'])+' '+one(['Partida','Dourada','Quebrada','Silenciosa']);lines=['Dono: '+person,'Especialidade: '+one(DICT.food||['ensopado','vinho de frutas','pão quente']),'Rumor: '+one(DETAILS)];entryKind='site'; }
-  if(kind==='hook') {title='O '+one(NAMES)+' '+one(['Desaparecido','Silencioso','Partido']);lines=['Missão: '+one(DICT.job)+' precisa '+one(DICT.verb)+' '+one(DICT.noun),'Complicação: '+one(DETAILS)];entryKind='adventure';}
-  if(kind==='loot') {title=one(['Anel','Chave','Máscara','Diário','Espada','Pergaminho'])+' '+one(['Antigo','de Prata','Esquecido','Selado']);lines=['Propriedade: '+one(DICT.adjective),'Origem: '+one(LOCATION)];entryKind='item';}
-  if(kind==='encounter') {title='Encontro na '+one(NAMES);lines=['Cenário: '+one(LOCATION),'Obstáculo: '+one(DETAILS),'Grau de ameaça: a definir pelo mestre'];entryKind='scene';}
-  return {kind,entryKind,title,body:lines.join('\n')};
-}
-function getAssets(vault,term='',kind='all',limit=100) {
-  const list=vault.getFiles?.() || vault.getMarkdownFiles?.() || [];
-  const allowed={
-    image:/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i,
-    audio:/\.(mp3|ogg|wav|flac|m4a|opus)$/i,
-    note:/\.md$/i
-  };
-  return list.filter(f=>typeof f.path==='string'&&
-    (kind==='all'?Object.values(allowed).some(rx=>rx.test(f.path)):allowed[kind]?.test(f.path))&&
-    key(f.path).includes(key(term))).slice(0,limit);
-}
-function formatAsset(path) {
-  const cleanPath=String(path).replace(/[\]\r\n]/g,'');
-  const embed=!/\.md$/i.test(cleanPath);
-  return (embed?'!':'')+'[['+cleanPath+']]';
-}
-function configObject(source,parseYaml) {
-  const text=String(source||'').trim();
-  requireMesa(text.length>0&&text.length<=10000,'Bloco vazio ou muito grande.');
-  const obj=text.startsWith('{')?JSON.parse(text):parseYaml(text);
-  requireMesa(obj&&typeof obj==='object'&&!Array.isArray(obj),'Use YAML ou JSON de objeto.');
-  return obj;
-}
-module.exports={ CONTENT,roll,record,activeResources,updateSheetResource,restResources,restSheet,
-  executeAction,executeSheetAction,randomContent,getAssets,formatAsset,configObject };
 
     },
     "atlas-view.js": function (module, exports, load, require) {
@@ -8106,6 +8228,7 @@ const {
 
 const MESA_VIEW = 'basic-rpg-mesa';
 const {renderSessionDashboard}=load("session-ui.js");
+const {PRESETS,freshEffect,addEffect,advanceCombat}=load("combat.js");
 const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
@@ -8164,12 +8287,13 @@ function renderSheet(root, plugin, sheet, { compact = false } = {}) {
   for (const a of sheet.actions) {
     const line = disclosure(sections, a.name + (a.group && a.group !== 'Ação' ? ' · ' + a.group : ''));
     if (a.text) el(line,'p','brpg-mesa-prose',a.text);
-    if (a.roll || a.damage) button(line,'Rolar ' + (a.roll || a.damage),() => plugin.attempt(async () => {
+    if (a.roll || a.damage || a.customDie) button(line,'Rolar ' + (a.roll || a.damage || 'dado especial'),() => plugin.attempt(async () => {
       if (plugin.ultra && plugin.mesa().sheets.some(x=>x.id===sheet.id)) {
-        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a)));
+        const result=await plugin.changeMesa(m=>plugin.ultra.executeSheetAction(m,sheet.id,sheet.actions.indexOf(a),Math.random,plugin.solo()));
         outcome.textContent=result.entry.detail;
       }else {
-        const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';
+        if(a.customDie){const result=load("combat.js").specialRoll(a,plugin.solo(),Math.random);outcome.textContent=a.name+' · '+result.faces.map(load("combat.js").faceText).join(', ');}
+        else{const r=rollDice(a.roll || a.damage);outcome.textContent=a.name+' · '+r.total+' ('+r.values.join(', ')+')';}
       }
     }), { icon:'dice-5' });
   }
@@ -8418,7 +8542,15 @@ class MesaView extends ItemView {
       });
       editableRows(root,modal,s,'actions','Ações e traços','Adicionar ação ou traço',() => ({name:'',text:'',roll:'',damage:'',cost:'',group:'Ação'}),(fields,a) => {
         labelSelect(fields,'Grupo',[['Ação','Ação'],['Traço','Traço'],['Reação','Reação']],a.group,v => { a.group=v; });
-        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano automático (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
+        textFields(fields,a,[['name','Nome da ação',120],['roll','Rolagem / ataque (opcional)',60],['damage','Dano ou cura (opcional)',60],['cost','Custo do recurso (Esforço:2)',110],['text','Descrição da ação',5000,true]]);
+        const advanced=disclosure(fields,'Regras avançadas');
+        labelSelect(advanced,'Resolução',[['attack','Ataque contra defesa'],['save','Resistência do alvo'],['direct','Dano direto'],['heal','Cura direta']],a.resolution||'attack',v=>{a.resolution=v;});
+        textFields(advanced,a,[['defense','Atributo de defesa (vazio = CA)',120],['targetResource','Recurso alvo (vazio = Vida/HP/PV)',120],['saveAttribute','Atributo de resistência (bônus em 1d20)',120]]);
+        inlineNumber(advanced,'Dificuldade da resistência',a.saveDC??10,v=>{a.saveDC=v;},-100000,100000);
+        labelSelect(advanced,'Ao passar na resistência',[['no','Sem dano'],['half','Metade do dano']],a.halfOnSave?'half':'no',v=>{a.halfOnSave=v==='half';});
+        labelSelect(advanced,'Dado especial adicional',[['','Nenhum'],...this.plugin.solo().dice.map(d=>[d.id,d.name])],a.customDie||'',v=>{a.customDie=v;});
+        inlineNumber(advanced,'Quantidade de dados especiais',a.dieCount||1,v=>{a.dieCount=v;},1,20);
+        info(advanced,'Dados especiais mostram suas faces; a interpretação dos símbolos fica a cargo do mestre.');
       });
     },s => {
       normalized(s,['name','description','note','image','initiative','type']);
@@ -8554,9 +8686,9 @@ class MesaView extends ItemView {
     el(status,'span','brpg-chip','Rodada '+running.round);
     el(status,'strong','','Vez de '+who.name);
     const commands=row(where);
-    button(commands,'Turno anterior',this.run(() => update(r => step(r,-1))),
-      {icon:'chevron-left',iconOnly:true,disabled:running.round===1 && who.id===running.members[0].id});
-    cta(commands,'Próximo turno',this.run(() => update(r => step(r,1))),'chevron-right');
+    button(commands,'Turno anterior',this.run(() => update((r,m) => advanceCombat(m,-1))),
+      {icon:'chevron-left',iconOnly:true,disabled:!!running.advancedTurns||(running.round===1 && who.id===running.members[0].id)});
+    cta(commands,'Próximo turno',this.run(() => update((r,m) => advanceCombat(m,1))),'chevron-right');
     button(commands,'Adicionar participante',() => this.addParticipant(),{icon:'user-plus',iconOnly:true});
     button(commands,'Encerrar encontro',() => this.remove('Encerrar o encontro? O modelo salvo será mantido.',m => {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
@@ -8585,7 +8717,31 @@ class MesaView extends ItemView {
         const chips=el(card,'div','brpg-metadata');
         for (const state of member.conditions) el(chips,'span','brpg-chip',state);
       }
+      if(member.effects?.length){
+        const effects=disclosure(card,'Condições automáticas · '+member.effects.length);
+        for(const effect of member.effects){
+          const line=row(effects);
+          el(line,'span','brpg-mesa-effect-name',effect.name+' · '+(effect.rounds?effect.rounds+' turnos':'permanente')+(effect.blocked?' · impede ações':''));
+          button(line,'Remover '+effect.name,this.run(()=>update(r=>{
+            const p=need(r.members,member.id,'Participante não encontrado.');
+            p.effects=(p.effects||[]).filter(e=>e.id!==effect.id);
+          })),{icon:'x',iconOnly:true});
+        }
+      }
       const options=row(card);
+      button(options,'Adicionar condição automática',()=>this.edit('Condição automática',freshEffect(),(editor,draft,modal)=>{
+        labelSelect(editor,'Modelo',[['','Personalizada'],...PRESETS.map((p,i)=>[String(i),p.name])],'',v=>{
+          if(v!==''){Object.assign(draft,freshEffect(PRESETS[Number(v)]));modal.draw();}
+        });
+        input(editor,'Nome',draft.name,v=>{draft.name=v;},{maxLength:120});
+        inlineNumber(editor,'Turnos do alvo (0 = permanente)',draft.rounds,v=>{draft.rounds=v;},0,999);
+        labelSelect(editor,'Efeito no fim do turno',[['none','Nenhum'],['damage','Reduz recurso'],['heal','Restaura recurso']],draft.effect,v=>{draft.effect=v;});
+        labelSelect(editor,'Recurso',[['','Nenhum'],...member.resources.map(r=>[r.name,r.name])],draft.resource,v=>{draft.resource=v;});
+        input(editor,'Dados do efeito (ex. 1d4)',draft.amount,v=>{draft.amount=v;},{maxLength:60});
+        labelSelect(editor,'Impedir ações',[['no','Não'],['yes','Sim']],draft.blocked?'yes':'no',v=>{draft.blocked=v==='yes';});
+        labelSelect(editor,'Resistência no fim do turno',[['','Nenhuma'],...(member.sheet?.attributes||[]).filter(a=>String(a.value).trim()&&Number.isFinite(Number(a.value))).map(a=>[a.name,a.name])],draft.save,v=>{draft.save=v;});
+        inlineNumber(editor,'Dificuldade (1d20 + atributo)',draft.dc,v=>{draft.dc=v;},-100000,100000);
+      },draft=>update(r=>addEffect(r,member.id,draft))),{icon:'shield-plus',iconOnly:true});
       if (member.sheet) button(options,'Ver ficha',() => new SheetPreview(this.plugin,member.sheet).open(),{icon:'eye',iconOnly:true});
       button(options,'Ajustar participante',() => this.edit('Ajustar participante',{
         name:member.name, initiative:member.initiative, conditions:member.conditions.join(', '), resources:copy(member.resources),
@@ -8690,6 +8846,7 @@ const { CalendarEngine, MAX_YEAR, clockText }=load("calendar.js");
 const { CONDITIONS,weatherDay }=load("weather.js");
 const { el,button,select,input,info,Confirm }=load("ui.js");
 const { step, requireMesa,buildRunning }=load("mesa.js");
+const {advanceCombat}=load("combat.js");
 const {MODES}=load("exploration.js");
 const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionNote,finishSession }=load("session.js");
 const { unpack,place }=load("atlas.js");
@@ -8946,7 +9103,7 @@ function renderRunning(root,view,overview){
  button(toolbar,'Abrir combate',()=>view.show('encounters'),{icon:'swords'});
  button(toolbar,'Próximo turno',run(view.plugin,()=>view.plugin.changeMesa(m=>{
    requireMesa(m.running?.id===running.id,'O encontro foi alterado.');
-   step(m.running,1);
+   advanceCombat(m,1);
  })),{icon:'chevron-right',disabled:overview.session.status!=='active'});
 }
 function renderStart(root,view,campaign){

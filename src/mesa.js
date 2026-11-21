@@ -71,7 +71,8 @@ function yamlSheet(data, campaign = '') {
   }
   for (const [group, items] of [['Ação', data.actions], ['Traço', data.traits], ['Reação', data.reactions]]) {
     for (const x of rows(items)) {
-      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group });
+      if (x?.name) d.actions.push({ name: clean(x.name), text: clean(x.text || x.desc || x.description, 5000), roll: clean(x.roll, 60), damage: clean(x.damage, 60), cost: clean(x.cost, 110), group,
+      ...Object.fromEntries(['resolution','defense','targetResource','saveAttribute','saveDC','halfOnSave','customDie','dieCount'].filter(k=>x[k]!==undefined).map(k=>[k,x[k]])) });
     }
   }
   d.actions = d.actions.slice(0, LIMITS.fields);
@@ -90,6 +91,7 @@ function checkSheet(s) {
   s.resources.forEach(checkResource);
   requireMesa(new Set(s.resources.map(r => key(r.name))).size === s.resources.length, 'Não repita nomes de recursos na mesma ficha.');
   for (const a of s.actions) requireMesa(a && clean(a.name) && (!a.roll || !!parseDice(a.roll)) && (!a.damage || !!parseDice(a.damage)) && (!a.cost || /^.{1,100}:[1-9]\d{0,3}$/.test(a.cost)), 'Ação inválida: use rolagens como 1d20+3, dano como 1d6 e custo como Esforço:2.');
+  for(const a of s.actions)require('./combat').checkAction(a);
   return s;
 }
 function checkEncounter(e) {
@@ -148,6 +150,7 @@ function checkMesa(m) {
       p.resources.forEach(checkResource);
       if (p.sheet) checkSheet(p.sheet);
     }
+    require('./combat').checkAdvanced(f);
   }
   return m;
 }

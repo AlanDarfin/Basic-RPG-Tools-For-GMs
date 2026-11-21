@@ -913,3 +913,8 @@
 .brpg-atlas-party{filter:drop-shadow(0 1px 3px rgba(0,0,0,.45))}
 @media(max-width:520px){.brpg-session-travel-settings{grid-template-columns:1fr}
  .brpg-session-travel-checks{flex-direction:column;gap:3px}}
+
+/* Advanced combat */
+.brpg-mesa-effect-name{flex:1;min-width:0;overflow-wrap:anywhere;font-size:.85rem}
+.brpg-combat-faces{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:5px 0}
+.brpg-combat-face-image{width:42px;height:42px;object-fit:contain;border-radius:5px;border:1px solid var(--background-modifier-border)}
