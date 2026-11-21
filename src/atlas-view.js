@@ -135,6 +135,7 @@ class AtlasView extends ItemView{
    const nav=row(head);
    button(nav,'Abrir Mesa',action(this.plugin,()=>this.plugin.openMesa()),{icon:'swords',iconOnly:true});
    button(nav,'Abrir calendário',action(this.plugin,()=>this.plugin.open(true)),{icon:'calendar-days',iconOnly:true});
+   button(nav,'Pesquisa global',()=>this.plugin.openWorldSearch(),{icon:'search',iconOnly:true});
    const tabs=el(root,'nav','brpg-tabs brpg-atlas-tabs');
    for(const [id,text,icon]of PANELS){
      const b=button(tabs,text,()=>this.show(id),{icon});b.setAttribute('aria-pressed',String(this.panel===id));

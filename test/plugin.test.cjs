@@ -891,3 +891,29 @@ test('Mesa inicia encontro da nota, retoma rodada e não altera a ficha de orige
   const another=resumed.renderBlock('brpg-encontro',JSON.stringify({name:'Outro',creatures:['Avulso']}));
   assert.equal(pickButton(another.host,'Iniciar encontro').disabled,true);
 });
+
+test('backup e restauração guardam cópia anterior e não escrevem se o backup falhar',async()=>{
+ const {p,files}=mock();await p.onload();
+ const first=await p.backupWorld();
+ assert.ok(files.has(first));
+ const original=JSON.parse(files.get(first).body).state;
+ await p.changeMesa(m=>m.campaigns.push({id:'camp-backup',name:'Campanha',note:'',summary:'',calendar:''}));
+ const restore=await p.restoreWorld(original);
+ assert.notEqual(restore,first);
+ assert.equal(JSON.parse(files.get(restore).body).state.mesa.campaigns[0].name,'Campanha');
+ assert.equal(p.mesa().campaigns.length,0);
+ await p.changeMesa(m=>m.campaigns.push({id:'camp-safe',name:'Preservada',note:'',summary:'',calendar:''}));
+ p.app.vault.create=async()=>{throw new Error('Backup sem escrita');};
+ await assert.rejects(p.restoreWorld(original),/Backup sem escrita/);
+ assert.equal(p.mesa().campaigns[0].name,'Preservada');
+});
+test('galeria fecha antes de abrir o editor de ficha',async()=>{
+ const {p,modal}=mock();await p.onload();
+ const view=await p.openMesa('sheets');
+ await pickButton(view.contentEl,'Galeria de modelos').click();
+ await pickButton(modal().contentEl,'Salvar').click();
+ assert.ok(modal());assert.match(modal().contentEl.textContent,/Nova ficha/);
+ await type(modal().contentEl,'Nome da ficha','Herói de teste');
+ await pickButton(modal().contentEl,'Salvar').click();
+ assert.equal(p.mesa().sheets[0].name,'Herói de teste');
+});

@@ -125,6 +125,7 @@ class CalendarView extends ItemView {
     button(actions, 'Editar calendário', () => new CalendarEditor(this.plugin, c).open(), { icon: 'settings', iconOnly: true });
     button(actions, 'Novo calendário', () => this.plugin.newCalendar(), { icon: 'plus', iconOnly: true });
     button(actions, 'Modelos de calendário', () => this.plugin.openCalendarTemplates(), { icon: 'layout-template', iconOnly: true });
+    button(actions, 'Pesquisa global', () => this.plugin.openWorldSearch(), { icon: 'search', iconOnly: true });
     button(actions, 'Abrir kit solo', this.run(() => this.plugin.openSolo(null, true)), { icon: 'dices' });
     button(actions, 'Abrir Mesa', this.run(() => this.plugin.openMesa()), { icon: 'swords' });
     button(actions, 'Central de Sessão', this.run(() => this.plugin.openMesa('dashboard')), { icon: 'layout-dashboard' });

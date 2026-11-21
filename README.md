@@ -479,3 +479,13 @@ Em Mesa → Estúdio → Criar aventura conectada, gere e edite um pacote com av
 Ao encerrar um combate, a ação opcional **Encerrar e guardar recursos** copia valores atuais para os recursos ao vivo de personagens únicos do jogador. Cópias múltiplas, NPCs e criaturas não são sincronizados. A ficha-base permanece intacta e o próximo combate individual de jogador usa o progresso guardado. Condições não são transferidas. A ação normal de encerrar continua disponível sem salvar os recursos.
 
 A interface ainda requer teste manual em dispositivos móveis.
+
+## Segurança e pesquisa (v1.9.1)
+
+**Configurações → Dados e segurança → Backup e restauração** cria um arquivo JSON completo no cofre. Inclui calendário, Mesa, Atlas, sessões, recursos e Kit Solo, incluindo informações privadas do mestre; não inclui o conteúdo dos arquivos Markdown, imagens ou áudio. Faça também backup do cofre. A restauração exige inspecionar o arquivo, digitar RESTAURAR e criar uma cópia do estado anterior antes da gravação. Não mescla campanhas. O modo de segurança continua protegendo dados corrompidos contra gravações; preserve o arquivo original e restaure externamente com o Obsidian fechado.
+
+A **Pesquisa global de RPG**, acessível por comando ou pelo ícone de lupa, procura calendários, campanhas, registros, fichas, encontros, mapas, locais, dados e baralhos. Filtra por tipo e campanha, ignora acentos e prioriza nomes exatos. Abre o painel correspondente; locais de mapas são selecionados diretamente e dados/baralhos abrem a biblioteca do tipo. É uma ferramenta do mestre, não uma pesquisa pública.
+
+Correções: validação das coleções da Mesa antes de navegar seus vínculos; a galeria de fichas fecha antes de abrir o editor do novo modelo.
+
+Ainda pendentes: importação/mesclagem de campanha individual com remapeamento de IDs, auditoria de desempenho e QA manual no Android.
