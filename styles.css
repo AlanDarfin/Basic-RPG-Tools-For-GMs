@@ -921,3 +921,12 @@
 
 /* Creation tools */
 .brpg-mesa-editor .brpg-field textarea{max-width:100%;min-height:52px;resize:vertical;}
+
+/* Backup and global search */
+.brpg-maintenance{display:grid;gap:8px;min-width:0;max-height:72vh;overflow:auto;padding:2px;}
+.brpg-maintenance .brpg-heading{margin:0;}
+.brpg-world-results{display:grid;gap:6px;min-width:0;}
+.brpg-world-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;border:1px solid var(--background-modifier-border);border-radius:8px;padding:8px;align-items:center;}
+.brpg-world-result strong,.brpg-world-result small,.brpg-world-result p{grid-column:1;overflow-wrap:anywhere;margin:0;}
+.brpg-world-result button{grid-column:2;grid-row:1 / span 3;}
+@media(max-width:420px){.brpg-world-result{padding:6px;}.brpg-maintenance{max-height:68vh;}}

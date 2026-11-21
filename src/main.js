@@ -21,6 +21,8 @@ const { SOLO_VIEW, TABS, SoloView, openSolo } = require('./solo-ui');
 const { registerSoloInline } = require('./solo-inline');
 const { renameImages } = require('./solo-vault');
 const { blankMesa, checkMesa } = require('./mesa');
+const {encodeBackup,validateState}=require('./maintenance');
+const {BackupModal,WorldSearchModal}=require('./maintenance-ui');
 const { setup: setupUltra } = require('./ultra-ui');
 const { ATLAS_VIEW, AtlasView, openAtlas, setupAtlas, renameAtlasNotes } = require('./atlas-view');
 const { MESA_VIEW, TABS: MESA_TABS, MesaView, openMesa, registerMesaEmbeds, renameMesaNotes } = require('./mesa-view');
@@ -40,6 +42,10 @@ class Settings extends PluginSettingTab {
     button(kit, 'Abrir Mesa', () => p.attempt(() => p.openMesa()), { icon: 'swords' });
     button(kit, 'Central de Sessão', () => p.attempt(() => p.openMesa('dashboard')), { icon: 'layout-dashboard' });
     button(kit, 'Abrir Atlas', () => p.attempt(() => p.openAtlas()), { icon: 'map' });
+    const maintenance=el(area,'section','brpg-section brpg-settings-current');
+    el(maintenance,'h3','','Dados e segurança');
+    button(maintenance,'Backup e restauração',()=>p.openBackup(),{icon:'database-backup'});
+    button(maintenance,'Pesquisa global',()=>p.openWorldSearch(),{icon:'search'});
     const c = p.active();
     const current = el(area, 'section', 'brpg-section brpg-settings-current');
     el(current, 'h3', '', 'Calendário ativo');
@@ -184,6 +190,8 @@ class BasicRPG extends Plugin {
     this.addCommand({ id:'open-mesa-sidebar', name:'Abrir Mesa na barra lateral', callback:() => this.attempt(() => this.openMesa(null,false)) });
     for (const [id,name] of MESA_TABS) this.addCommand({ id:'mesa-'+id, name:'Mesa · '+name, callback:() => this.attempt(() => this.openMesa(id)) });
     this.addSettingTab(new Settings(this));
+    this.addCommand({id:'world-backup',name:'Dados · Backup e restauração',callback:()=>this.openBackup()});
+    this.addCommand({id:'world-search',name:'Pesquisa global de RPG',callback:()=>this.openWorldSearch()});
     this.addCommand({id:'calendar-templates',name:'Calendário · Escolher modelo',callback:()=>this.openCalendarTemplates()});
     this.addCommand({id:'atlas-template-map',name:'Atlas · Novo mapa a partir de modelo',callback:()=>this.attempt(async()=>{const view=await this.openAtlas('maps');view.editMap();})});
     this.addCommand({ id: 'open-calendar', name: 'Abrir calendário', callback: () => this.attempt(() => this.open(false)) });
@@ -363,6 +371,31 @@ class BasicRPG extends Plugin {
       checkMesa(state.mesa);
       return plan;
     });
+  }
+  openBackup(){new BackupModal(this).open();}
+  openWorldSearch(){new WorldSearchModal(this).open();}
+  async writeBackup(state){
+    const now=this.clockNow(),name=new Date(now).toISOString().replace(/[:.]/g,'-');
+    return this.writeExport({name},'Basic-RPG-Backup','json',encodeBackup(state,now));
+  }
+  backupWorld(){
+    const next=this.pending.then(()=>{
+      assert(!this.readOnly,'Dados em modo de segurança. Preserve o arquivo original.');
+      return this.writeBackup(this.state);
+    });
+    this.pending=next.catch(()=>{});return next;
+  }
+  restoreWorld(candidate){
+    const next=this.pending.then(async()=>{
+      assert(!this.readOnly,'Dados em modo de segurança. Restaure externamente com o Obsidian fechado.');
+      const restored=validateState(candidate,this.clockNow());
+      const path=await this.writeBackup(this.state);
+      await this.saveData(restored);
+      this.state=restored;this.notified.clear();
+      await this.noteIndex.rebuild();this.redraw();this.redrawSolo();
+      return path;
+    });
+    this.pending=next.catch(()=>{});return next;
   }
   changeMesa(fn) {
     return this.change(state => {

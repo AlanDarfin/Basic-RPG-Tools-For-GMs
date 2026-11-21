@@ -102,7 +102,7 @@ class MesaModal extends Modal {
     cta(controls,'Salvar',async () => {
       if (this.busy) return;
       this.busy = true; this.error.textContent = '';
-      try { await this.save(this.draft); this.close(); }
+      try { const after=await this.save(this.draft); this.close(); if(typeof after==='function')after(); }
       catch (err) { this.error.textContent = err?.message || String(err); }
       finally { this.busy = false; }
     },'check');
@@ -164,6 +164,7 @@ class MesaView extends ItemView {
     button(anchors,'Calendário',this.run(() => this.plugin.open(true)),{icon:'calendar-days',iconOnly:true});
     button(anchors,'Kit solo',this.run(() => this.plugin.openSolo(null,true)),{icon:'dices',iconOnly:true});
     button(anchors,'Atlas',this.run(() => this.plugin.openAtlas()),{icon:'map',iconOnly:true});
+    button(anchors,'Pesquisa global',()=>this.plugin.openWorldSearch(),{icon:'search',iconOnly:true});
     const tabs=el(root,'nav','brpg-tabs brpg-mesa-tabs');
     tabs.setAttribute('aria-label','Ferramentas da Mesa');
     for (const [id,label,icon] of TABS) {
@@ -359,7 +360,7 @@ class MesaView extends ItemView {
         m.sheetTemplates=m.sheetTemplates.filter(t=>t.id!==d.id);
         d.id='hero';modal.draw();
       }),{icon:'trash-2'});
-    },d=>{this.sheetEditor(null,false,null,d.id);}),{icon:'layout-template'});
+    },d=>()=>this.sheetEditor(null,false,null,d.id)),{icon:'layout-template'});
     button(actions,'Importar ficha',() => this.importSheet(),{icon:'upload'});
     const filter=row(list);
     input(filter,'Buscar fichas',this.filter,v => { this.filter=v; draw(); },{maxLength:120});

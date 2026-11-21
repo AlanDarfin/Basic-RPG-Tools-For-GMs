@@ -110,8 +110,6 @@ function checkEncounter(e) {
 }
 function checkMesa(m) {
   requireMesa(m?.version === 1, 'Formato de Mesa não reconhecido.');
-  require('./session').checkSession(m);
-  if(m.atlas !== undefined)require('./atlas').checkAtlas(m.atlas,m);
   for (const field of ['campaigns','entries','sheets','encounters']) {
     const a = m[field];
     requireMesa(Array.isArray(a) && a.length <= LIMITS[field] && a.every(x => x && clean(x.id) && clean(x.name)) &&
@@ -119,6 +117,8 @@ function checkMesa(m) {
   }
   if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
   if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
+  require('./session').checkSession(m);
+  if(m.atlas !== undefined)require('./atlas').checkAtlas(m.atlas,m);
   require('./creation').checkTemplates(m);
   const campaigns = new Set(m.campaigns.map(c => c.id));
   const entries = new Map(m.entries.map(e => [e.id,e]));
