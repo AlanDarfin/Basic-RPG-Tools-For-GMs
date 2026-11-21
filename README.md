@@ -438,3 +438,34 @@ escala do seu mapa, não uma medida geográfica universal.
 - A visualização do jogador continua sendo um filtro de interface, não um controle de acesso.
 - A interface Android precisa de teste manual; o motor tem testes de rota, terreno,
   alterações de data, persistência e encontros que não iniciam sem confirmação.
+
+## Combate avançado (v1.8.0)
+
+Em **Mesa → Encontros**, adicione condições automáticas pelos controles de cada
+participante. Sangramento, veneno, regeneração e atordoamento são exemplos
+editáveis, não regras oficiais de um sistema. Escolha um recurso, uma rolagem,
+duração em turnos do próprio alvo (zero = permanente) e, opcionalmente, uma
+resistência de 1d20 + atributo numérico contra uma dificuldade. No fim do turno
+do alvo, uma resistência bem-sucedida remove a condição antes do efeito; caso
+contrário, o efeito é aplicado e a duração diminui. Atordoamento pode impedir
+ações. O avanço funciona na Mesa e na Central de Sessão. Retroceder turnos
+fica desativado após a primeira aplicação automática para evitar dano duplicado.
+
+Na edição de fichas, abra **Regras avançadas** dentro de cada ação. Escolha
+ataque contra uma defesa configurável, resistência do alvo (com dano nulo
+ou metade em caso de sucesso), dano direto ou cura direta. O recurso alvo
+também é editável; sem configuração, utiliza Vida/HP/PV. Os atributos da
+resistência são bônus numéricos, não pontuações convertidas por regras de D&D.
+Os campos de ataque e dano continuam aceitando as expressões já suportadas.
+
+Dados especiais cadastrados no Kit Solo podem ser escolhidos em cada ação,
+inclusive aqueles com faces de texto ou imagem. São rolagens suplementares,
+mostradas no histórico de combate; não atribuem dano automático aos símbolos.
+O mestre interpreta as faces. Imagens externas respeitam a opção de mídia
+remota do Kit Solo. O custo de recurso e a alteração de vida são validados
+antes da aplicação. A ficha-base não é modificada pelo combate.
+
+Esta etapa permanece independente de sistema, com regras explícitas por ação
+e condição. Não implementa automaticamente todas as regras de D&D, nem
+sincronização dos recursos da instância de combate de volta à ficha-base.
+A interface móvel ainda requer teste manual.

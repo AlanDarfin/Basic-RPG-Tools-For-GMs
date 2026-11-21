@@ -4,6 +4,7 @@ const { CalendarEngine, MAX_YEAR, clockText }=require('./calendar');
 const { CONDITIONS,weatherDay }=require('./weather');
 const { el,button,select,input,info,Confirm }=require('./ui');
 const { step, requireMesa,buildRunning }=require('./mesa');
+const {advanceCombat}=require('./combat');
 const {MODES}=require('./exploration');
 const { sessionInfo,startSession,setSessionStatus,setSessionLocation,addSessionNote,finishSession }=require('./session');
 const { unpack,place }=require('./atlas');
@@ -260,7 +261,7 @@ function renderRunning(root,view,overview){
  button(toolbar,'Abrir combate',()=>view.show('encounters'),{icon:'swords'});
  button(toolbar,'Próximo turno',run(view.plugin,()=>view.plugin.changeMesa(m=>{
    requireMesa(m.running?.id===running.id,'O encontro foi alterado.');
-   step(m.running,1);
+   advanceCombat(m,1);
  })),{icon:'chevron-right',disabled:overview.session.status!=='active'});
 }
 function renderStart(root,view,campaign){

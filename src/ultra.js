@@ -3,6 +3,7 @@ const { copy, uid } = require('./calendar');
 const { key, clean, clamp, rollDice, parseDice, pick } = require('./solo');
 const { DICT } = require('./solo-tables');
 const { requireMesa } = require('./mesa');
+const {attribute,resistance,meter,specialRoll,faceText}=require('./combat');
 
 const CONTENT = Object.freeze({
  npc: 'Personagem / NPC', site: 'Local / Povoado', tavern: 'Taverna', hook: 'Gancho de aventura', loot: 'Tesouro', encounter: 'Ideia de encontro'
@@ -67,7 +68,7 @@ function restSheet(m,id) {
   record(m,s.name,'Recursos restaurados segundo as regras configuradas da ficha.','descanso');
   return resources;
 }
-function executeSheetAction(m,id,actionIndex,rng=Math.random) {
+function executeSheetAction(m,id,actionIndex,rng=Math.random,solo=null) {
   const s=m.sheets.find(x=>x.id===id);
   requireMesa(!!s,'Ficha não encontrada.');
   const action=s.actions[actionIndex];
@@ -78,13 +79,16 @@ function executeSheetAction(m,id,actionIndex,rng=Math.random) {
   if(cost)requireMesa(meter&&meter.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
   const check=action.roll?roll(action.roll,rng):null;
   const damage=action.damage?roll(action.damage,rng):null;
+  const custom=specialRoll(action,solo,rng);
   if(meter)meter.value-=cost.amount;
   if(meter){m.sheetStates ||= {};m.sheetStates[id]=resources;}
   const detail=[s.name+' usa '+action.name,
     check?'teste '+check.total+' ('+check.values.join(', ')+')':'',
     damage?'dano '+damage.total+' ('+damage.values.join(', ')+')':'',
-    cost?'gastou '+cost.amount+' '+cost.name:''].filter(Boolean).join(' · ');
-  return {check,damage,entry:record(m,s.name+' · '+action.name,detail,'ação')};
+    cost?'gastou '+cost.amount+' '+cost.name:'',custom?custom.name+' · '+custom.faces.map(faceText).join(', '):''].filter(Boolean).join(' · ');
+  const entry=record(m,s.name+' · '+action.name,detail,'ação');
+  if(custom)entry.customRoll=custom;
+  return {check,damage,custom,entry};
 }
 function armor(target) {
   if(!target?.sheet?.attributes) return null;
@@ -98,46 +102,45 @@ function actionCost(action){
   requireMesa(!!match,'Custo inválido. Use Recurso:quantidade, como Esforço:2.');
   return {name:clean(match[1]),amount:Number(match[2])};
 }
-function executeAction(m,actorId,actionIndex,targetId='',rng=Math.random) {
+function executeAction(m,actorId,actionIndex,targetId='',rng=Math.random,solo=null) {
   const run=m.running;
   requireMesa(!!run,'Nenhum encontro em andamento.');
   const actor=run.members.find(x=>x.id===actorId);
   requireMesa(!!actor,'Participante não encontrado.');
-  const actions=actor.sheet?.actions||[];
-  const action=actions[actionIndex];
+  requireMesa(!actor.effects?.some(e=>e.blocked),'Este participante está impedido de agir por uma condição.');
+  const action=actor.sheet?.actions?.[actionIndex];
   requireMesa(!!action,'Escolha uma ação presente na ficha do participante.');
-  const target=targetId ? run.members.find(x=>x.id===targetId) : null;
+  const target=targetId?run.members.find(x=>x.id===targetId):null;
   requireMesa(!targetId||!!target,'Alvo não encontrado.');
-  const cost=actionCost(action);
-  let resource;
-  if(cost) {
-    resource=actor.resources.find(r=>key(r.name)===key(cost.name));
-    requireMesa(resource && resource.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
-  }
-  // All validation is performed before anything is mutated.
-  const attack=action.roll ? roll(action.roll,rng) : null;
-  const damage=action.damage ? roll(action.damage,rng) : null;
-  const defence=armor(target);
-  const hit=target && attack ? (defence===null?null:attack.total>=defence) : null;
-  if(resource) resource.value-=cost.amount;
-  const shouldApply=!!(damage && target && (!attack || hit===true));
-  let damaged=null;
-  if(shouldApply) {
-    const hp=target.resources.find(r=>['vida','hp','pv','pontos de vida'].includes(key(r.name)));
-    requireMesa(!!hp,'Alvo sem recurso Vida/HP/PV. Configure a ficha para aplicar dano.');
-    hp.value=clamp(hp.value-Math.max(0,damage.total),0,hp.max); damaged=hp.value;
-  }
-  const parts=[
-    actor.name+' usa '+action.name,
+  const cost=actionCost(action),resource=cost?meter(actor,cost.name):null;
+  if(cost)requireMesa(resource&&resource.value>=cost.amount,'Recurso insuficiente: '+cost.name+'.');
+  const mode=action.resolution||'attack';
+  const attack=action.roll?roll(action.roll,rng):null;
+  const damage=action.damage?roll(action.damage,rng):null;
+  const custom=specialRoll(action,solo,rng);
+  const defence=mode==='attack'?(action.defense?attribute(target,action.defense):armor(target)):null;
+  const save=target&&mode==='save'?resistance(target,action.saveAttribute,action.saveDC,rng):null;
+  const hit=mode==='attack'&&target&&attack?(defence===null?null:attack.total>=defence):null;
+  const applicable=!!(damage&&target&&(mode==='attack'?(!attack||hit===true):mode==='save'?!!save&&(!save.passed||action.halfOnSave):true));
+  const hp=applicable?(action.targetResource?meter(target,action.targetResource):target.resources.find(r=>['vida','hp','pv','pontos de vida'].includes(key(r.name)))):null;
+  if(applicable)requireMesa(hp,'Alvo sem recurso Vida/HP/PV ou recurso alvo configurado.');
+  let amount=damage?Math.max(0,Math.floor(damage.total)):0;
+  if(mode==='save'&&save?.passed)amount=Math.floor(amount/2);
+  if(resource)resource.value-=cost.amount;
+  if(hp)hp.value=clamp(hp.value+(mode==='heal'?amount:-amount),0,hp.max);
+  const parts=[actor.name+' usa '+action.name,
     attack?'teste '+attack.total+' ('+attack.values.join(', ')+')':'sem teste',
     target?'em '+target.name:'',
-    target&&attack?(defence===null?'CA desconhecida: dano não aplicado':hit?'acertou CA '+defence:'errou CA '+defence):'',
-    damage?'dano rolado '+damage.total:'',
-    shouldApply?'Vida restante '+damaged:'',
-    cost?'gastou '+cost.amount+' '+cost.name:''
+    mode==='attack'&&target&&attack?(defence===null?'CA desconhecida: dano não aplicado':hit?'acertou '+(action.defense||'CA')+' '+defence:'errou '+(action.defense||'CA')+' '+defence):'',
+    mode==='save'&&target?(save?'resistência '+save.total+' / '+save.dc+(save.passed?' · passou':' · falhou'):'resistência indisponível: dano não aplicado'):'',
+    damage?(mode==='heal'?'cura rolada ':'dano rolado ')+damage.total:'',
+    applicable?(hp.name+' restante '+hp.value):'',
+    cost?'gastou '+cost.amount+' '+cost.name:'',
+    custom?custom.name+' · '+custom.faces.map(faceText).join(', '):''
   ].filter(Boolean);
   const item=record(m,actor.name+' · '+action.name,parts.join(' · '),'ação');
-  return {attack,damage,hit,applied:shouldApply,entry:item};
+  if(custom)item.customRoll=custom;
+  return {attack,damage,hit,save,custom,applied:applicable,entry:item};
 }
 function randomContent(kind,rng=Math.random) {
   requireMesa(Object.hasOwn(CONTENT,kind),'Gerador desconhecido.');
