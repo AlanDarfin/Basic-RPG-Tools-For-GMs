@@ -119,6 +119,7 @@ function checkMesa(m) {
   }
   if (m.activity !== undefined) requireMesa(Array.isArray(m.activity) && m.activity.length <= 150 && m.activity.every(a => a && clean(a.id) && clean(a.title) && typeof a.detail === 'string'), 'Histórico da Mesa inválido.');
   if (m.sheetStates !== undefined) requireMesa(m.sheetStates && typeof m.sheetStates === 'object' && !Array.isArray(m.sheetStates) && Object.keys(m.sheetStates).length <= LIMITS.sheets && Object.values(m.sheetStates).every(resources => Array.isArray(resources) && resources.length <= LIMITS.fields && resources.every(r => { try { checkResource(r); return true; } catch { return false; } })), 'Recursos persistidos inválidos.');
+  require('./creation').checkTemplates(m);
   const campaigns = new Set(m.campaigns.map(c => c.id));
   const entries = new Map(m.entries.map(e => [e.id,e]));
   const sheets = new Map(m.sheets.map(s => [s.id,s]));
@@ -183,7 +184,7 @@ function buildRunning(data, m, rng = Math.random) {
     const shared = data.grouped ? calcInit(initiative, rng) : null;
     for (let i = 0; i < n; i++) {
       members.push({ id: uid('turn'), name: n === 1 ? label : label + ' ' + (i + 1), initiative: shared ?? calcInit(initiative, rng),
-        seed: members.length, side: line.side, resources: copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
+        seed: members.length, side: line.side, resources: s?.kind==='player'&&line.side==='players'&&n===1 ? require('./ultra').activeResources(m,s) : copy(s?.resources || []), conditions: [], sheet: s ? copy(s) : null });
     }
   }
   order(members);

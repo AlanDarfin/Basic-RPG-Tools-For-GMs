@@ -918,3 +918,6 @@
 .brpg-mesa-effect-name{flex:1;min-width:0;overflow-wrap:anywhere;font-size:.85rem}
 .brpg-combat-faces{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:5px 0}
 .brpg-combat-face-image{width:42px;height:42px;object-fit:contain;border-radius:5px;border:1px solid var(--background-modifier-border)}
+
+/* Creation tools */
+.brpg-mesa-editor .brpg-field textarea{max-width:100%;min-height:52px;resize:vertical;}

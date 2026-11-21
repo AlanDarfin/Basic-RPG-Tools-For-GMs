@@ -12,6 +12,7 @@ const {
 const MESA_VIEW = 'basic-rpg-mesa';
 const {renderSessionDashboard}=require('./session-ui');
 const {PRESETS,freshEffect,addEffect,advanceCombat}=require('./combat');
+const {PRESETS:SHEET_PRESETS,templateList,saveTemplate,instantiateTemplate,carryCandidates,finishEncounter}=require('./creation');
 const TABS = [['dashboard','Sessão','layout-dashboard'],['campaigns','Campanhas','map'],['sheets','Fichas','contact-round'],['encounters','Encontros','swords'],['studio','Estúdio','wand-sparkles'],['library','Biblioteca','folder-open']];
 const row = (root) => el(root, 'div', 'brpg-toolbar brpg-mesa-row');
 function panel(root, title, desc = '') {
@@ -302,9 +303,9 @@ class MesaView extends ItemView {
       await this.plugin.changeMesa(m => applySave(m.sheets,sheet));
     });
   }
-  sheetEditor(current,preset,duplicate) {
+  sheetEditor(current,preset,duplicate,template) {
     const draft = current || (duplicate ? { ...copy(duplicate), id:uid('sheet'), name:(duplicate.name.slice(0,105)+' (cópia)') } :
-      preset ? arkanisSheet(this.campaign) : newSheet(this.campaign));
+      template ? instantiateTemplate(this.m,template,this.campaign) : preset ? arkanisSheet(this.campaign) : newSheet(this.campaign));
     this.edit(current?'Editar ficha':'Nova ficha',draft,(root,s,modal) => {
       textFields(root,s,[['name','Nome da ficha',120]]);
       if (current) el(root, 'code', 'brpg-hint', s.id);
@@ -347,6 +348,18 @@ class MesaView extends ItemView {
     const actions=row(list);
     cta(actions,'Nova ficha',() => this.sheetEditor(),'plus');
     button(actions,'Modelo Arkanis',() => this.sheetEditor(null,true),{icon:'sparkles'});
+    button(actions,'Galeria de modelos',()=>this.edit('Modelos de fichas',{id:'hero'},(root,d,modal)=>{
+      const models=[...SHEET_PRESETS,...templateList(this.m).map(t=>[t.id,t.name+' (meu modelo)'])];
+      labelSelect(root,'Modelo',models,d.id,v=>{d.id=v;modal.draw();});
+      const model=instantiateTemplate(this.m,d.id,this.campaign);
+      info(root,'Recursos: '+(model.resources.map(r=>r.name+' '+r.value+'/'+r.max).join(' · ')||'Nenhum'));
+      info(root,'Ações: '+(model.actions.map(a=>a.name).join(' · ')||'Nenhuma'));
+      info(root,'Salvar abre uma nova ficha editável. O modelo original permanece intacto.');
+      if(templateList(this.m).some(t=>t.id===d.id))button(row(root),'Excluir modelo',()=>this.remove('Excluir este modelo? As fichas criadas permanecem intactas.',m=>{
+        m.sheetTemplates=m.sheetTemplates.filter(t=>t.id!==d.id);
+        d.id='hero';modal.draw();
+      }),{icon:'trash-2'});
+    },d=>{this.sheetEditor(null,false,null,d.id);}),{icon:'layout-template'});
     button(actions,'Importar ficha',() => this.importSheet(),{icon:'upload'});
     const filter=row(list);
     input(filter,'Buscar fichas',this.filter,v => { this.filter=v; draw(); },{maxLength:120});
@@ -367,12 +380,17 @@ class MesaView extends ItemView {
         button(commands,'Abrir ficha',() => new SheetPreview(this.plugin,s).open(),{icon:'eye'});
         button(commands,'Editar ficha',() => this.sheetEditor(s),{icon:'pencil',iconOnly:true});
         button(commands,'Duplicar ficha',() => this.sheetEditor(null,false,s),{icon:'copy',iconOnly:true});
+        button(commands,'Salvar como modelo',()=>this.edit('Salvar modelo de ficha',{name:s.name+' · modelo'},(root,d)=>{
+          input(root,'Nome do modelo',d.name,v=>{d.name=v;},{maxLength:120});
+          info(root,'O modelo guarda atributos, ações e recursos originais, sem vínculo com campanha, nota, retrato ou progresso ao vivo.');
+        },d=>this.plugin.changeMesa(m=>saveTemplate(m,s,d.name))),{icon:'bookmark',iconOnly:true});
         button(commands,'Excluir ficha',() => this.remove('Excluir esta ficha do bestiário?',m => {
           requireMesa(!m.atlas?.maps.some(map=>map.tokens.some(t=>t.sheet===s.id)||Object.values(map.cells).some(c=>c.sheet===s.id)),
             'Remova os vínculos e tokens da ficha nos mapas antes de excluí-la.');
           requireMesa(!m.encounters.some(e => e.roster.some(r => r.sheet===s.id)),
             'Remova a ficha dos encontros salvos antes de excluí-la.');
           m.sheets=m.sheets.filter(x => x.id!==s.id);
+          if(m.sheetStates)delete m.sheetStates[s.id];
           if(m.atlas)m.atlas.relations=m.atlas.relations.filter(x=>x.from!=='sheet:'+s.id&&x.to!=='sheet:'+s.id);
         }),{icon:'trash-2',iconOnly:true});
       }
@@ -475,8 +493,9 @@ class MesaView extends ItemView {
     button(commands,'Adicionar participante',() => this.addParticipant(),{icon:'user-plus',iconOnly:true});
     button(commands,'Encerrar encontro',() => this.remove('Encerrar o encontro? O modelo salvo será mantido.',m => {
       requireMesa(m.running?.id===running.id,'O encontro já foi encerrado.');
-      m.running=null;
+      finishEncounter(m,running.id,false);
     }),{icon:'square',iconOnly:true});
+    if(carryCandidates(this.m,running).length)button(commands,'Encerrar e guardar recursos',()=>this.remove('Encerrar e guardar os recursos atuais dos personagens únicos? As fichas-base e criaturas não serão alteradas.',m=>finishEncounter(m,running.id,true)),{icon:'save'});
     this.plugin.ultra?.renderCombat(this,where,running);
     const orderList=el(where,'div','brpg-mesa-list');
     for (const member of running.members) {

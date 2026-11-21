@@ -1,9 +1,9 @@
 {
   "id": "basic-rpg",
   "name": "Basic RPG",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "minAppVersion": "1.7.2",
-  "description": "Combate avançado, exploração, calendários, mapas, fichas, dados e ferramentas de RPG.",
+  "description": "Biblioteca de fichas, aventuras conectadas, combate, exploração, calendários e mapas integrados.",
   "author": "Alan Darfin",
   "authorUrl": "https://github.com/AlanDarfin",
   "isDesktopOnly": false

@@ -469,3 +469,13 @@ Esta etapa permanece independente de sistema, com regras explícitas por ação
 e condição. Não implementa automaticamente todas as regras de D&D, nem
 sincronização dos recursos da instância de combate de volta à ficha-base.
 A interface móvel ainda requer teste manual.
+
+## Criação conectada (v1.9.0)
+
+Na Mesa → Fichas, a Galeria de modelos oferece cinco exemplos editáveis (Arkanis, herói genérico, NPC, criatura e investigador). Salve uma ficha como modelo pessoal para reutilizar atributos, ações e recursos originais sem copiar progresso, nota, retrato ou campanha. Os exemplos são ilustrativos, não regras oficiais de um sistema.
+
+Em Mesa → Estúdio → Criar aventura conectada, gere e edite um pacote com aventura, local, NPC, pista e cena. Ao salvar, os registros se conectam, é criada uma ficha de NPC e um encontro neutro com personagens da campanha. Opcionalmente associe uma célula do Atlas livre de vínculos; o pacote não sobrescreve registros já associados nem inicia combate. A aventura recebe a data do calendário vinculado, se houver.
+
+Ao encerrar um combate, a ação opcional **Encerrar e guardar recursos** copia valores atuais para os recursos ao vivo de personagens únicos do jogador. Cópias múltiplas, NPCs e criaturas não são sincronizados. A ficha-base permanece intacta e o próximo combate individual de jogador usa o progresso guardado. Condições não são transferidas. A ação normal de encerrar continua disponível sem salvar os recursos.
+
+A interface ainda requer teste manual em dispositivos móveis.
