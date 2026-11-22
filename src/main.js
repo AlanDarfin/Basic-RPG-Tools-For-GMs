@@ -299,6 +299,11 @@ class BasicRPG extends Plugin {
     return parent ? linkedDate(c, parent, this.clockNow(), engine) : worldDate(c, this.clockNow(), engine);
   }
   checkLinks(state) {
+    const ids = new Set();
+    for (const c of state.calendars) {
+      assert(!ids.has(c.id), 'IDs de calendário duplicados.');
+      ids.add(c.id);
+    }
     for (const c of state.calendars) if (c.clockLink) {
       const parent = state.calendars.find((x) => x.id === c.clockLink.id);
       assert(parent && parent.id !== c.id && !parent.clockLink, 'O calendário de referência precisa existir e ter relógio próprio.');

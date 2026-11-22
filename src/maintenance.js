@@ -24,11 +24,17 @@ function validateState(source,now=Date.now()){
  if(s.mesa!==undefined)checkMesa(s.mesa);
  return s;
 }
+function withinBackupLimit(text){
+ if(typeof text!=='string'||!text.length||text.length>MAX_BYTES)return false;
+ return new TextEncoder().encode(text).byteLength<=MAX_BYTES;
+}
 function encodeBackup(state,now=Date.now()){
- return JSON.stringify({format:FORMAT,version:1,createdAt:new Date(now).toISOString(),state},null,2)+'\n';
+ const text=JSON.stringify({format:FORMAT,version:1,createdAt:new Date(now).toISOString(),state},null,2)+'\n';
+ assert(withinBackupLimit(text),'Backup acima do limite de 25 MiB em UTF-8. Faça uma cópia externa do data.json.');
+ return text;
 }
 function decodeBackup(text,now=Date.now()){
- assert(typeof text==='string'&&text.length<=MAX_BYTES,'Backup vazio ou acima do limite de 25 MB de texto.');
+ assert(withinBackupLimit(text),'Backup vazio ou acima do limite de 25 MiB em UTF-8.');
  let b;try{b=JSON.parse(text);}catch{throw new Error('O backup não contém JSON válido.');}
  assert(b?.format===FORMAT&&b.version===1&&b.state,'Arquivo não reconhecido como backup completo do Basic RPG.');
  return validateState(b.state,now);

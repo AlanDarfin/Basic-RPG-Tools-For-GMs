@@ -98,7 +98,7 @@ function mock(startingState = null) {
   };
   const mod = { exports: null };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
-    { module: mod, URL, require: (id) => { assert.equal(id, 'obsidian'); return obsidian; } });
+    { module: mod, URL, TextEncoder, require: (id) => { assert.equal(id, 'obsidian'); return obsidian; } });
   return { p: new mod.exports(), files, TFile, leaves, notices, opened: () => opened, modal: () => modal,
     settings: () => settings,
     noteChange: (file) => cacheListeners.get('changed')(file, file.body || '', { frontmatter: file.fm }),
@@ -916,4 +916,12 @@ test('galeria fecha antes de abrir o editor de ficha',async()=>{
  await type(modal().contentEl,'Nome da ficha','Herói de teste');
  await pickButton(modal().contentEl,'Salvar').click();
  assert.equal(p.mesa().sheets[0].name,'Herói de teste');
+});
+
+
+test('calendários com IDs duplicados bloqueiam gravações na abertura', async () => {
+  const {p: fresh}=mock(); await fresh.onload();
+  const state=JSON.parse(JSON.stringify(fresh.state)); state.calendars.push(JSON.parse(JSON.stringify(state.calendars[0])));
+  const {p}=mock(state); await p.onload();
+  assert.equal(p.readOnly,true); assert.equal(p.saved,undefined);
 });

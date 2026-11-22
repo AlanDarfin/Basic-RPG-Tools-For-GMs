@@ -1,0 +1,47 @@
+name: Publicar Basic RPG 2.0.0
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-v2.yml'
+  workflow_dispatch:
+concurrency:
+  group: basic-rpg-release-2-0-0
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.repository == 'AlanDarfin/Basic-RPG-Tools-For-GMs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Validar versão, compilar e testar
+        run: |
+          node -e 'const version = "2.0.0"; if (require("./manifest.json").version !== version || require("./package.json").version !== version || !require("./versions.json")[version]) process.exit(1)'
+          npm run build
+          git diff --exit-code -- main.js
+          npm test
+      - name: Empacotar o plugin
+        run: |
+          mkdir -p package/basic-rpg
+          cp main.js manifest.json styles.css package/basic-rpg/
+          (cd package && zip -X -r ../basic-rpg-2.0.0.zip basic-rpg)
+      - name: Publicar a release com os arquivos de instalação
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view 2.0.0 >/dev/null 2>&1; then
+            echo "A release 2.0.0 já existe."
+            exit 0
+          fi
+          gh release create 2.0.0 main.js manifest.json styles.css basic-rpg-2.0.0.zip \
+            --target "$GITHUB_SHA" --title 'Basic RPG v2.0.0' \
+            --notes-file .github/release-notes/2.0.0.md --latest

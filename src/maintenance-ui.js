@@ -1,11 +1,11 @@
 'use strict';
 const {Modal,Notice,TFile}=require('obsidian');
 const {el,button,input,select,info}=require('./ui');
-const {decodeBackup,backupStats,TYPES,searchWorld}=require('./maintenance');
+const {decodeBackup,backupStats,TYPES,searchWorld,MAX_BYTES}=require('./maintenance');
 const {assert}=require('./calendar');
 const run=(p,fn)=>()=>p.attempt(fn);
 class BackupModal extends Modal{
- constructor(p){super(p.app);this.p=p;this.path='';this.candidate=null;this.confirm='';}
+ constructor(p){super(p.app);this.p=p;this.path='';this.candidate=null;this.confirm='';this.inspection=0;}
  onOpen(){this.draw();}
  draw(){
   const p=this.p,root=this.contentEl;root.replaceChildren();
@@ -14,12 +14,16 @@ class BackupModal extends Modal{
   info(box,'O backup completo contém calendários, campanhas, sessões, fichas, mapas e ferramentas solo, incluindo segredos do mestre. Não contém o conteúdo das notas, imagens ou outros arquivos do cofre.');
   button(box,'Criar backup completo',run(p,async()=>{const path=await p.backupWorld();new Notice('Backup salvo: '+path);}),{icon:'download',disabled:p.readOnly});
   const files=(p.app.vault.getFiles?.()||[]).filter(f=>/^Basic-RPG-Backup-.*\.json$/i.test(f.path)).sort((a,b)=>b.path.localeCompare(a.path));
-  select(box,[['','Escolher backup do cofre'],...files.map(f=>[f.path,f.path])],this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.draw();},'Backup do cofre');
-  input(box,'Caminho do arquivo JSON',this.path,v=>{this.path=v;this.candidate=null;this.confirm='';},{maxLength:500});
+  select(box,[['','Escolher backup do cofre'],...files.map(f=>[f.path,f.path])],this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.inspection++;this.draw();},'Backup do cofre');
+  input(box,'Caminho do arquivo JSON',this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.inspection++;},{maxLength:500});
   button(box,'Inspecionar backup',run(p,async()=>{
-   const f=p.app.vault.getAbstractFileByPath(this.path);assert(f instanceof TFile,'Arquivo não encontrado.');
+   const request=++this.inspection,path=this.path;
+   this.candidate=null;this.confirm='';this.draw();
+   const f=p.app.vault.getAbstractFileByPath(path);assert(f instanceof TFile,'Arquivo não encontrado.');
+   assert((f.stat?.size??0)<=MAX_BYTES,'Backup acima do limite de 25 MiB.');
    const source=await p.app.vault.cachedRead(f);
-   this.candidate=decodeBackup(source,p.clockNow());this.confirm='';this.draw();
+   if(request!==this.inspection||path!==this.path)return;
+   this.candidate=decodeBackup(source,p.clockNow());this.draw();
   }),{icon:'file-search'});
   if(this.candidate){
    const stats=backupStats(this.candidate);const facts=el(box,'div','brpg-metadata');

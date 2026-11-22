@@ -42,3 +42,11 @@ test('dados antigos sem Mesa ou Solo são aceitos',()=>{
  const {state}=fixture();delete state.mesa;delete state.solo;
  assert.equal(decodeBackup(encodeBackup(state)).activeId,state.activeId);
 });
+
+
+test('limite do backup usa bytes UTF-8 tanto na exportação como na importação',()=>{
+ const {state}=fixture(); const huge='界'.repeat(9*1024*1024);
+ assert.throws(()=>encodeBackup({...state,extra:huge}),/25 MiB/);
+ assert.throws(()=>decodeBackup(huge),/25 MiB/);
+ assert.throws(()=>decodeBackup(''),/Backup vazio/);
+});

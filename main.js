@@ -330,6 +330,11 @@ class BasicRPG extends Plugin {
     return parent ? linkedDate(c, parent, this.clockNow(), engine) : worldDate(c, this.clockNow(), engine);
   }
   checkLinks(state) {
+    const ids = new Set();
+    for (const c of state.calendars) {
+      assert(!ids.has(c.id), 'IDs de calendário duplicados.');
+      ids.add(c.id);
+    }
     for (const c of state.calendars) if (c.clockLink) {
       const parent = state.calendars.find((x) => x.id === c.clockLink.id);
       assert(parent && parent.id !== c.id && !parent.clockLink, 'O calendário de referência precisa existir e ter relógio próprio.');
@@ -7239,11 +7244,17 @@ function validateState(source,now=Date.now()){
  if(s.mesa!==undefined)checkMesa(s.mesa);
  return s;
 }
+function withinBackupLimit(text){
+ if(typeof text!=='string'||!text.length||text.length>MAX_BYTES)return false;
+ return new TextEncoder().encode(text).byteLength<=MAX_BYTES;
+}
 function encodeBackup(state,now=Date.now()){
- return JSON.stringify({format:FORMAT,version:1,createdAt:new Date(now).toISOString(),state},null,2)+'\n';
+ const text=JSON.stringify({format:FORMAT,version:1,createdAt:new Date(now).toISOString(),state},null,2)+'\n';
+ assert(withinBackupLimit(text),'Backup acima do limite de 25 MiB em UTF-8. Faça uma cópia externa do data.json.');
+ return text;
 }
 function decodeBackup(text,now=Date.now()){
- assert(typeof text==='string'&&text.length<=MAX_BYTES,'Backup vazio ou acima do limite de 25 MB de texto.');
+ assert(withinBackupLimit(text),'Backup vazio ou acima do limite de 25 MiB em UTF-8.');
  let b;try{b=JSON.parse(text);}catch{throw new Error('O backup não contém JSON válido.');}
  assert(b?.format===FORMAT&&b.version===1&&b.state,'Arquivo não reconhecido como backup completo do Basic RPG.');
  return validateState(b.state,now);
@@ -7286,11 +7297,11 @@ module.exports={FORMAT,MAX_BYTES,validateState,encodeBackup,decodeBackup,backupS
 'use strict';
 const {Modal,Notice,TFile}=require('obsidian');
 const {el,button,input,select,info}=load("ui.js");
-const {decodeBackup,backupStats,TYPES,searchWorld}=load("maintenance.js");
+const {decodeBackup,backupStats,TYPES,searchWorld,MAX_BYTES}=load("maintenance.js");
 const {assert}=load("calendar.js");
 const run=(p,fn)=>()=>p.attempt(fn);
 class BackupModal extends Modal{
- constructor(p){super(p.app);this.p=p;this.path='';this.candidate=null;this.confirm='';}
+ constructor(p){super(p.app);this.p=p;this.path='';this.candidate=null;this.confirm='';this.inspection=0;}
  onOpen(){this.draw();}
  draw(){
   const p=this.p,root=this.contentEl;root.replaceChildren();
@@ -7299,12 +7310,16 @@ class BackupModal extends Modal{
   info(box,'O backup completo contém calendários, campanhas, sessões, fichas, mapas e ferramentas solo, incluindo segredos do mestre. Não contém o conteúdo das notas, imagens ou outros arquivos do cofre.');
   button(box,'Criar backup completo',run(p,async()=>{const path=await p.backupWorld();new Notice('Backup salvo: '+path);}),{icon:'download',disabled:p.readOnly});
   const files=(p.app.vault.getFiles?.()||[]).filter(f=>/^Basic-RPG-Backup-.*\.json$/i.test(f.path)).sort((a,b)=>b.path.localeCompare(a.path));
-  select(box,[['','Escolher backup do cofre'],...files.map(f=>[f.path,f.path])],this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.draw();},'Backup do cofre');
-  input(box,'Caminho do arquivo JSON',this.path,v=>{this.path=v;this.candidate=null;this.confirm='';},{maxLength:500});
+  select(box,[['','Escolher backup do cofre'],...files.map(f=>[f.path,f.path])],this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.inspection++;this.draw();},'Backup do cofre');
+  input(box,'Caminho do arquivo JSON',this.path,v=>{this.path=v;this.candidate=null;this.confirm='';this.inspection++;},{maxLength:500});
   button(box,'Inspecionar backup',run(p,async()=>{
-   const f=p.app.vault.getAbstractFileByPath(this.path);assert(f instanceof TFile,'Arquivo não encontrado.');
+   const request=++this.inspection,path=this.path;
+   this.candidate=null;this.confirm='';this.draw();
+   const f=p.app.vault.getAbstractFileByPath(path);assert(f instanceof TFile,'Arquivo não encontrado.');
+   assert((f.stat?.size??0)<=MAX_BYTES,'Backup acima do limite de 25 MiB.');
    const source=await p.app.vault.cachedRead(f);
-   this.candidate=decodeBackup(source,p.clockNow());this.confirm='';this.draw();
+   if(request!==this.inspection||path!==this.path)return;
+   this.candidate=decodeBackup(source,p.clockNow());this.draw();
   }),{icon:'file-search'});
   if(this.candidate){
    const stats=backupStats(this.candidate);const facts=el(box,'div','brpg-metadata');

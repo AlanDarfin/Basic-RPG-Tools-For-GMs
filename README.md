@@ -1,5 +1,17 @@
 # Basic RPG
 
+**Versão 2.0.0** · Suíte integrada de RPG para Obsidian 1.7.2 ou superior (desktop e mobile).
+
+[Releases e instalação](https://github.com/AlanDarfin/Basic-RPG-Tools-For-GMs/releases) · [Novidades da v2](.github/release-notes/2.0.0.md)
+
+### Instalação manual
+
+1. Feche o Obsidian e faça uma cópia da pasta `.obsidian/plugins/basic-rpg` se já usa o plugin.
+2. Baixe `basic-rpg-2.0.0.zip` da release e extraia a pasta `basic-rpg` em `.obsidian/plugins/` do cofre, preservando o `data.json` existente.
+3. Reabra o Obsidian e habilite Basic RPG em Plugins da comunidade.
+
+Na atualização, substitua apenas `main.js`, `manifest.json` e `styles.css`. O esquema dos dados permanece na versão 1, sem exigir recriação da campanha.
+
 Calendário de fantasia, cronologia de campanha e ferramentas para RPG solo no Obsidian. É um projeto companheiro do Basic, mas tem instalação e dados próprios. Funciona sem conta, serviço externo ou outro plugin.
 
 ## O que dá para fazer
@@ -489,3 +501,10 @@ A **Pesquisa global de RPG**, acessível por comando ou pelo ícone de lupa, pro
 Correções: validação das coleções da Mesa antes de navegar seus vínculos; a galeria de fichas fecha antes de abrir o editor do novo modelo.
 
 Ainda pendentes: importação/mesclagem de campanha individual com remapeamento de IDs, auditoria de desempenho e QA manual no Android.
+
+
+## Basic RPG 2.0.0 — consolidação
+
+A v2 reúne as funções das etapas 1.1–1.9.1 em uma distribuição estável, com proteção contra IDs de calendário duplicados no carregamento, limite consistente de 25 MiB UTF-8 para backups e inspeção que descarta resultados obsoletos se o arquivo selecionado mudar. A publicação automatizada valida a versão, compila, roda testes e verifica o bundle antes de criar a release.
+
+A importação/mesclagem seletiva de campanhas, importação de mapas de outros plugins, auditoria de desempenho e QA manual no Obsidian Android continuam no roteiro; a release não implica que esses itens estejam concluídos. As regras são independentes de sistema e as visualizações de jogador não são controles de acesso.
